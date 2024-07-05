@@ -6,30 +6,30 @@ use parquet::{
         Int32Type, Int64Type,
     },
     file::writer::{SerializedFileWriter, SerializedRowGroupWriter},
+    schema::printer,
     schema::types::TypePtr,
 };
 
 use pg_sys::{
-    BOOLOID, BPCHAROID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
-    INTERVALOID, JSONOID, NUMERICOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID,
-    UUIDOID, VARCHAROID,
+    Oid, BOOLOID, BPCHAROID, CHAROID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8OID, INT2OID,
+    INT4OID, INT8OID, INTERVALOID, JSONOID, NUMERICOID, TEXTOID, TIMEOID, TIMESTAMPOID,
+    TIMESTAMPTZOID, TIMETZOID, UUIDOID, VARCHAROID,
 };
 use pgrx::prelude::*;
-use pgrx::{direct_function_call, Json, Uuid};
+use pgrx::{direct_function_call, Json, PgTupleDesc, Uuid};
 
 pgrx::pg_module_magic!();
 
 #[pg_schema]
 mod pgparquet {
+
     use super::*;
 
-    fn parse_record_schema(
-        record: &PgHeapTuple<'static, AllocatedByRust>,
-        elem_name: &'static str,
-    ) -> TypePtr {
+    fn parse_record_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> TypePtr {
         let mut child_fields: Vec<TypePtr> = vec![];
 
-        for (_, attribute) in record.attributes() {
+        for attribute_idx in 0..tupledesc.len() {
+            let attribute = tupledesc.get(attribute_idx).unwrap();
             let attribute_name = attribute.name();
             let attribute_oid = attribute.type_oid().value();
 
@@ -37,24 +37,23 @@ mod pgparquet {
             let is_attribute_array = unsafe { pg_sys::type_is_array(attribute_oid) };
 
             let child_field = if is_attribute_composite {
-                let attribute_val = record
-                    .get_by_name::<PgHeapTuple<'_, AllocatedByRust>>(attribute_name)
-                    .unwrap()
-                    .unwrap();
+                let attribute_tupledesc =
+                    unsafe { pg_sys::lookup_rowtype_tupdesc(attribute_oid, 0) };
+                let attribute_tupledesc = unsafe { PgTupleDesc::from_pg(attribute_tupledesc) };
                 parse_record_schema(
-                    &attribute_val,
+                    attribute_tupledesc,
                     // todo: do not leak
                     attribute_name.to_string().leak(),
                 )
             } else if is_attribute_array {
-                unimplemented!("array type is not supported yet")
+                parse_array_schema(
+                    attribute.type_oid().value(),
+                    // todo: do not leak
+                    attribute_name.to_string().leak(),
+                )
             } else {
-                let attribute_val = record
-                    .get_by_name::<pgrx::AnyElement>(attribute_name)
-                    .unwrap()
-                    .unwrap();
                 parse_primitive_schema(
-                    attribute_val,
+                    attribute.type_oid().value(),
                     // todo: do not leak
                     attribute_name.to_string().leak(),
                 )
@@ -71,8 +70,53 @@ mod pgparquet {
             .into()
     }
 
-    fn parse_primitive_schema(elem: pgrx::AnyElement, elem_name: &'static str) -> TypePtr {
-        match elem.oid() {
+    fn parse_array_schema(arraytypoid: Oid, array_name: &'static str) -> TypePtr {
+        let array_element_typoid = unsafe { pg_sys::get_element_type(arraytypoid) };
+        let is_array_of_composite = unsafe { pg_sys::type_is_rowtype(array_element_typoid) };
+        if is_array_of_composite {
+            let array_element_tupledesc =
+                unsafe { pg_sys::lookup_rowtype_tupdesc(array_element_typoid, 0) };
+            let array_element_tupledesc = unsafe { PgTupleDesc::from_pg(array_element_tupledesc) };
+            let element_group_builder = parse_record_schema(array_element_tupledesc, array_name);
+
+            let list_group_builder = parquet::schema::types::Type::group_type_builder(array_name)
+                .with_fields(vec![element_group_builder.into()])
+                .with_repetition(parquet::basic::Repetition::REPEATED)
+                .with_logical_type(Some(parquet::basic::LogicalType::List))
+                .build()
+                .unwrap();
+
+            return list_group_builder.into();
+        }
+
+        match arraytypoid {
+            FLOAT4ARRAYOID => {
+                let float4_type_builder = parquet::schema::types::Type::primitive_type_builder(
+                    array_name,
+                    parquet::basic::Type::FLOAT,
+                )
+                .with_repetition(parquet::basic::Repetition::REQUIRED)
+                .build()
+                .unwrap();
+
+                let list_group_builder =
+                    parquet::schema::types::Type::group_type_builder(array_name)
+                        .with_fields(vec![float4_type_builder.into()])
+                        .with_repetition(parquet::basic::Repetition::REPEATED)
+                        .with_logical_type(Some(parquet::basic::LogicalType::List))
+                        .build()
+                        .unwrap();
+
+                list_group_builder.into()
+            }
+            _ => {
+                panic!("unsupported array type {}", arraytypoid);
+            }
+        }
+    }
+
+    fn parse_primitive_schema(typoid: Oid, elem_name: &'static str) -> TypePtr {
+        match typoid {
             FLOAT4OID => parquet::schema::types::Type::primitive_type_builder(
                 elem_name,
                 parquet::basic::Type::FLOAT,
@@ -238,7 +282,7 @@ mod pgparquet {
             .unwrap()
             .into(),
             _ => {
-                panic!("unsupported type {}", elem.oid())
+                panic!("unsupported primitive type {}", typoid)
             }
         }
     }
@@ -261,13 +305,65 @@ mod pgparquet {
                     .unwrap();
                 serialize_record(attribute_val, row_group_writer);
             } else if is_attribute_array {
-                unimplemented!("array type is not supported yet");
+                let attribute_val = record
+                    .get_by_name::<pgrx::AnyArray>(attribute_name)
+                    .unwrap()
+                    .unwrap();
+                serialize_array(attribute_val, row_group_writer);
             } else {
                 let attribute_val = record
                     .get_by_name::<pgrx::AnyElement>(attribute_name)
                     .unwrap()
                     .unwrap();
                 serialize_primitive(attribute_val, row_group_writer);
+            }
+        }
+    }
+
+    fn serialize_array(
+        array: pgrx::AnyArray,
+        row_group_writer: &mut SerializedRowGroupWriter<File>,
+    ) {
+        let array_element_typoid = unsafe { pg_sys::get_element_type(array.oid()) };
+        let is_array_of_composite = unsafe { pg_sys::type_is_rowtype(array_element_typoid) };
+        if is_array_of_composite {
+            unimplemented!("array of composite type is not supported yet");
+            // let records = unsafe {
+            //     Vec::<PgHeapTuple<'_, AllocatedByRust>>::from_polymorphic_datum(
+            //         array.datum(),
+            //         false,
+            //         array.oid(),
+            //     )
+            //     .unwrap()
+            // };
+
+            // for record in records {
+            //     serialize_record(record, row_group_writer);
+            // }
+
+            // return;
+        }
+
+        match array.oid() {
+            FLOAT4ARRAYOID => {
+                let value = unsafe {
+                    Vec::<f32>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                };
+
+                let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+
+                let def_levels = vec![1; value.len()];
+                let mut rep_levels = vec![1; value.len()];
+                rep_levels[0] = 0;
+                column_writer
+                    .typed::<FloatType>()
+                    .write_batch(&value, Some(&def_levels), Some(&rep_levels))
+                    .unwrap();
+
+                column_writer.close().unwrap();
+            }
+            _ => {
+                panic!("unsupported array type {}", array.oid());
             }
         }
     }
@@ -615,48 +711,8 @@ mod pgparquet {
 
                 column_writer.close().unwrap();
             }
-
-            // FLOAT4ARRAYOID => {
-            //     let value = unsafe {
-            //         Vec::<f32>::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap()
-            //     };
-
-            //     // write to parquet as list
-            //     // let float4_type = parquet::schema::types::Type::primitive_type_builder(
-            //     //     elem_name,
-            //     //     parquet::basic::Type::FLOAT,
-            //     // )
-            //     // .with_repetition(parquet::basic::Repetition::REQUIRED)
-            //     // .build()
-            //     // .unwrap();
-
-            //     // let list_type = parquet::schema::types::Type::group_type_builder("list")
-            //     //     .with_fields(vec![float4_type.into()])
-            //     //     .with_repetition(parquet::basic::Repetition::REPEATED)
-            //     //     .with_logical_type(Some(parquet::basic::LogicalType::List))
-            //     //     .build()
-            //     //     .unwrap();
-
-            //     // let list_type = parquet::schema::types::Type::group_type_builder("root")
-            //     //     .with_fields(vec![list_type.into()])
-            //     //     .with_repetition(parquet::basic::Repetition::REQUIRED)
-            //     //     .build()
-            //     //     .unwrap();
-
-            //     let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-
-            //     let def_levels = vec![1; value.len()];
-            //     let mut rep_levels = vec![1; value.len()];
-            //     rep_levels[0] = 0;
-            //     column_writer
-            //         .typed::<FloatType>()
-            //         .write_batch(&value, Some(&def_levels), Some(&rep_levels))
-            //         .unwrap();
-
-            //     column_writer.close().unwrap();
-            // }
             _ => {
-                panic!("unsupported type {}", elem.oid());
+                panic!("unsupported primitive type {}", elem.oid());
             }
         };
     }
@@ -669,17 +725,20 @@ mod pgparquet {
             panic!("composite type is expected, got {}", elem.oid());
         }
 
-        let record = unsafe {
-            PgHeapTuple::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap()
-        };
-
         let file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .open(file_path)
             .unwrap();
 
-        let schema = parse_record_schema(&record, "root");
+        let attribute_tupledesc = unsafe { pg_sys::lookup_rowtype_tupdesc(elem.oid(), 0) };
+        let attribute_tupledesc = unsafe { PgTupleDesc::from_pg(attribute_tupledesc) };
+
+        let record = unsafe {
+            PgHeapTuple::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap()
+        };
+
+        let schema = parse_record_schema(attribute_tupledesc, "root");
         let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
         let mut row_group_writer = writer.next_row_group().unwrap();
 
@@ -687,6 +746,23 @@ mod pgparquet {
 
         row_group_writer.close().unwrap();
         writer.close().unwrap();
+    }
+
+    #[pg_extern]
+    fn schema(elem: pgrx::AnyElement) -> String {
+        let is_composite_type = unsafe { pg_sys::type_is_rowtype(elem.oid()) };
+        if !is_composite_type {
+            // PgHeapTuple is not supported yet as udf argument
+            panic!("composite type is expected, got {}", elem.oid());
+        }
+
+        let attribute_tupledesc = unsafe { pg_sys::lookup_rowtype_tupdesc(elem.oid(), 0) };
+        let attribute_tupledesc = unsafe { PgTupleDesc::from_pg(attribute_tupledesc) };
+        let schema = parse_record_schema(attribute_tupledesc, "root");
+
+        let mut buf = Vec::new();
+        printer::print_schema(&mut buf, &schema);
+        String::from_utf8(buf).unwrap()
     }
 }
 
