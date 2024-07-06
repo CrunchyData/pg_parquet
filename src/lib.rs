@@ -7,7 +7,7 @@ use parquet::{
     },
     file::writer::{SerializedFileWriter, SerializedRowGroupWriter},
     schema::printer,
-    schema::types::TypePtr,
+    schema::types::{SchemaDescriptor, TypePtr},
 };
 
 use pg_sys::{
@@ -22,6 +22,7 @@ pgrx::pg_module_magic!();
 
 #[pg_schema]
 mod pgparquet {
+    use pg_sys::InputFunctionCall;
 
     use super::*;
 
@@ -320,6 +321,99 @@ mod pgparquet {
         }
     }
 
+    fn anyarray_default(array_typoid: Oid) -> pgrx::AnyArray {
+        let arr_str = std::ffi::CString::new("{}").unwrap();
+
+        unsafe {
+            let mut type_input_funcoid = pg_sys::InvalidOid;
+            let mut typioparam = pg_sys::InvalidOid;
+            pg_sys::getTypeInputInfo(array_typoid, &mut type_input_funcoid, &mut typioparam);
+
+            let arg_flinfo =
+                pg_sys::palloc0(std::mem::size_of::<pg_sys::FmgrInfo>()) as *mut pg_sys::FmgrInfo;
+            pg_sys::fmgr_info(type_input_funcoid, arg_flinfo);
+
+            let arg_str_ = arr_str.as_ptr() as *mut _;
+            let arg_typioparam = typioparam;
+            let arg_typmod = -1;
+            let datum = InputFunctionCall(arg_flinfo, arg_str_, arg_typioparam, arg_typmod);
+            pgrx::AnyArray::from_polymorphic_datum(datum, false, array_typoid).unwrap()
+        }
+    }
+
+    fn flatten_anyarrays(arrays: Vec<pgrx::AnyElement>, array_typoid: Oid) -> pgrx::AnyArray {
+        assert!(unsafe { pg_sys::type_is_array(array_typoid) });
+
+        let start_array = anyarray_default(array_typoid);
+
+        let anyarrays = arrays.iter().map(|x| x.datum()).collect::<Vec<_>>();
+
+        let flatten_array_datum =
+            anyarrays
+                .into_iter()
+                .fold(start_array.datum(), |acc, x| unsafe {
+                    direct_function_call(pg_sys::array_cat, &[acc.into_datum(), x.into_datum()])
+                        .unwrap()
+                });
+
+        unsafe {
+            pgrx::AnyArray::from_polymorphic_datum(flatten_array_datum, false, array_typoid)
+                .unwrap()
+        }
+    }
+
+    fn collect_attribute_array_from_tuples(
+        tuples: &[PgHeapTuple<'_, AllocatedByRust>],
+        attribute_name: &str,
+    ) -> Vec<pgrx::AnyElement> {
+        let mut attribute_values = vec![];
+
+        for record in tuples {
+            let attribute_val = record.get_by_name(attribute_name).unwrap().unwrap();
+            attribute_values.push(attribute_val);
+        }
+
+        attribute_values
+    }
+
+    fn heap_tuple_array_to_columnar_arrays(
+        tuples: Vec<PgHeapTuple<'_, AllocatedByRust>>,
+        tuple_typoid: Oid,
+    ) -> Vec<pgrx::AnyArray> {
+        let mut columnar_arrays = vec![];
+
+        let tuple_desc = unsafe { pg_sys::lookup_rowtype_tupdesc(tuple_typoid, 0) };
+        let tuple_desc = unsafe { PgTupleDesc::from_pg(tuple_desc) };
+
+        for attribute_idx in 0..tuple_desc.len() {
+            let attribute = tuple_desc.get(attribute_idx).unwrap();
+            let attribute_name = attribute.name();
+            let attribute_values = collect_attribute_array_from_tuples(&tuples, attribute_name);
+
+            let attribute_typoid = attribute.type_oid().value();
+            let attribute_is_array = unsafe { pg_sys::type_is_array(attribute_typoid) };
+
+            let attribute_array = if attribute_is_array {
+                flatten_anyarrays(attribute_values, attribute_typoid)
+            } else {
+                unsafe {
+                    let attribute_array_typoid = pg_sys::get_array_type(attribute_typoid);
+                    let attribute_array_datum = attribute_values.into_datum().unwrap();
+                    pgrx::AnyArray::from_polymorphic_datum(
+                        attribute_array_datum,
+                        false,
+                        attribute_array_typoid,
+                    )
+                    .unwrap()
+                }
+            };
+
+            columnar_arrays.push(attribute_array);
+        }
+
+        columnar_arrays
+    }
+
     fn serialize_array(
         array: pgrx::AnyArray,
         row_group_writer: &mut SerializedRowGroupWriter<File>,
@@ -327,21 +421,25 @@ mod pgparquet {
         let array_element_typoid = unsafe { pg_sys::get_element_type(array.oid()) };
         let is_array_of_composite = unsafe { pg_sys::type_is_rowtype(array_element_typoid) };
         if is_array_of_composite {
-            unimplemented!("array of composite type is not supported yet");
-            // let records = unsafe {
-            //     Vec::<PgHeapTuple<'_, AllocatedByRust>>::from_polymorphic_datum(
-            //         array.datum(),
-            //         false,
-            //         array.oid(),
-            //     )
-            //     .unwrap()
-            // };
+            let tuples = unsafe {
+                Vec::<PgHeapTuple<'_, AllocatedByRust>>::from_polymorphic_datum(
+                    array.datum(),
+                    false,
+                    array.oid(),
+                )
+                .unwrap()
+            };
 
-            // for record in records {
-            //     serialize_record(record, row_group_writer);
-            // }
+            // each attribute belongs to a separate column, so we need to
+            // serialize them separately as column chunks
+            let columnar_attribute_arrays =
+                heap_tuple_array_to_columnar_arrays(tuples, array_element_typoid);
 
-            // return;
+            for columnar_attribute_array in columnar_attribute_arrays {
+                serialize_array(columnar_attribute_array, row_group_writer);
+            }
+
+            return;
         }
 
         match array.oid() {
@@ -763,6 +861,139 @@ mod pgparquet {
         let mut buf = Vec::new();
         printer::print_schema(&mut buf, &schema);
         String::from_utf8(buf).unwrap()
+    }
+
+    #[pg_extern]
+    fn playground() {
+        // CatFood { dummyfoods: float4[] }, Cat { dummy: float4, dummy2: float3, catfoods: CatFood[]}, Person { name: text, cats: Cat[] }
+
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open("/home/aykutbozkurt/Projects/pg_parquet/test.parquet")
+            .unwrap();
+
+        let schema: TypePtr = parquet::schema::types::Type::group_type_builder("root")
+            .with_fields(vec![
+                parquet::schema::types::Type::primitive_type_builder(
+                    "name",
+                    parquet::basic::Type::BYTE_ARRAY,
+                )
+                .with_logical_type(Some(parquet::basic::LogicalType::String))
+                .with_repetition(parquet::basic::Repetition::REQUIRED)
+                .build()
+                .unwrap()
+                .into(),
+                parquet::schema::types::Type::group_type_builder("cats")
+                    .with_fields(vec![
+                        parquet::schema::types::Type::primitive_type_builder(
+                            "dummy",
+                            parquet::basic::Type::FLOAT,
+                        )
+                        .with_repetition(parquet::basic::Repetition::REQUIRED)
+                        .build()
+                        .unwrap()
+                        .into(),
+                        parquet::schema::types::Type::primitive_type_builder(
+                            "dummy2",
+                            parquet::basic::Type::FLOAT,
+                        )
+                        .with_repetition(parquet::basic::Repetition::REQUIRED)
+                        .build()
+                        .unwrap()
+                        .into(),
+                        parquet::schema::types::Type::group_type_builder("catfoods")
+                            .with_fields(vec![
+                                parquet::schema::types::Type::primitive_type_builder(
+                                    "dummy",
+                                    parquet::basic::Type::FLOAT,
+                                )
+                                .with_repetition(parquet::basic::Repetition::REQUIRED)
+                                .build()
+                                .unwrap()
+                                .into(),
+                            ])
+                            .with_repetition(parquet::basic::Repetition::REPEATED)
+                            .with_logical_type(Some(parquet::basic::LogicalType::List))
+                            .build()
+                            .unwrap()
+                            .into(),
+                    ])
+                    .with_repetition(parquet::basic::Repetition::REPEATED)
+                    .with_logical_type(Some(parquet::basic::LogicalType::List))
+                    .build()
+                    .unwrap()
+                    .into(),
+            ])
+            .with_repetition(parquet::basic::Repetition::REQUIRED)
+            .build()
+            .unwrap()
+            .into();
+
+        let mut writer =
+            SerializedFileWriter::new(file, schema.clone(), Default::default()).unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
+
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<ByteArrayType>()
+            .write_batch(&["Aykut".as_bytes().into()], None, None)
+            .unwrap();
+        column_writer.close().unwrap();
+
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<FloatType>()
+            .write_batch(
+                &[1.0, 2.0, 10.0, 20.0],
+                Some(&[1, 1, 1, 1]),
+                Some(&[0, 1, 1, 1]),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<FloatType>()
+            .write_batch(
+                &[3.0, 4.0, 30.0, 40.0],
+                Some(&[1, 1, 1, 1]),
+                Some(&[0, 1, 1, 1]),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<FloatType>()
+            .write_batch(
+                &[10.0, 20.0, 30.0, 40.0, 0.0, 0.0],
+                Some(&[2, 2, 2, 2, 1, 1]),
+                Some(&[0, 2, 2, 1, 1, 1]),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<FloatType>()
+            .write_batch(
+                &[10.0, 20.0, 30.0, 40.0, 0.0, 0.0],
+                Some(&[2, 2, 2, 2, 1, 1]),
+                Some(&[0, 2, 2, 1, 1, 1]),
+            )
+            .unwrap();
+        column_writer.close().unwrap();
+
+        row_group_writer.close().unwrap();
+        writer.close().unwrap();
+
+        let schema_desc = SchemaDescriptor::new(schema);
+
+        for col_desc in schema_desc.columns() {
+            println!("{:?}", col_desc);
+        }
     }
 }
 
