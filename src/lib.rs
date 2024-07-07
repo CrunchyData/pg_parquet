@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 
 use parquet::{
@@ -7,13 +8,13 @@ use parquet::{
     },
     file::writer::{SerializedFileWriter, SerializedRowGroupWriter},
     schema::printer,
-    schema::types::{SchemaDescriptor, TypePtr},
+    schema::types::{ColumnDescriptor, TypePtr},
 };
 
 use pg_sys::{
-    Oid, BOOLOID, BPCHAROID, CHAROID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8OID, INT2OID,
-    INT4OID, INT8OID, INTERVALOID, JSONOID, NUMERICOID, TEXTOID, TIMEOID, TIMESTAMPOID,
-    TIMESTAMPTZOID, TIMETZOID, UUIDOID, VARCHAROID,
+    InputFunctionCall, Oid, BOOLOID, BPCHAROID, CHAROID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID,
+    FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID, JSONOID, NUMERICOID, TEXTOID, TIMEOID,
+    TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, UUIDOID, VARCHAROID,
 };
 use pgrx::prelude::*;
 use pgrx::{direct_function_call, Json, PgTupleDesc, Uuid};
@@ -22,15 +23,94 @@ pgrx::pg_module_magic!();
 
 #[pg_schema]
 mod pgparquet {
-    use pg_sys::InputFunctionCall;
-
     use super::*;
+
+    type Strides = Vec<usize>;
+
+    fn definition_vector_from_col_desc(col_desc: &ColumnDescriptor, length: usize) -> Vec<i16> {
+        vec![col_desc.max_def_level(); length]
+    }
+
+    fn repetition_vector_from_col_desc(
+        col_desc: &ColumnDescriptor,
+        level_strides: &Vec<Strides>,
+        length: usize,
+    ) -> Vec<i16> {
+        let mut repetition_vector = vec![col_desc.max_rep_level(); length];
+
+        if level_strides.is_empty() {
+            repetition_vector[0] = 0;
+            return repetition_vector;
+        }
+
+        let mut level_strides = level_strides.clone();
+        let mut normalized_level_strides = vec![];
+
+        // e.g. first level contains [2, 1]
+        //      second level contains [1, 1, 1]
+        //      last level contains [2, 1, 5]
+        // last level is equal to total element length, all previous levels contains partition indexes
+        // I want to convert all previous levels to summation of partition indexes like below
+        // previous level should be converted to [2, 1, 5]
+        // the first level should be converted to [3, 5]
+
+        let mut last_level_sum_vector = level_strides.pop().unwrap();
+        normalized_level_strides.push(last_level_sum_vector.clone());
+
+        while !level_strides.is_empty() {
+            let previous_level_partition_indexes = level_strides.pop().unwrap();
+
+            let mut previous_level_sum_vector = vec![];
+
+            let mut idx = 0;
+            for partition_index in previous_level_partition_indexes {
+                previous_level_sum_vector.push(
+                    last_level_sum_vector
+                        .iter()
+                        .skip(idx)
+                        .take(partition_index)
+                        .sum(),
+                );
+                idx += partition_index;
+            }
+
+            last_level_sum_vector = previous_level_sum_vector.clone();
+            normalized_level_strides.push(previous_level_sum_vector);
+        }
+
+        let mut idx_set = HashSet::new();
+        let mut level_identifier = 1;
+        while !normalized_level_strides.is_empty() {
+            let mut strides = normalized_level_strides.pop().unwrap();
+            strides.pop().unwrap();
+
+            let mut idx = 0;
+            for stride in strides {
+                idx += stride;
+                if !idx_set.contains(&idx) {
+                    repetition_vector[idx] = level_identifier;
+                    idx_set.insert(idx);
+                }
+            }
+
+            level_identifier += 1;
+        }
+
+        repetition_vector[0] = 0;
+
+        repetition_vector
+    }
 
     fn parse_record_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> TypePtr {
         let mut child_fields: Vec<TypePtr> = vec![];
 
         for attribute_idx in 0..tupledesc.len() {
             let attribute = tupledesc.get(attribute_idx).unwrap();
+
+            if attribute.is_dropped() {
+                continue;
+            }
+
             let attribute_name = attribute.name();
             let attribute_oid = attribute.type_oid().value();
 
@@ -293,6 +373,10 @@ mod pgparquet {
         row_group_writer: &mut SerializedRowGroupWriter<File>,
     ) {
         for (_, attribute) in record.attributes() {
+            if attribute.is_dropped() {
+                continue;
+            }
+
             let attribute_name = attribute.name();
             let attribute_oid = attribute.type_oid().value();
 
@@ -310,7 +394,7 @@ mod pgparquet {
                     .get_by_name::<pgrx::AnyArray>(attribute_name)
                     .unwrap()
                     .unwrap();
-                serialize_array(attribute_val, row_group_writer);
+                serialize_array(attribute_val, &mut vec![], row_group_writer);
             } else {
                 let attribute_val = record
                     .get_by_name::<pgrx::AnyElement>(attribute_name)
@@ -341,25 +425,44 @@ mod pgparquet {
         }
     }
 
-    fn flatten_anyarrays(arrays: Vec<pgrx::AnyElement>, array_typoid: Oid) -> pgrx::AnyArray {
+    fn flatten_anyarrays(
+        arrays: Vec<pgrx::AnyElement>,
+        array_typoid: Oid,
+    ) -> (pgrx::AnyArray, Strides) {
         assert!(unsafe { pg_sys::type_is_array(array_typoid) });
 
-        let start_array = anyarray_default(array_typoid);
+        if arrays.is_empty() {
+            return (anyarray_default(array_typoid), vec![]);
+        }
 
         let anyarrays = arrays.iter().map(|x| x.datum()).collect::<Vec<_>>();
 
-        let flatten_array_datum =
-            anyarrays
-                .into_iter()
-                .fold(start_array.datum(), |acc, x| unsafe {
-                    direct_function_call(pg_sys::array_cat, &[acc.into_datum(), x.into_datum()])
-                        .unwrap()
-                });
-
-        unsafe {
-            pgrx::AnyArray::from_polymorphic_datum(flatten_array_datum, false, array_typoid)
+        let mut lengths = Vec::<usize>::new();
+        for array_datum in &anyarrays {
+            let a_len: i32 = unsafe {
+                direct_function_call(
+                    pg_sys::array_length,
+                    &[array_datum.into_datum(), 1.into_datum()],
+                )
                 .unwrap()
+            };
+            lengths.push(a_len as _);
         }
+
+        let flatten_array_datum = anyarrays
+            .into_iter()
+            .reduce(|a, b| unsafe {
+                direct_function_call(pg_sys::array_cat, &[a.into_datum(), b.into_datum()]).unwrap()
+            })
+            .unwrap();
+
+        (
+            unsafe {
+                pgrx::AnyArray::from_polymorphic_datum(flatten_array_datum, false, array_typoid)
+                    .unwrap()
+            },
+            lengths,
+        )
     }
 
     fn collect_attribute_array_from_tuples(
@@ -379,24 +482,31 @@ mod pgparquet {
     fn heap_tuple_array_to_columnar_arrays(
         tuples: Vec<PgHeapTuple<'_, AllocatedByRust>>,
         tuple_typoid: Oid,
-    ) -> Vec<pgrx::AnyArray> {
-        let mut columnar_arrays = vec![];
+    ) -> Vec<(pgrx::AnyArray, Strides)> {
+        let mut columnar_arrays_with_strides = vec![];
 
         let tuple_desc = unsafe { pg_sys::lookup_rowtype_tupdesc(tuple_typoid, 0) };
         let tuple_desc = unsafe { PgTupleDesc::from_pg(tuple_desc) };
 
         for attribute_idx in 0..tuple_desc.len() {
             let attribute = tuple_desc.get(attribute_idx).unwrap();
+
+            if attribute.is_dropped() {
+                continue;
+            }
+
             let attribute_name = attribute.name();
             let attribute_values = collect_attribute_array_from_tuples(&tuples, attribute_name);
 
             let attribute_typoid = attribute.type_oid().value();
             let attribute_is_array = unsafe { pg_sys::type_is_array(attribute_typoid) };
 
-            let attribute_array = if attribute_is_array {
+            let attribute_array_with_strides = if attribute_is_array {
                 flatten_anyarrays(attribute_values, attribute_typoid)
             } else {
-                unsafe {
+                let lengths = vec![1; attribute_values.len()];
+
+                let attribute_array = unsafe {
                     let attribute_array_typoid = pg_sys::get_array_type(attribute_typoid);
                     let attribute_array_datum = attribute_values.into_datum().unwrap();
                     pgrx::AnyArray::from_polymorphic_datum(
@@ -405,17 +515,20 @@ mod pgparquet {
                         attribute_array_typoid,
                     )
                     .unwrap()
-                }
+                };
+
+                (attribute_array, lengths)
             };
 
-            columnar_arrays.push(attribute_array);
+            columnar_arrays_with_strides.push(attribute_array_with_strides);
         }
 
-        columnar_arrays
+        columnar_arrays_with_strides
     }
 
     fn serialize_array(
         array: pgrx::AnyArray,
+        level_strides: &mut Vec<Strides>,
         row_group_writer: &mut SerializedRowGroupWriter<File>,
     ) {
         let array_element_typoid = unsafe { pg_sys::get_element_type(array.oid()) };
@@ -432,11 +545,15 @@ mod pgparquet {
 
             // each attribute belongs to a separate column, so we need to
             // serialize them separately as column chunks
-            let columnar_attribute_arrays =
+            let columnar_attribute_arrays_with_strides =
                 heap_tuple_array_to_columnar_arrays(tuples, array_element_typoid);
 
-            for columnar_attribute_array in columnar_attribute_arrays {
-                serialize_array(columnar_attribute_array, row_group_writer);
+            for (columnar_attribute_array, columnar_attribute_array_strides) in
+                columnar_attribute_arrays_with_strides.into_iter()
+            {
+                level_strides.push(columnar_attribute_array_strides);
+                serialize_array(columnar_attribute_array, level_strides, row_group_writer);
+                level_strides.pop();
             }
 
             return;
@@ -450,9 +567,11 @@ mod pgparquet {
 
                 let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
 
-                let def_levels = vec![1; value.len()];
-                let mut rep_levels = vec![1; value.len()];
-                rep_levels[0] = 0;
+                let col_desc = column_writer.typed::<FloatType>().get_descriptor();
+                let def_levels = definition_vector_from_col_desc(col_desc, value.len());
+                let rep_levels =
+                    repetition_vector_from_col_desc(col_desc, level_strides, value.len());
+
                 column_writer
                     .typed::<FloatType>()
                     .write_batch(&value, Some(&def_levels), Some(&rep_levels))
@@ -861,139 +980,6 @@ mod pgparquet {
         let mut buf = Vec::new();
         printer::print_schema(&mut buf, &schema);
         String::from_utf8(buf).unwrap()
-    }
-
-    #[pg_extern]
-    fn playground() {
-        // CatFood { dummyfoods: float4[] }, Cat { dummy: float4, dummy2: float3, catfoods: CatFood[]}, Person { name: text, cats: Cat[] }
-
-        let file = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .open("/home/aykutbozkurt/Projects/pg_parquet/test.parquet")
-            .unwrap();
-
-        let schema: TypePtr = parquet::schema::types::Type::group_type_builder("root")
-            .with_fields(vec![
-                parquet::schema::types::Type::primitive_type_builder(
-                    "name",
-                    parquet::basic::Type::BYTE_ARRAY,
-                )
-                .with_logical_type(Some(parquet::basic::LogicalType::String))
-                .with_repetition(parquet::basic::Repetition::REQUIRED)
-                .build()
-                .unwrap()
-                .into(),
-                parquet::schema::types::Type::group_type_builder("cats")
-                    .with_fields(vec![
-                        parquet::schema::types::Type::primitive_type_builder(
-                            "dummy",
-                            parquet::basic::Type::FLOAT,
-                        )
-                        .with_repetition(parquet::basic::Repetition::REQUIRED)
-                        .build()
-                        .unwrap()
-                        .into(),
-                        parquet::schema::types::Type::primitive_type_builder(
-                            "dummy2",
-                            parquet::basic::Type::FLOAT,
-                        )
-                        .with_repetition(parquet::basic::Repetition::REQUIRED)
-                        .build()
-                        .unwrap()
-                        .into(),
-                        parquet::schema::types::Type::group_type_builder("catfoods")
-                            .with_fields(vec![
-                                parquet::schema::types::Type::primitive_type_builder(
-                                    "dummy",
-                                    parquet::basic::Type::FLOAT,
-                                )
-                                .with_repetition(parquet::basic::Repetition::REQUIRED)
-                                .build()
-                                .unwrap()
-                                .into(),
-                            ])
-                            .with_repetition(parquet::basic::Repetition::REPEATED)
-                            .with_logical_type(Some(parquet::basic::LogicalType::List))
-                            .build()
-                            .unwrap()
-                            .into(),
-                    ])
-                    .with_repetition(parquet::basic::Repetition::REPEATED)
-                    .with_logical_type(Some(parquet::basic::LogicalType::List))
-                    .build()
-                    .unwrap()
-                    .into(),
-            ])
-            .with_repetition(parquet::basic::Repetition::REQUIRED)
-            .build()
-            .unwrap()
-            .into();
-
-        let mut writer =
-            SerializedFileWriter::new(file, schema.clone(), Default::default()).unwrap();
-        let mut row_group_writer = writer.next_row_group().unwrap();
-
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<ByteArrayType>()
-            .write_batch(&["Aykut".as_bytes().into()], None, None)
-            .unwrap();
-        column_writer.close().unwrap();
-
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<FloatType>()
-            .write_batch(
-                &[1.0, 2.0, 10.0, 20.0],
-                Some(&[1, 1, 1, 1]),
-                Some(&[0, 1, 1, 1]),
-            )
-            .unwrap();
-        column_writer.close().unwrap();
-
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<FloatType>()
-            .write_batch(
-                &[3.0, 4.0, 30.0, 40.0],
-                Some(&[1, 1, 1, 1]),
-                Some(&[0, 1, 1, 1]),
-            )
-            .unwrap();
-        column_writer.close().unwrap();
-
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<FloatType>()
-            .write_batch(
-                &[10.0, 20.0, 30.0, 40.0, 0.0, 0.0],
-                Some(&[2, 2, 2, 2, 1, 1]),
-                Some(&[0, 2, 2, 1, 1, 1]),
-            )
-            .unwrap();
-        column_writer.close().unwrap();
-
-        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-        column_writer
-            .typed::<FloatType>()
-            .write_batch(
-                &[10.0, 20.0, 30.0, 40.0, 0.0, 0.0],
-                Some(&[2, 2, 2, 2, 1, 1]),
-                Some(&[0, 2, 2, 1, 1, 1]),
-            )
-            .unwrap();
-        column_writer.close().unwrap();
-
-        row_group_writer.close().unwrap();
-        writer.close().unwrap();
-
-        let schema_desc = SchemaDescriptor::new(schema);
-
-        for col_desc in schema_desc.columns() {
-            println!("{:?}", col_desc);
-        }
     }
 }
 
