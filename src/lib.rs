@@ -1,11 +1,13 @@
 use parquet::{file::writer::SerializedFileWriter, schema::printer};
+use pgrx::pg_getarg;
 use pgrx::prelude::*;
-use pgrx::PgTupleDesc;
 
 use schema_parser::parse_record_schema;
 use serializer::serialize_record;
 
 mod conversion;
+mod copy_hook;
+mod parquet_dest_receiver;
 mod schema_parser;
 mod serializer;
 
@@ -15,51 +17,69 @@ pgrx::pg_module_magic!();
 mod pgparquet {
     use super::*;
 
-    fn ensure_composite_type(oid: pg_sys::Oid) {
-        let is_composite_type = unsafe { pg_sys::type_is_rowtype(oid) };
-        if !is_composite_type {
-            // PgHeapTuple is not supported yet as udf argument
-            panic!("composite type is expected, got {}", oid);
-        }
-    }
+    #[pg_extern(sql = "
+        create function pgparquet.serialize(elem record, filename text)
+            returns void
+            strict
+            language c
+            AS 'MODULE_PATHNAME', 'serialize_wrapper';
+    ")]
+    pub(crate) fn serialize(fcinfo: pg_sys::FunctionCallInfo) -> pg_sys::Datum {
+        let record = unsafe {
+            pg_getarg::<PgHeapTuple<'_, AllocatedByRust>>(fcinfo, 0)
+                .expect("record is required as first argument")
+        };
+        let filename = unsafe {
+            pg_getarg::<&str>(fcinfo, 1).expect("filename is required as second argument")
+        };
 
-    #[pg_extern]
-    fn serialize(elem: pgrx::AnyElement, file_path: &str) {
-        ensure_composite_type(elem.oid());
-
-        let attribute_tupledesc = unsafe { pg_sys::lookup_rowtype_tupdesc(elem.oid(), 0) };
-        let attribute_tupledesc = unsafe { PgTupleDesc::from_pg(attribute_tupledesc) };
-        let schema = parse_record_schema(attribute_tupledesc, "root");
+        let attributes = record
+            .attributes()
+            .into_iter()
+            .map(|(_, attribute)| attribute)
+            .collect::<Vec<_>>();
+        let schema = parse_record_schema(attributes, "root");
 
         let file = std::fs::OpenOptions::new()
-            .write(true)
+            .append(true)
             .create(true)
-            .open(file_path)
+            .open(filename)
             .unwrap();
 
         let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
         let mut row_group_writer = writer.next_row_group().unwrap();
 
-        let record = unsafe {
-            PgHeapTuple::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap()
-        };
         serialize_record(record, &mut row_group_writer);
 
         row_group_writer.close().unwrap();
         writer.close().unwrap();
+
+        pg_sys::Datum::from(0)
     }
 
-    #[pg_extern]
-    fn schema(elem: pgrx::AnyElement) -> String {
-        ensure_composite_type(elem.oid());
+    #[pg_extern(sql = "
+        create function pgparquet.schema(elem record)
+            returns text
+            strict
+            language c
+            AS 'MODULE_PATHNAME', 'schema_wrapper';
+    ")]
+    fn schema(fcinfo: pg_sys::FunctionCallInfo) -> pg_sys::Datum {
+        let record = unsafe {
+            pg_getarg::<PgHeapTuple<'_, AllocatedByRust>>(fcinfo, 0)
+                .expect("record is required as first argument")
+        };
 
-        let attribute_tupledesc = unsafe { pg_sys::lookup_rowtype_tupdesc(elem.oid(), 0) };
-        let attribute_tupledesc = unsafe { PgTupleDesc::from_pg(attribute_tupledesc) };
-        let schema = parse_record_schema(attribute_tupledesc, "root");
+        let attributes = record
+            .attributes()
+            .into_iter()
+            .map(|(_, attribute)| attribute)
+            .collect::<Vec<_>>();
+        let schema = parse_record_schema(attributes, "root");
 
         let mut buf = Vec::new();
         printer::print_schema(&mut buf, &schema);
-        String::from_utf8(buf).unwrap()
+        String::from_utf8(buf).unwrap().into_datum().unwrap()
     }
 }
 

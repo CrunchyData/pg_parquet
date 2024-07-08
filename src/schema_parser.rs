@@ -9,12 +9,29 @@ use pg_sys::{
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
-pub(crate) fn parse_record_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> TypePtr {
+type Attributes<'a> = Vec<&'a pg_sys::FormData_pg_attribute>;
+
+fn collect_attributes<'a>(tupdesc: &'a PgTupleDesc) -> Attributes<'a> {
+    let mut attributes = vec![];
+
+    for i in 0..tupdesc.len() {
+        let attribute = tupdesc.get(i).unwrap();
+        if attribute.is_dropped() {
+            continue;
+        }
+        attributes.push(attribute);
+    }
+
+    attributes
+}
+
+pub(crate) fn parse_record_schema<'a>(
+    attributes: Attributes<'a>,
+    elem_name: &'static str,
+) -> TypePtr {
     let mut child_fields: Vec<TypePtr> = vec![];
 
-    for attribute_idx in 0..tupledesc.len() {
-        let attribute = tupledesc.get(attribute_idx).unwrap();
-
+    for attribute in attributes {
         if attribute.is_dropped() {
             continue;
         }
@@ -28,8 +45,9 @@ pub(crate) fn parse_record_schema(tupledesc: PgTupleDesc, elem_name: &'static st
         let child_field = if is_attribute_composite {
             let attribute_tupledesc = unsafe { pg_sys::lookup_rowtype_tupdesc(attribute_oid, 0) };
             let attribute_tupledesc = unsafe { PgTupleDesc::from_pg(attribute_tupledesc) };
+            let attribute_attributes = collect_attributes(&attribute_tupledesc);
             parse_record_schema(
-                attribute_tupledesc,
+                attribute_attributes,
                 // todo: do not leak
                 attribute_name.to_string().leak(),
             )
@@ -88,7 +106,8 @@ fn parse_array_schema(arraytypoid: Oid, array_name: &'static str) -> TypePtr {
         let array_element_tupledesc =
             unsafe { pg_sys::lookup_rowtype_tupdesc(array_element_typoid, 0) };
         let array_element_tupledesc = unsafe { PgTupleDesc::from_pg(array_element_tupledesc) };
-        let element_group_builder = parse_record_schema(array_element_tupledesc, array_name);
+        let array_element_attributes = collect_attributes(&array_element_tupledesc);
+        let element_group_builder = parse_record_schema(array_element_attributes, array_name);
 
         let list_group_builder = parquet::schema::types::Type::group_type_builder(array_name)
             .with_fields(vec![element_group_builder.into()])
