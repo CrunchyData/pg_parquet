@@ -1,9 +1,9 @@
 use parquet::{file::writer::SerializedFileWriter, schema::printer};
-use pgrx::pg_getarg;
-use pgrx::prelude::*;
 
-use schema_parser::parse_record_schema;
-use serializer::serialize_record;
+use pgrx::{pg_getarg, pg_return_null, prelude::*};
+
+use schema_parser::parse_schema;
+use serializer::serialize_array;
 
 mod conversion;
 mod copy_hook;
@@ -18,30 +18,33 @@ mod pgparquet {
     use super::*;
 
     #[pg_extern(sql = "
-        create function pgparquet.serialize(elem record, filename text)
+        create function pgparquet.serialize(elems record[], filename text)
             returns void
             strict
             language c
             AS 'MODULE_PATHNAME', 'serialize_wrapper';
     ")]
     pub(crate) fn serialize(fcinfo: pg_sys::FunctionCallInfo) -> pg_sys::Datum {
-        let record = unsafe {
-            pg_getarg::<PgHeapTuple<'_, AllocatedByRust>>(fcinfo, 0)
-                .expect("record is required as first argument")
+        let records = unsafe {
+            pg_getarg::<Vec<PgHeapTuple<'_, AllocatedByRust>>>(fcinfo, 0)
+                .expect("record array is required as first argument")
         };
         let filename = unsafe {
             pg_getarg::<&str>(fcinfo, 1).expect("filename is required as second argument")
         };
 
-        let attributes = record
-            .attributes()
-            .into_iter()
-            .map(|(_, attribute)| attribute)
-            .collect::<Vec<_>>();
-        let schema = parse_record_schema(attributes, "root");
+        if records.is_empty() {
+            return unsafe { pg_return_null(fcinfo) };
+        }
+
+        let array_oid = records
+            .composite_type_oid()
+            .expect("array of records are expected");
+
+        let schema = parse_schema(array_oid, "root");
 
         let file = std::fs::OpenOptions::new()
-            .append(true)
+            .write(true)
             .create(true)
             .open(filename)
             .unwrap();
@@ -49,33 +52,40 @@ mod pgparquet {
         let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
         let mut row_group_writer = writer.next_row_group().unwrap();
 
-        serialize_record(record, &mut row_group_writer);
+        let anyarray = unsafe {
+            pgrx::AnyArray::from_polymorphic_datum(records.into_datum().unwrap(), false, array_oid)
+                .unwrap()
+        };
+        serialize_array(anyarray, &mut vec![], &mut row_group_writer);
 
         row_group_writer.close().unwrap();
         writer.close().unwrap();
 
-        pg_sys::Datum::from(0)
+        unsafe { pg_return_null(fcinfo) }
     }
 
     #[pg_extern(sql = "
-        create function pgparquet.schema(elem record)
+        create function pgparquet.schema(elems record[])
             returns text
             strict
             language c
             AS 'MODULE_PATHNAME', 'schema_wrapper';
     ")]
     fn schema(fcinfo: pg_sys::FunctionCallInfo) -> pg_sys::Datum {
-        let record = unsafe {
-            pg_getarg::<PgHeapTuple<'_, AllocatedByRust>>(fcinfo, 0)
-                .expect("record is required as first argument")
+        let records = unsafe {
+            pg_getarg::<Vec<PgHeapTuple<'_, AllocatedByRust>>>(fcinfo, 0)
+                .expect("record array is required as first argument")
         };
 
-        let attributes = record
-            .attributes()
-            .into_iter()
-            .map(|(_, attribute)| attribute)
-            .collect::<Vec<_>>();
-        let schema = parse_record_schema(attributes, "root");
+        if records.is_empty() {
+            return unsafe { pg_return_null(fcinfo) };
+        }
+
+        let array_oid = records
+            .composite_type_oid()
+            .expect("array of records are expected");
+
+        let schema = parse_schema(array_oid, "root");
 
         let mut buf = Vec::new();
         printer::print_schema(&mut buf, &schema);

@@ -25,10 +25,7 @@ fn collect_attributes<'a>(tupdesc: &'a PgTupleDesc) -> Attributes<'a> {
     attributes
 }
 
-pub(crate) fn parse_record_schema<'a>(
-    attributes: Attributes<'a>,
-    elem_name: &'static str,
-) -> TypePtr {
+fn parse_record_schema<'a>(attributes: Attributes<'a>, elem_name: &'static str) -> TypePtr {
     let mut child_fields: Vec<TypePtr> = vec![];
 
     for attribute in attributes {
@@ -97,6 +94,19 @@ fn parse_array_schema_internal(
         .unwrap();
 
     list_group_builder.into()
+}
+
+pub(crate) fn parse_schema(arraytypoid: Oid, array_name: &'static str) -> TypePtr {
+    let array_schema = parse_array_schema(arraytypoid, array_name);
+
+    let root_schema = parquet::schema::types::Type::group_type_builder("root")
+        .with_fields(vec![array_schema])
+        .with_repetition(parquet::basic::Repetition::REQUIRED)
+        .build()
+        .unwrap()
+        .into();
+
+    root_schema
 }
 
 fn parse_array_schema(arraytypoid: Oid, array_name: &'static str) -> TypePtr {

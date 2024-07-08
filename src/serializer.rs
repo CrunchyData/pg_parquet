@@ -102,7 +102,7 @@ fn repetition_vector_from_col_desc(
     repetition_vector
 }
 
-pub(crate) fn serialize_record(
+fn serialize_record(
     record: PgHeapTuple<'static, AllocatedByRust>,
     row_group_writer: &mut SerializedRowGroupWriter<File>,
 ) {
@@ -139,7 +139,7 @@ pub(crate) fn serialize_record(
     }
 }
 
-fn anyarray_default(array_typoid: Oid) -> pgrx::AnyArray {
+fn array_default(array_typoid: Oid) -> pgrx::AnyArray {
     let arr_str = std::ffi::CString::new("{}").unwrap();
 
     unsafe {
@@ -159,44 +159,93 @@ fn anyarray_default(array_typoid: Oid) -> pgrx::AnyArray {
     }
 }
 
-fn flatten_anyarrays(
-    arrays: Vec<pgrx::AnyElement>,
-    array_typoid: Oid,
-) -> (pgrx::AnyArray, Strides) {
+fn flatten_arrays(arrays: Vec<pgrx::AnyElement>, array_typoid: Oid) -> (pgrx::AnyArray, Strides) {
     assert!(unsafe { pg_sys::type_is_array(array_typoid) });
 
     if arrays.is_empty() {
-        return (anyarray_default(array_typoid), vec![]);
+        return (array_default(array_typoid), vec![]);
     }
 
-    let anyarrays = arrays.iter().map(|x| x.datum()).collect::<Vec<_>>();
+    let array_datums = arrays.into_iter().map(|x| x.datum()).collect::<Vec<_>>();
 
     let mut lengths = Vec::<usize>::new();
-    for array_datum in &anyarrays {
+    for array_datum in &array_datums {
         let a_len: i32 = unsafe {
             direct_function_call(
                 pg_sys::array_length,
                 &[array_datum.into_datum(), 1.into_datum()],
             )
-            .unwrap_or_default()
+            .unwrap()
         };
         lengths.push(a_len as _);
     }
 
-    let flatten_array_datum = anyarrays
+    let flatten_array_datum = array_datums
         .into_iter()
         .reduce(|a, b| unsafe {
             direct_function_call(pg_sys::array_cat, &[a.into_datum(), b.into_datum()]).unwrap()
         })
         .unwrap();
 
-    (
-        unsafe {
-            pgrx::AnyArray::from_polymorphic_datum(flatten_array_datum, false, array_typoid)
-                .unwrap()
-        },
-        lengths,
-    )
+    let flatten_array = unsafe {
+        pgrx::AnyArray::from_polymorphic_datum(flatten_array_datum, false, array_typoid).unwrap()
+    };
+
+    (flatten_array, lengths)
+}
+
+fn elements_to_anyarray_helper<T: IntoDatum + FromDatum>(
+    elements: Vec<pgrx::AnyElement>,
+    array_typoid: Oid,
+) -> pgrx::AnyArray {
+    let elem_typoid = unsafe { pg_sys::get_element_type(array_typoid) };
+    let elements = elements
+        .into_iter()
+        .map(|x| unsafe { T::from_polymorphic_datum(x.datum(), false, elem_typoid).unwrap() })
+        .collect::<Vec<_>>();
+
+    unsafe {
+        pgrx::AnyArray::from_polymorphic_datum(elements.into_datum().unwrap(), false, array_typoid)
+            .unwrap()
+    }
+}
+
+fn elements_to_anyarray(
+    elements: Vec<pgrx::AnyElement>,
+    array_typoid: Oid,
+) -> (pgrx::AnyArray, Strides) {
+    let lengths = vec![1; elements.len()];
+
+    let array = match array_typoid {
+        FLOAT4ARRAYOID => elements_to_anyarray_helper::<f32>(elements, array_typoid),
+        FLOAT8ARRAYOID => elements_to_anyarray_helper::<f64>(elements, array_typoid),
+        BOOLARRAYOID => elements_to_anyarray_helper::<bool>(elements, array_typoid),
+        INT2ARRAYOID => elements_to_anyarray_helper::<i16>(elements, array_typoid),
+        INT4ARRAYOID => elements_to_anyarray_helper::<i32>(elements, array_typoid),
+        INT8ARRAYOID => elements_to_anyarray_helper::<i64>(elements, array_typoid),
+        NUMERICARRAYOID => {
+            unimplemented!("numeric type is not supported yet");
+        }
+        DATEARRAYOID => elements_to_anyarray_helper::<Date>(elements, array_typoid),
+        TIMESTAMPARRAYOID => elements_to_anyarray_helper::<Timestamp>(elements, array_typoid),
+        TIMESTAMPTZARRAYOID => {
+            elements_to_anyarray_helper::<TimestampWithTimeZone>(elements, array_typoid)
+        }
+        TIMEARRAYOID => elements_to_anyarray_helper::<Time>(elements, array_typoid),
+        TIMETZARRAYOID => elements_to_anyarray_helper::<TimeWithTimeZone>(elements, array_typoid),
+        INTERVALARRAYOID => elements_to_anyarray_helper::<Interval>(elements, array_typoid),
+        CHARARRAYOID => elements_to_anyarray_helper::<i8>(elements, array_typoid),
+        TEXTARRAYOID | VARCHARARRAYOID | BPCHARARRAYOID => {
+            elements_to_anyarray_helper::<String>(elements, array_typoid)
+        }
+        UUIDARRAYOID => elements_to_anyarray_helper::<Uuid>(elements, array_typoid),
+        JSONARRAYOID => elements_to_anyarray_helper::<Json>(elements, array_typoid),
+        _ => {
+            panic!("unsupported array type {}", array_typoid);
+        }
+    };
+
+    (array, lengths)
 }
 
 fn collect_attribute_array_from_tuples(
@@ -236,22 +285,10 @@ fn heap_tuple_array_to_columnar_arrays(
         let attribute_is_array = unsafe { pg_sys::type_is_array(attribute_typoid) };
 
         let attribute_array_with_strides = if attribute_is_array {
-            flatten_anyarrays(attribute_values, attribute_typoid)
+            flatten_arrays(attribute_values, attribute_typoid)
         } else {
-            let lengths = vec![1; attribute_values.len()];
-
-            let attribute_array = unsafe {
-                let attribute_array_typoid = pg_sys::get_array_type(attribute_typoid);
-                let attribute_array_datum = attribute_values.into_datum().unwrap();
-                pgrx::AnyArray::from_polymorphic_datum(
-                    attribute_array_datum,
-                    false,
-                    attribute_array_typoid,
-                )
-                .unwrap()
-            };
-
-            (attribute_array, lengths)
+            let array_typeoid = unsafe { pg_sys::get_array_type(attribute_typoid) };
+            elements_to_anyarray(attribute_values, array_typeoid)
         };
 
         columnar_arrays_with_strides.push(attribute_array_with_strides);
@@ -278,7 +315,7 @@ fn serialize_array_internal<D: parquet::data_type::DataType>(
     column_writer.close().unwrap();
 }
 
-fn serialize_array(
+pub(crate) fn serialize_array(
     array: pgrx::AnyArray,
     level_strides: &mut Vec<Strides>,
     row_group_writer: &mut SerializedRowGroupWriter<File>,

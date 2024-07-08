@@ -3,7 +3,7 @@ use pg_sys::{
     CommandDest_DestCopyOut, CommandTag_CMDTAG_COPY, CopyStmt, CreateNewPortal, Datum,
     DestReceiver, FreeFile, GetActiveSnapshot, NodeTag::T_CopyStmt, ParamListInfo, PlannedStmt,
     Portal, PortalDefineQuery, PortalDrop, QueryCompletion, RawStmt, Snapshot, TupleDesc,
-    TupleTableSlot, CURSOR_OPT_PARALLEL_OK, PG_BINARY_A, _IO_FILE,
+    TupleTableSlot, CURSOR_OPT_PARALLEL_OK, PG_BINARY_W, _IO_FILE,
 };
 use pgrx::{is_a, prelude::*, PgList, PgTupleDesc};
 
@@ -62,7 +62,7 @@ pub extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tuplede
     }
 
     // open the file
-    let file = unsafe { AllocateFile(parquet_dest.filename, PG_BINARY_A.as_ptr() as _) };
+    let file = unsafe { AllocateFile(parquet_dest.filename, PG_BINARY_W.as_ptr() as _) };
 
     parquet_dest.file = file;
     parquet_dest.tupledesc = tupledesc.as_ptr();
