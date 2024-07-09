@@ -9,6 +9,8 @@ use pg_sys::{
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
+use crate::serializer::tupledesc_for_typeoid;
+
 type Attributes<'a> = Vec<&'a pg_sys::FormData_pg_attribute>;
 
 fn collect_attributes<'a>(tupdesc: &'a PgTupleDesc) -> Attributes<'a> {
@@ -40,8 +42,7 @@ fn parse_record_schema<'a>(attributes: Attributes<'a>, elem_name: &'static str) 
         let is_attribute_array = unsafe { pg_sys::type_is_array(attribute_oid) };
 
         let child_field = if is_attribute_composite {
-            let attribute_tupledesc = unsafe { pg_sys::lookup_rowtype_tupdesc(attribute_oid, 0) };
-            let attribute_tupledesc = unsafe { PgTupleDesc::from_pg(attribute_tupledesc) };
+            let attribute_tupledesc = tupledesc_for_typeoid(attribute_oid).unwrap();
             let attribute_attributes = collect_attributes(&attribute_tupledesc);
             parse_record_schema(
                 attribute_attributes,
@@ -49,8 +50,11 @@ fn parse_record_schema<'a>(attributes: Attributes<'a>, elem_name: &'static str) 
                 attribute_name.to_string().leak(),
             )
         } else if is_attribute_array {
+            let attribute_element_typoid = unsafe { pg_sys::get_element_type(attribute_oid) };
+            let attribute_tupledesc = tupledesc_for_typeoid(attribute_element_typoid);
             parse_array_schema(
                 attribute.type_oid().value(),
+                attribute_tupledesc,
                 // todo: do not leak
                 attribute_name.to_string().leak(),
             )
@@ -96,8 +100,12 @@ fn parse_array_schema_internal(
     list_group_builder.into()
 }
 
-pub(crate) fn parse_schema(arraytypoid: Oid, array_name: &'static str) -> TypePtr {
-    let array_schema = parse_array_schema(arraytypoid, array_name);
+pub(crate) fn parse_schema(
+    arraytypoid: Oid,
+    tupledesc: PgTupleDesc,
+    array_name: &'static str,
+) -> TypePtr {
+    let array_schema = parse_array_schema(arraytypoid, Some(tupledesc), array_name);
 
     let root_schema = parquet::schema::types::Type::group_type_builder("root")
         .with_fields(vec![array_schema])
@@ -109,14 +117,16 @@ pub(crate) fn parse_schema(arraytypoid: Oid, array_name: &'static str) -> TypePt
     root_schema
 }
 
-fn parse_array_schema(arraytypoid: Oid, array_name: &'static str) -> TypePtr {
-    let array_element_typoid = unsafe { pg_sys::get_element_type(arraytypoid) };
-    let is_array_of_composite = unsafe { pg_sys::type_is_rowtype(array_element_typoid) };
+fn parse_array_schema(
+    arraytypoid: Oid,
+    tupledesc: Option<PgTupleDesc>,
+    array_name: &'static str,
+) -> TypePtr {
+    let is_array_of_composite = tupledesc.is_some();
     if is_array_of_composite {
-        let array_element_tupledesc =
-            unsafe { pg_sys::lookup_rowtype_tupdesc(array_element_typoid, 0) };
-        let array_element_tupledesc = unsafe { PgTupleDesc::from_pg(array_element_tupledesc) };
-        let array_element_attributes = collect_attributes(&array_element_tupledesc);
+        let tupledesc = tupledesc.unwrap();
+
+        let array_element_attributes = collect_attributes(&tupledesc);
         let element_group_builder = parse_record_schema(array_element_attributes, array_name);
 
         let list_group_builder = parquet::schema::types::Type::group_type_builder(array_name)

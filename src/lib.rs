@@ -1,9 +1,10 @@
 use parquet::{file::writer::SerializedFileWriter, schema::printer};
 
-use pgrx::{pg_getarg, pg_return_null, prelude::*};
+use pgrx::{pg_getarg, prelude::*};
 
 use schema_parser::parse_schema;
 use serializer::serialize_array;
+use serializer::tupledesc_for_tuples;
 
 mod conversion;
 mod copy_hook;
@@ -34,14 +35,16 @@ mod pgparquet {
         };
 
         if records.is_empty() {
-            return unsafe { pg_return_null(fcinfo) };
+            return pg_sys::Datum::from(0);
         }
+
+        let (records, tupledesc) = tupledesc_for_tuples(records);
 
         let array_oid = records
             .composite_type_oid()
             .expect("array of records are expected");
 
-        let schema = parse_schema(array_oid, "root");
+        let schema = parse_schema(array_oid, tupledesc.clone(), "root");
 
         let file = std::fs::OpenOptions::new()
             .write(true)
@@ -56,12 +59,17 @@ mod pgparquet {
             pgrx::AnyArray::from_polymorphic_datum(records.into_datum().unwrap(), false, array_oid)
                 .unwrap()
         };
-        serialize_array(anyarray, &mut vec![], &mut row_group_writer);
+        serialize_array(
+            anyarray,
+            Some(tupledesc),
+            &mut vec![],
+            &mut row_group_writer,
+        );
 
         row_group_writer.close().unwrap();
         writer.close().unwrap();
 
-        unsafe { pg_return_null(fcinfo) }
+        pg_sys::Datum::from(0)
     }
 
     #[pg_extern(sql = "
@@ -78,14 +86,16 @@ mod pgparquet {
         };
 
         if records.is_empty() {
-            return unsafe { pg_return_null(fcinfo) };
+            return "".into_datum().unwrap();
         }
+
+        let (records, tupledesc) = tupledesc_for_tuples(records);
 
         let array_oid = records
             .composite_type_oid()
             .expect("array of records are expected");
 
-        let schema = parse_schema(array_oid, "root");
+        let schema = parse_schema(array_oid, tupledesc, "root");
 
         let mut buf = Vec::new();
         printer::print_schema(&mut buf, &schema);

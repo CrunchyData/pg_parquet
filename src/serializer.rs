@@ -11,12 +11,10 @@ use parquet::{
 };
 
 use pg_sys::{
-    InputFunctionCall, Oid, BOOLARRAYOID, BOOLOID, BPCHARARRAYOID, BPCHAROID, CHARARRAYOID,
-    CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID,
-    INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID,
-    INTERVALOID, JSONARRAYOID, JSONOID, NUMERICARRAYOID, NUMERICOID, TEXTARRAYOID, TEXTOID,
-    TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID,
-    TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID, VARCHARARRAYOID, VARCHAROID,
+    InputFunctionCall, Oid, BOOLARRAYOID, BPCHARARRAYOID, CHARARRAYOID, DATEARRAYOID,
+    FLOAT4ARRAYOID, FLOAT8ARRAYOID, INT2ARRAYOID, INT4ARRAYOID, INT8ARRAYOID, INTERVALARRAYOID,
+    JSONARRAYOID, NUMERICARRAYOID, TEXTARRAYOID, TIMEARRAYOID, TIMESTAMPARRAYOID,
+    TIMESTAMPTZARRAYOID, TIMETZARRAYOID, UUIDARRAYOID, VARCHARARRAYOID,
 };
 use pgrx::prelude::*;
 use pgrx::{direct_function_call, Json, PgTupleDesc, Uuid};
@@ -102,43 +100,6 @@ fn repetition_vector_from_col_desc(
     repetition_vector
 }
 
-fn serialize_record(
-    record: PgHeapTuple<'static, AllocatedByRust>,
-    row_group_writer: &mut SerializedRowGroupWriter<File>,
-) {
-    for (_, attribute) in record.attributes() {
-        if attribute.is_dropped() {
-            continue;
-        }
-
-        let attribute_name = attribute.name();
-        let attribute_oid = attribute.type_oid().value();
-
-        let is_attribute_composite = unsafe { pg_sys::type_is_rowtype(attribute_oid) };
-        let is_attribute_array = unsafe { pg_sys::type_is_array(attribute_oid) };
-
-        if is_attribute_composite {
-            let attribute_val = record
-                .get_by_name::<PgHeapTuple<'_, AllocatedByRust>>(attribute_name)
-                .unwrap()
-                .unwrap();
-            serialize_record(attribute_val, row_group_writer);
-        } else if is_attribute_array {
-            let attribute_val = record
-                .get_by_name::<pgrx::AnyArray>(attribute_name)
-                .unwrap()
-                .unwrap();
-            serialize_array(attribute_val, &mut vec![], row_group_writer);
-        } else {
-            let attribute_val = record
-                .get_by_name::<pgrx::AnyElement>(attribute_name)
-                .unwrap()
-                .unwrap();
-            serialize_primitive(attribute_val, row_group_writer);
-        }
-    }
-}
-
 fn array_default(array_typoid: Oid) -> pgrx::AnyArray {
     let arr_str = std::ffi::CString::new("{}").unwrap();
 
@@ -159,11 +120,17 @@ fn array_default(array_typoid: Oid) -> pgrx::AnyArray {
     }
 }
 
-fn flatten_arrays(arrays: Vec<pgrx::AnyElement>, array_typoid: Oid) -> (pgrx::AnyArray, Strides) {
+fn flatten_arrays(
+    arrays: Vec<pgrx::AnyElement>,
+    array_typoid: Oid,
+) -> (pgrx::AnyArray, Strides, Option<PgTupleDesc<'static>>) {
     assert!(unsafe { pg_sys::type_is_array(array_typoid) });
 
+    let array_element_typoid = unsafe { pg_sys::get_element_type(array_typoid) };
+    let tupledesc = tupledesc_for_typeoid(array_element_typoid);
+
     if arrays.is_empty() {
-        return (array_default(array_typoid), vec![]);
+        return (array_default(array_typoid), vec![], tupledesc);
     }
 
     let array_datums = arrays.into_iter().map(|x| x.datum()).collect::<Vec<_>>();
@@ -191,7 +158,7 @@ fn flatten_arrays(arrays: Vec<pgrx::AnyElement>, array_typoid: Oid) -> (pgrx::An
         pgrx::AnyArray::from_polymorphic_datum(flatten_array_datum, false, array_typoid).unwrap()
     };
 
-    (flatten_array, lengths)
+    (flatten_array, lengths, tupledesc)
 }
 
 fn elements_to_anyarray_helper<T: IntoDatum + FromDatum>(
@@ -212,10 +179,13 @@ fn elements_to_anyarray_helper<T: IntoDatum + FromDatum>(
 
 fn elements_to_anyarray(
     elements: Vec<pgrx::AnyElement>,
-    array_typoid: Oid,
-) -> (pgrx::AnyArray, Strides) {
+    element_typoid: Oid,
+) -> (pgrx::AnyArray, Strides, Option<PgTupleDesc<'static>>) {
     let lengths = vec![1; elements.len()];
 
+    let tupledesc = tupledesc_for_typeoid(element_typoid);
+
+    let array_typoid = unsafe { pg_sys::get_array_type(element_typoid) };
     let array = match array_typoid {
         FLOAT4ARRAYOID => elements_to_anyarray_helper::<f32>(elements, array_typoid),
         FLOAT8ARRAYOID => elements_to_anyarray_helper::<f64>(elements, array_typoid),
@@ -241,11 +211,20 @@ fn elements_to_anyarray(
         UUIDARRAYOID => elements_to_anyarray_helper::<Uuid>(elements, array_typoid),
         JSONARRAYOID => elements_to_anyarray_helper::<Json>(elements, array_typoid),
         _ => {
-            panic!("unsupported array type {}", array_typoid);
+            let elem_typoid = unsafe { pg_sys::get_element_type(array_typoid) };
+            let is_composite_type = unsafe { pg_sys::type_is_rowtype(elem_typoid) };
+            if is_composite_type {
+                elements_to_anyarray_helper::<PgHeapTuple<'_, AllocatedByRust>>(
+                    elements,
+                    array_typoid,
+                )
+            } else {
+                panic!("unsupported array type {}", array_typoid)
+            }
         }
     };
 
-    (array, lengths)
+    (array, lengths, tupledesc)
 }
 
 fn collect_attribute_array_from_tuples(
@@ -255,6 +234,7 @@ fn collect_attribute_array_from_tuples(
     let mut attribute_values = vec![];
 
     for record in tuples {
+        // todo: verify no duplicates
         let attribute_val = record.get_by_name(attribute_name).unwrap().unwrap();
         attribute_values.push(attribute_val);
     }
@@ -262,14 +242,48 @@ fn collect_attribute_array_from_tuples(
     attribute_values
 }
 
-fn heap_tuple_array_to_columnar_arrays(
-    tuples: Vec<PgHeapTuple<'_, AllocatedByRust>>,
-    tuple_typoid: Oid,
-) -> Vec<(pgrx::AnyArray, Strides)> {
-    let mut columnar_arrays_with_strides = vec![];
+pub(crate) fn tupledesc_for_typeoid(typoid: Oid) -> Option<PgTupleDesc<'static>> {
+    let is_composite_type = unsafe { pg_sys::type_is_rowtype(typoid) };
+    if !is_composite_type {
+        return None;
+    }
 
-    let tuple_desc = unsafe { pg_sys::lookup_rowtype_tupdesc(tuple_typoid, 0) };
-    let tuple_desc = unsafe { PgTupleDesc::from_pg(tuple_desc) };
+    PgTupleDesc::for_composite_type_by_oid(typoid)
+}
+
+pub(crate) fn tupledesc_for_tuples(
+    tuples: Vec<PgHeapTuple<'_, AllocatedByRust>>,
+) -> (Vec<PgHeapTuple<'_, AllocatedByRust>>, PgTupleDesc) {
+    unsafe {
+        let tuples = tuples
+            .into_iter()
+            .map(|x| x.into_datum().unwrap())
+            .collect::<Vec<_>>();
+
+        let tuple_datum = tuples.first().unwrap();
+        let htup_header =
+            pg_sys::pg_detoast_datum(tuple_datum.cast_mut_ptr()) as pg_sys::HeapTupleHeader;
+        let tup_type = htup_header.as_ref().unwrap().t_choice.t_datum.datum_typeid;
+        let tup_typmod = htup_header.as_ref().unwrap().t_choice.t_datum.datum_typmod;
+        let tup_desc = pg_sys::lookup_rowtype_tupdesc(tup_type, tup_typmod);
+
+        let tuples = tuples
+            .into_iter()
+            .map(|x| PgHeapTuple::from_datum(x, false).unwrap())
+            .collect::<Vec<_>>();
+        (tuples, PgTupleDesc::from_pg(tup_desc))
+    }
+}
+
+fn heap_tuple_array_to_columnar_arrays(
+    tuples: Vec<PgHeapTuple<'static, AllocatedByRust>>,
+    tuple_desc: PgTupleDesc,
+) -> Vec<(pgrx::AnyArray, Strides, Option<PgTupleDesc<'static>>)> {
+    let mut columnar_arrays_with_strides_and_tupdescs = vec![];
+
+    if tuples.is_empty() {
+        return columnar_arrays_with_strides_and_tupdescs;
+    }
 
     for attribute_idx in 0..tuple_desc.len() {
         let attribute = tuple_desc.get(attribute_idx).unwrap();
@@ -284,17 +298,16 @@ fn heap_tuple_array_to_columnar_arrays(
         let attribute_typoid = attribute.type_oid().value();
         let attribute_is_array = unsafe { pg_sys::type_is_array(attribute_typoid) };
 
-        let attribute_array_with_strides = if attribute_is_array {
+        let attribute_array_with_strides_and_tupdesc = if attribute_is_array {
             flatten_arrays(attribute_values, attribute_typoid)
         } else {
-            let array_typeoid = unsafe { pg_sys::get_array_type(attribute_typoid) };
-            elements_to_anyarray(attribute_values, array_typeoid)
+            elements_to_anyarray(attribute_values, attribute_typoid)
         };
 
-        columnar_arrays_with_strides.push(attribute_array_with_strides);
+        columnar_arrays_with_strides_and_tupdescs.push(attribute_array_with_strides_and_tupdesc);
     }
 
-    columnar_arrays_with_strides
+    columnar_arrays_with_strides_and_tupdescs
 }
 
 fn serialize_array_internal<D: parquet::data_type::DataType>(
@@ -317,12 +330,14 @@ fn serialize_array_internal<D: parquet::data_type::DataType>(
 
 pub(crate) fn serialize_array(
     array: pgrx::AnyArray,
+    tupledesc: Option<PgTupleDesc>,
     level_strides: &mut Vec<Strides>,
     row_group_writer: &mut SerializedRowGroupWriter<File>,
 ) {
-    let array_element_typoid = unsafe { pg_sys::get_element_type(array.oid()) };
-    let is_array_of_composite = unsafe { pg_sys::type_is_rowtype(array_element_typoid) };
+    let is_array_of_composite = tupledesc.is_some();
     if is_array_of_composite {
+        let tupledesc = tupledesc.unwrap();
+
         let tuples = unsafe {
             Vec::<PgHeapTuple<'_, AllocatedByRust>>::from_polymorphic_datum(
                 array.datum(),
@@ -335,13 +350,18 @@ pub(crate) fn serialize_array(
         // each attribute belongs to a separate column, so we need to
         // serialize them separately as column chunks
         let columnar_attribute_arrays_with_strides =
-            heap_tuple_array_to_columnar_arrays(tuples, array_element_typoid);
+            heap_tuple_array_to_columnar_arrays(tuples, tupledesc);
 
-        for (columnar_attribute_array, columnar_attribute_array_strides) in
+        for (columnar_attribute_array, strides, tupledesc) in
             columnar_attribute_arrays_with_strides.into_iter()
         {
-            level_strides.push(columnar_attribute_array_strides);
-            serialize_array(columnar_attribute_array, level_strides, row_group_writer);
+            level_strides.push(strides);
+            serialize_array(
+                columnar_attribute_array,
+                tupledesc,
+                level_strides,
+                row_group_writer,
+            );
             level_strides.pop();
         }
 
@@ -497,134 +517,4 @@ pub(crate) fn serialize_array(
             panic!("unsupported array type {}", array.oid());
         }
     }
-}
-
-fn serialize_primitive_internal<D: parquet::data_type::DataType>(
-    row_group_writer: &mut SerializedRowGroupWriter<File>,
-    value: Vec<D::T>,
-) {
-    let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-    column_writer
-        .typed::<D>()
-        .write_batch(&value, None, None)
-        .unwrap();
-    column_writer.close().unwrap();
-}
-
-fn serialize_primitive(
-    elem: pgrx::AnyElement,
-    row_group_writer: &mut SerializedRowGroupWriter<File>,
-) {
-    match elem.oid() {
-        FLOAT4OID => {
-            let value =
-                unsafe { f32::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<FloatType>(row_group_writer, vec![value]);
-        }
-        FLOAT8OID => {
-            let value =
-                unsafe { f64::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<DoubleType>(row_group_writer, vec![value]);
-        }
-        BOOLOID => {
-            let value =
-                unsafe { bool::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<Int32Type>(row_group_writer, vec![value as i32]);
-        }
-        INT2OID => {
-            let value =
-                unsafe { i16::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<Int32Type>(row_group_writer, vec![value as i32]);
-        }
-        INT4OID => {
-            let value =
-                unsafe { i32::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<Int32Type>(row_group_writer, vec![value]);
-        }
-        INT8OID => {
-            let value =
-                unsafe { i64::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<Int64Type>(row_group_writer, vec![value]);
-        }
-        NUMERICOID => {
-            unimplemented!("numeric type is not supported yet");
-        }
-        DATEOID => {
-            let value =
-                unsafe { Date::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<Int32Type>(row_group_writer, vec![date_to_i32(value)]);
-        }
-        TIMESTAMPOID => {
-            let value =
-                unsafe { Timestamp::from_polymorphic_datum(elem.datum(), false, elem.oid()) }
-                    .unwrap();
-            serialize_primitive_internal::<Int64Type>(
-                row_group_writer,
-                vec![timestamp_to_i64(value)],
-            );
-        }
-        TIMESTAMPTZOID => {
-            let value = unsafe {
-                TimestampWithTimeZone::from_polymorphic_datum(elem.datum(), false, elem.oid())
-            }
-            .unwrap();
-            serialize_primitive_internal::<Int64Type>(
-                row_group_writer,
-                vec![timestamptz_to_i64(value)],
-            );
-        }
-        TIMEOID => {
-            let value =
-                unsafe { Time::from_polymorphic_datum(elem.datum(), false, elem.oid()) }.unwrap();
-            serialize_primitive_internal::<Int64Type>(row_group_writer, vec![time_to_i64(value)]);
-        }
-        TIMETZOID => {
-            let value = unsafe {
-                TimeWithTimeZone::from_polymorphic_datum(elem.datum(), false, elem.oid())
-            }
-            .unwrap();
-            serialize_primitive_internal::<Int64Type>(row_group_writer, vec![timetz_to_i64(value)]);
-        }
-        INTERVALOID => {
-            let value =
-                unsafe { Interval::from_polymorphic_datum(elem.datum(), false, elem.oid()) }
-                    .unwrap();
-            serialize_primitive_internal::<FixedLenByteArrayType>(
-                row_group_writer,
-                vec![interval_to_fixed_byte_array(value)],
-            );
-        }
-        CHAROID => {
-            let value =
-                unsafe { i8::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            let value: ByteArray = vec![value as u8].into();
-
-            serialize_primitive_internal::<ByteArrayType>(row_group_writer, vec![value]);
-        }
-        TEXTOID | VARCHAROID | BPCHAROID => {
-            let value =
-                unsafe { String::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            let value: ByteArray = value.as_bytes().into();
-            serialize_primitive_internal::<ByteArrayType>(row_group_writer, vec![value]);
-        }
-        UUIDOID => {
-            let value =
-                unsafe { Uuid::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<FixedLenByteArrayType>(
-                row_group_writer,
-                vec![uuid_to_fixed_byte_array(value)],
-            );
-        }
-        JSONOID => {
-            let value =
-                unsafe { Json::from_polymorphic_datum(elem.datum(), false, elem.oid()).unwrap() };
-            serialize_primitive_internal::<ByteArrayType>(
-                row_group_writer,
-                vec![json_to_byte_array(value)],
-            );
-        }
-        _ => {
-            panic!("unsupported primitive type {}", elem.oid());
-        }
-    };
 }
