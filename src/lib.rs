@@ -1,9 +1,12 @@
-use parquet::{file::writer::SerializedFileWriter, schema::printer};
-
+use parquet::{
+    arrow::arrow_writer::{compute_leaves, get_column_writers, ArrowLeafColumn},
+    file::{properties::WriterProperties, writer::SerializedFileWriter},
+    schema::printer,
+};
 use pgrx::{pg_getarg, prelude::*};
 
 use schema_parser::parse_schema;
-use serializer::serialize_array;
+use schema_parser::to_parquet_schema;
 use serializer::tupledesc_for_tuples;
 
 mod conversion;
@@ -16,6 +19,9 @@ pgrx::pg_module_magic!();
 
 #[pg_schema]
 mod pgparquet {
+    use arrow::buffer::{OffsetBuffer, ScalarBuffer};
+    use serializer::visit_list_array;
+
     use super::*;
 
     #[pg_extern(sql = "
@@ -38,35 +44,74 @@ mod pgparquet {
             return pg_sys::Datum::from(0);
         }
 
+        let total_records = records.len();
+
         let (records, tupledesc) = tupledesc_for_tuples(records);
 
         let array_oid = records
             .composite_type_oid()
             .expect("array of records are expected");
 
-        let schema = parse_schema(array_oid, tupledesc.clone(), "root");
+        let arrow_schema = parse_schema(array_oid, tupledesc.clone(), "root");
+        let parquet_schema = to_parquet_schema(&arrow_schema);
 
-        let file = std::fs::OpenOptions::new()
+        let writer_props = WriterProperties::default().into();
+        let col_writers =
+            get_column_writers(&parquet_schema, &writer_props, &arrow_schema.clone().into())
+                .unwrap();
+
+        let mut workers: Vec<_> = col_writers
+            .into_iter()
+            .map(|mut col_writer| {
+                let (send, recv) = std::sync::mpsc::channel::<ArrowLeafColumn>();
+                let handle = std::thread::spawn(move || {
+                    for col in recv {
+                        col_writer.write(&col)?;
+                    }
+                    col_writer.close()
+                });
+                (handle, send)
+            })
+            .collect();
+
+        let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .open(filename)
             .unwrap();
+        let root_schema = parquet_schema.root_schema_ptr();
+        let mut writer =
+            SerializedFileWriter::new(&mut file, root_schema, writer_props.clone()).unwrap();
 
-        let mut writer = SerializedFileWriter::new(file, schema, Default::default()).unwrap();
-        let mut row_group_writer = writer.next_row_group().unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
 
-        let anyarray = unsafe {
+        let tuple_array = unsafe {
             pgrx::AnyArray::from_polymorphic_datum(records.into_datum().unwrap(), false, array_oid)
-                .unwrap()
-        };
-        serialize_array(
-            anyarray,
-            Some(tupledesc),
-            &mut vec![],
-            &mut row_group_writer,
-        );
+        }
+        .unwrap();
 
-        row_group_writer.close().unwrap();
+        let (_, data) = visit_list_array(
+            "root",
+            tuple_array,
+            Some(tupledesc),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, total_records as i32])),
+        );
+        let to_write = vec![data];
+
+        let mut worker_iter = workers.iter_mut();
+        for (arr, field) in to_write.iter().zip(&arrow_schema.fields) {
+            for leaves in compute_leaves(field, arr).unwrap() {
+                worker_iter.next().unwrap().1.send(leaves).unwrap();
+            }
+        }
+
+        for (handle, send) in workers {
+            drop(send); // Drop send side to signal termination
+            let chunk = handle.join().unwrap().unwrap();
+            chunk.append_to_row_group(&mut row_group).unwrap();
+        }
+        row_group.close().unwrap();
+
         writer.close().unwrap();
 
         pg_sys::Datum::from(0)
@@ -89,16 +134,17 @@ mod pgparquet {
             return "".into_datum().unwrap();
         }
 
-        let (records, tupledesc) = tupledesc_for_tuples(records);
-
         let array_oid = records
             .composite_type_oid()
             .expect("array of records are expected");
 
-        let schema = parse_schema(array_oid, tupledesc, "root");
+        let (_, tupledesc) = tupledesc_for_tuples(records);
+
+        let arrow_schema = parse_schema(array_oid, tupledesc, "root");
+        let parquet_schema = to_parquet_schema(&arrow_schema);
 
         let mut buf = Vec::new();
-        printer::print_schema(&mut buf, &schema);
+        printer::print_schema(&mut buf, &parquet_schema.root_schema_ptr());
         String::from_utf8(buf).unwrap().into_datum().unwrap()
     }
 }

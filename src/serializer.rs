@@ -1,104 +1,27 @@
-use std::collections::HashSet;
-use std::fs::File;
+use std::sync::Arc;
 
-use parquet::{
-    data_type::{
-        ByteArray, ByteArrayType, DoubleType, FixedLenByteArrayType, FloatType, Int32Type,
-        Int64Type,
+use arrow::{
+    array::{
+        make_array, Array, ArrayRef, BooleanArray, Date32Array, FixedSizeBinaryArray, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, ListArray, StringArray, StructArray,
+        Time64MicrosecondArray, TimestampMicrosecondArray,
     },
-    file::writer::SerializedRowGroupWriter,
-    schema::types::ColumnDescriptor,
+    buffer::{OffsetBuffer, ScalarBuffer},
+    datatypes::{Field, FieldRef, Fields},
 };
 
 use pg_sys::{
     InputFunctionCall, Oid, BOOLARRAYOID, BPCHARARRAYOID, CHARARRAYOID, DATEARRAYOID,
-    FLOAT4ARRAYOID, FLOAT8ARRAYOID, INT2ARRAYOID, INT4ARRAYOID, INT8ARRAYOID, INTERVALARRAYOID,
-    JSONARRAYOID, NUMERICARRAYOID, TEXTARRAYOID, TIMEARRAYOID, TIMESTAMPARRAYOID,
-    TIMESTAMPTZARRAYOID, TIMETZARRAYOID, UUIDARRAYOID, VARCHARARRAYOID,
+    FLOAT4ARRAYOID, FLOAT8ARRAYOID, INT2ARRAYOID, INT4ARRAYOID, INT8ARRAYOID, TEXTARRAYOID,
+    TIMEARRAYOID, TIMESTAMPARRAYOID, TIMESTAMPTZARRAYOID, TIMETZARRAYOID, VARCHARARRAYOID,
 };
 use pgrx::prelude::*;
-use pgrx::{direct_function_call, Json, PgTupleDesc, Uuid};
+use pgrx::{direct_function_call, PgTupleDesc};
 
-use crate::conversion::{
-    date_to_i32, interval_to_fixed_byte_array, json_to_byte_array, time_to_i64, timestamp_to_i64,
-    timestamptz_to_i64, timetz_to_i64, uuid_to_fixed_byte_array,
+use crate::{
+    conversion::{date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64},
+    schema_parser::collect_attributes,
 };
-
-type Strides = Vec<usize>;
-
-fn definition_vector_from_col_desc(col_desc: &ColumnDescriptor, length: usize) -> Vec<i16> {
-    vec![col_desc.max_def_level(); length]
-}
-
-fn repetition_vector_from_col_desc(
-    col_desc: &ColumnDescriptor,
-    level_strides: &Vec<Strides>,
-    length: usize,
-) -> Vec<i16> {
-    let mut repetition_vector = vec![col_desc.max_rep_level(); length];
-
-    if level_strides.is_empty() {
-        repetition_vector[0] = 0;
-        return repetition_vector;
-    }
-
-    let mut level_strides = level_strides.clone();
-    let mut normalized_level_strides = vec![];
-
-    // e.g. first level contains [2, 1]
-    //      second level contains [1, 1, 1]
-    //      last level contains [2, 1, 5]
-    // last level is equal to total element length, all previous levels contains partition indexes
-    // I want to convert all previous levels to summation of partition indexes like below
-    // previous level should be converted to [2, 1, 5]
-    // the first level should be converted to [3, 5]
-
-    let mut last_level_sum_vector = level_strides.pop().unwrap();
-    normalized_level_strides.push(last_level_sum_vector.clone());
-
-    while !level_strides.is_empty() {
-        let previous_level_partition_indexes = level_strides.pop().unwrap();
-
-        let mut previous_level_sum_vector = vec![];
-
-        let mut idx = 0;
-        for partition_index in previous_level_partition_indexes {
-            previous_level_sum_vector.push(
-                last_level_sum_vector
-                    .iter()
-                    .skip(idx)
-                    .take(partition_index)
-                    .sum(),
-            );
-            idx += partition_index;
-        }
-
-        last_level_sum_vector = previous_level_sum_vector.clone();
-        normalized_level_strides.push(previous_level_sum_vector);
-    }
-
-    let mut idx_set = HashSet::new();
-    let mut level_identifier = 1;
-    while !normalized_level_strides.is_empty() {
-        let mut strides = normalized_level_strides.pop().unwrap();
-        strides.pop().unwrap();
-
-        let mut idx = 0;
-        for stride in strides {
-            idx += stride;
-            if !idx_set.contains(&idx) {
-                repetition_vector[idx] = level_identifier;
-                idx_set.insert(idx);
-            }
-        }
-
-        level_identifier += 1;
-    }
-
-    repetition_vector[0] = 0;
-
-    repetition_vector
-}
 
 fn array_default(array_typoid: Oid) -> pgrx::AnyArray {
     let arr_str = std::ffi::CString::new("{}").unwrap();
@@ -123,28 +46,35 @@ fn array_default(array_typoid: Oid) -> pgrx::AnyArray {
 fn flatten_arrays(
     arrays: Vec<pgrx::AnyElement>,
     array_typoid: Oid,
-) -> (pgrx::AnyArray, Strides, Option<PgTupleDesc<'static>>) {
+) -> (
+    pgrx::AnyArray,
+    Option<PgTupleDesc<'static>>,
+    OffsetBuffer<i32>,
+) {
     assert!(unsafe { pg_sys::type_is_array(array_typoid) });
 
     let array_element_typoid = unsafe { pg_sys::get_element_type(array_typoid) };
     let tupledesc = tupledesc_for_typeoid(array_element_typoid);
 
     if arrays.is_empty() {
-        return (array_default(array_typoid), vec![], tupledesc);
+        return (
+            array_default(array_typoid),
+            tupledesc,
+            OffsetBuffer::new(ScalarBuffer::from(vec![0; arrays.len() + 1])),
+        );
     }
 
     let array_datums = arrays.into_iter().map(|x| x.datum()).collect::<Vec<_>>();
 
-    let mut lengths = Vec::<usize>::new();
-    for array_datum in &array_datums {
-        let a_len: i32 = unsafe {
-            direct_function_call(
-                pg_sys::array_length,
-                &[array_datum.into_datum(), 1.into_datum()],
-            )
-            .unwrap()
+    let mut offsets = vec![0];
+    let mut current_offset = 0;
+    for datum in &array_datums {
+        let len: i32 = unsafe {
+            direct_function_call(pg_sys::array_length, &[datum.into_datum(), 1.into_datum()])
+                .unwrap()
         };
-        lengths.push(a_len as _);
+        current_offset += len;
+        offsets.push(current_offset);
     }
 
     let flatten_array_datum = array_datums
@@ -158,7 +88,11 @@ fn flatten_arrays(
         pgrx::AnyArray::from_polymorphic_datum(flatten_array_datum, false, array_typoid).unwrap()
     };
 
-    (flatten_array, lengths, tupledesc)
+    (
+        flatten_array,
+        tupledesc,
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+    )
 }
 
 fn elements_to_anyarray_helper<T: IntoDatum + FromDatum>(
@@ -180,9 +114,7 @@ fn elements_to_anyarray_helper<T: IntoDatum + FromDatum>(
 fn elements_to_anyarray(
     elements: Vec<pgrx::AnyElement>,
     element_typoid: Oid,
-) -> (pgrx::AnyArray, Strides, Option<PgTupleDesc<'static>>) {
-    let lengths = vec![1; elements.len()];
-
+) -> (pgrx::AnyArray, Option<PgTupleDesc<'static>>) {
     let tupledesc = tupledesc_for_typeoid(element_typoid);
 
     let array_typoid = unsafe { pg_sys::get_array_type(element_typoid) };
@@ -193,9 +125,6 @@ fn elements_to_anyarray(
         INT2ARRAYOID => elements_to_anyarray_helper::<i16>(elements, array_typoid),
         INT4ARRAYOID => elements_to_anyarray_helper::<i32>(elements, array_typoid),
         INT8ARRAYOID => elements_to_anyarray_helper::<i64>(elements, array_typoid),
-        NUMERICARRAYOID => {
-            unimplemented!("numeric type is not supported yet");
-        }
         DATEARRAYOID => elements_to_anyarray_helper::<Date>(elements, array_typoid),
         TIMESTAMPARRAYOID => elements_to_anyarray_helper::<Timestamp>(elements, array_typoid),
         TIMESTAMPTZARRAYOID => {
@@ -203,13 +132,10 @@ fn elements_to_anyarray(
         }
         TIMEARRAYOID => elements_to_anyarray_helper::<Time>(elements, array_typoid),
         TIMETZARRAYOID => elements_to_anyarray_helper::<TimeWithTimeZone>(elements, array_typoid),
-        INTERVALARRAYOID => elements_to_anyarray_helper::<Interval>(elements, array_typoid),
         CHARARRAYOID => elements_to_anyarray_helper::<i8>(elements, array_typoid),
         TEXTARRAYOID | VARCHARARRAYOID | BPCHARARRAYOID => {
             elements_to_anyarray_helper::<String>(elements, array_typoid)
         }
-        UUIDARRAYOID => elements_to_anyarray_helper::<Uuid>(elements, array_typoid),
-        JSONARRAYOID => elements_to_anyarray_helper::<Json>(elements, array_typoid),
         _ => {
             let elem_typoid = unsafe { pg_sys::get_element_type(array_typoid) };
             let is_composite_type = unsafe { pg_sys::type_is_rowtype(elem_typoid) };
@@ -224,7 +150,7 @@ fn elements_to_anyarray(
         }
     };
 
-    (array, lengths, tupledesc)
+    (array, tupledesc)
 }
 
 fn collect_attribute_array_from_tuples(
@@ -275,246 +201,343 @@ pub(crate) fn tupledesc_for_tuples(
     }
 }
 
-fn heap_tuple_array_to_columnar_arrays(
-    tuples: Vec<PgHeapTuple<'static, AllocatedByRust>>,
-    tuple_desc: PgTupleDesc,
-) -> Vec<(pgrx::AnyArray, Strides, Option<PgTupleDesc<'static>>)> {
-    let mut columnar_arrays_with_strides_and_tupdescs = vec![];
-
-    if tuples.is_empty() {
-        return columnar_arrays_with_strides_and_tupdescs;
-    }
-
-    for attribute_idx in 0..tuple_desc.len() {
-        let attribute = tuple_desc.get(attribute_idx).unwrap();
-
-        if attribute.is_dropped() {
-            continue;
-        }
-
-        let attribute_name = attribute.name();
-        let attribute_values = collect_attribute_array_from_tuples(&tuples, attribute_name);
-
-        let attribute_typoid = attribute.type_oid().value();
-        let attribute_is_array = unsafe { pg_sys::type_is_array(attribute_typoid) };
-
-        let attribute_array_with_strides_and_tupdesc = if attribute_is_array {
-            flatten_arrays(attribute_values, attribute_typoid)
-        } else {
-            elements_to_anyarray(attribute_values, attribute_typoid)
-        };
-
-        columnar_arrays_with_strides_and_tupdescs.push(attribute_array_with_strides_and_tupdesc);
-    }
-
-    columnar_arrays_with_strides_and_tupdescs
-}
-
-fn serialize_array_internal<D: parquet::data_type::DataType>(
-    row_group_writer: &mut SerializedRowGroupWriter<File>,
-    value: Vec<D::T>,
-    level_strides: &mut Vec<Strides>,
-) {
-    let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
-
-    let col_desc = column_writer.typed::<D>().get_descriptor();
-    let def_levels = definition_vector_from_col_desc(col_desc, value.len());
-    let rep_levels = repetition_vector_from_col_desc(col_desc, level_strides, value.len());
-
-    column_writer
-        .typed::<D>()
-        .write_batch(&value, Some(&def_levels), Some(&rep_levels))
-        .unwrap();
-    column_writer.close().unwrap();
-}
-
-pub(crate) fn serialize_array(
-    array: pgrx::AnyArray,
-    tupledesc: Option<PgTupleDesc>,
-    level_strides: &mut Vec<Strides>,
-    row_group_writer: &mut SerializedRowGroupWriter<File>,
-) {
-    let is_array_of_composite = tupledesc.is_some();
-    if is_array_of_composite {
-        let tupledesc = tupledesc.unwrap();
-
-        let tuples = unsafe {
-            Vec::<PgHeapTuple<'_, AllocatedByRust>>::from_polymorphic_datum(
-                array.datum(),
-                false,
-                array.oid(),
-            )
-            .unwrap()
-        };
-
-        // each attribute belongs to a separate column, so we need to
-        // serialize them separately as column chunks
-        let columnar_attribute_arrays_with_strides =
-            heap_tuple_array_to_columnar_arrays(tuples, tupledesc);
-
-        for (columnar_attribute_array, strides, tupledesc) in
-            columnar_attribute_arrays_with_strides.into_iter()
-        {
-            level_strides.push(strides);
-            serialize_array(
-                columnar_attribute_array,
-                tupledesc,
-                level_strides,
-                row_group_writer,
-            );
-            level_strides.pop();
-        }
-
-        return;
-    }
-
-    match array.oid() {
+fn visit_primitive_array(name: &str, array: pgrx::AnyArray) -> (Arc<Field>, ArrayRef) {
+    let array_oid = array.oid();
+    match array_oid {
         FLOAT4ARRAYOID => {
             let value = unsafe {
-                Vec::<f32>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<f32>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            serialize_array_internal::<FloatType>(row_group_writer, value, level_strides);
+            let array = Float32Array::from(value);
+            (
+                Arc::new(Field::new(name, arrow::datatypes::DataType::Float32, false)),
+                Arc::new(array),
+            )
         }
         FLOAT8ARRAYOID => {
             let value = unsafe {
-                Vec::<f64>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<f64>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            serialize_array_internal::<DoubleType>(row_group_writer, value, level_strides);
+            let array = Float64Array::from(value);
+            (
+                Arc::new(Field::new(name, arrow::datatypes::DataType::Float64, false)),
+                Arc::new(array),
+            )
         }
         BOOLARRAYOID => {
             let value = unsafe {
-                Vec::<bool>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<bool>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            let value: Vec<i32> = value.into_iter().map(|x| x as i32).collect();
-            serialize_array_internal::<Int32Type>(row_group_writer, value, level_strides);
+            let array = BooleanArray::from(value);
+            (
+                Arc::new(Field::new(name, arrow::datatypes::DataType::Boolean, false)),
+                Arc::new(array),
+            )
         }
         INT2ARRAYOID => {
             let value = unsafe {
-                Vec::<i16>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<i16>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            let value = value.into_iter().map(|x| x as i32).collect();
-            serialize_array_internal::<Int32Type>(row_group_writer, value, level_strides);
+            let array = Int16Array::from(value);
+            (
+                Arc::new(Field::new(name, arrow::datatypes::DataType::Int16, false)),
+                Arc::new(array),
+            )
         }
         INT4ARRAYOID => {
             let value = unsafe {
-                Vec::<i32>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<i32>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            serialize_array_internal::<Int32Type>(row_group_writer, value, level_strides);
+            let array = Int32Array::from(value);
+            (
+                Arc::new(Field::new(name, arrow::datatypes::DataType::Int32, false)),
+                Arc::new(array),
+            )
         }
         INT8ARRAYOID => {
             let value = unsafe {
-                Vec::<i64>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<i64>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            serialize_array_internal::<Int64Type>(row_group_writer, value, level_strides);
-        }
-        NUMERICARRAYOID => {
-            unimplemented!("numeric type is not supported yet");
+            let array = Int64Array::from(value);
+            (
+                Arc::new(Field::new(name, arrow::datatypes::DataType::Int64, false)),
+                Arc::new(array),
+            )
         }
         DATEARRAYOID => {
             let value = unsafe {
-                Vec::<Date>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<Date>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            serialize_array_internal::<Int32Type>(
-                row_group_writer,
-                value.into_iter().map(date_to_i32).collect(),
-                level_strides,
-            );
+            let value = value.into_iter().map(date_to_i32).collect::<Vec<_>>();
+            let array = Date32Array::from(value);
+            (
+                Arc::new(Field::new(name, arrow::datatypes::DataType::Date32, false)),
+                Arc::new(array),
+            )
         }
         TIMESTAMPARRAYOID => {
             let value = unsafe {
-                Vec::<Timestamp>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<Timestamp>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            serialize_array_internal::<Int64Type>(
-                row_group_writer,
-                value.into_iter().map(timestamp_to_i64).collect(),
-                level_strides,
-            );
+            let value = value.into_iter().map(timestamp_to_i64).collect::<Vec<_>>();
+
+            let array = TimestampMicrosecondArray::from(value);
+            (
+                Arc::new(Field::new(
+                    name,
+                    arrow::datatypes::DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Microsecond,
+                        None,
+                    ),
+                    false,
+                )),
+                Arc::new(array),
+            )
         }
         TIMESTAMPTZARRAYOID => {
             let value = unsafe {
                 Vec::<TimestampWithTimeZone>::from_polymorphic_datum(
                     array.datum(),
                     false,
-                    array.oid(),
+                    array_oid,
                 )
                 .unwrap()
             };
-            serialize_array_internal::<Int64Type>(
-                row_group_writer,
-                value.into_iter().map(timestamptz_to_i64).collect(),
-                level_strides,
-            );
+            let value = value
+                .into_iter()
+                .map(timestamptz_to_i64)
+                .collect::<Vec<_>>();
+
+            let array = TimestampMicrosecondArray::from(value).with_timezone_utc();
+            (
+                Arc::new(Field::new(
+                    name,
+                    arrow::datatypes::DataType::Timestamp(
+                        arrow::datatypes::TimeUnit::Microsecond,
+                        Some("+00:00".into()),
+                    ),
+                    false,
+                )),
+                Arc::new(array),
+            )
         }
         TIMEARRAYOID => {
             let value = unsafe {
-                Vec::<Time>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<Time>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            serialize_array_internal::<Int64Type>(
-                row_group_writer,
-                value.into_iter().map(time_to_i64).collect(),
-                level_strides,
-            );
+            let value = value.into_iter().map(time_to_i64).collect::<Vec<_>>();
+            let array = Time64MicrosecondArray::from(value);
+            (
+                Arc::new(Field::new(
+                    name,
+                    arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+                    false,
+                )),
+                Arc::new(array),
+            )
         }
         TIMETZARRAYOID => {
             let value = unsafe {
-                Vec::<TimeWithTimeZone>::from_polymorphic_datum(array.datum(), false, array.oid())
+                Vec::<TimeWithTimeZone>::from_polymorphic_datum(array.datum(), false, array_oid)
                     .unwrap()
             };
-            serialize_array_internal::<Int64Type>(
-                row_group_writer,
-                value.into_iter().map(timetz_to_i64).collect(),
-                level_strides,
-            );
-        }
-        INTERVALARRAYOID => {
-            let value = unsafe {
-                Vec::<Interval>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
-            };
-            serialize_array_internal::<FixedLenByteArrayType>(
-                row_group_writer,
-                value
-                    .into_iter()
-                    .map(interval_to_fixed_byte_array)
-                    .collect(),
-                level_strides,
-            );
+            let value = value.into_iter().map(timetz_to_i64).collect::<Vec<_>>();
+            let array = Time64MicrosecondArray::from(value);
+            (
+                Arc::new(Field::new(
+                    name,
+                    arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+                    false,
+                )),
+                Arc::new(array),
+            )
         }
         CHARARRAYOID => {
             let value = unsafe {
-                Vec::<i8>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<i8>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            let value: Vec<ByteArray> = value.into_iter().map(|x| vec![x as u8].into()).collect();
-            serialize_array_internal::<ByteArrayType>(row_group_writer, value, level_strides);
+            let value = value.into_iter().map(|x| vec![x as u8]).collect::<Vec<_>>();
+            let array = FixedSizeBinaryArray::try_from_iter(value.iter()).unwrap();
+            (
+                Arc::new(Field::new(
+                    name,
+                    arrow::datatypes::DataType::FixedSizeBinary(1),
+                    false,
+                )),
+                Arc::new(array),
+            )
         }
         TEXTARRAYOID | VARCHARARRAYOID | BPCHARARRAYOID => {
             let value = unsafe {
-                Vec::<String>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
+                Vec::<String>::from_polymorphic_datum(array.datum(), false, array_oid).unwrap()
             };
-            let value: Vec<ByteArray> = value.into_iter().map(|x| x.as_bytes().into()).collect();
-            serialize_array_internal::<ByteArrayType>(row_group_writer, value, level_strides);
-        }
-        UUIDARRAYOID => {
-            let value = unsafe {
-                Vec::<Uuid>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
-            };
-            serialize_array_internal::<FixedLenByteArrayType>(
-                row_group_writer,
-                value.into_iter().map(uuid_to_fixed_byte_array).collect(),
-                level_strides,
-            );
-        }
-        JSONARRAYOID => {
-            let value = unsafe {
-                Vec::<Json>::from_polymorphic_datum(array.datum(), false, array.oid()).unwrap()
-            };
-            serialize_array_internal::<ByteArrayType>(
-                row_group_writer,
-                value.into_iter().map(json_to_byte_array).collect(),
-                level_strides,
-            );
+            let array = StringArray::from(value);
+            (
+                Arc::new(Field::new(name, arrow::datatypes::DataType::Utf8, false)),
+                Arc::new(array),
+            )
         }
         _ => {
-            panic!("unsupported array type {}", array.oid());
+            panic!("unsupported array type {}", array_oid);
         }
     }
+}
+
+fn list_array_from_primitive_data(
+    name: &str,
+    primitive_array: ArrayRef,
+    offsets: OffsetBuffer<i32>,
+) -> (Arc<Field>, ArrayRef) {
+    let field = match primitive_array.data_type() {
+        arrow::datatypes::DataType::Boolean => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Boolean, false))
+        }
+        arrow::datatypes::DataType::Int16 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Int16, false))
+        }
+        arrow::datatypes::DataType::Int32 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Int32, false))
+        }
+        arrow::datatypes::DataType::Int64 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Int64, false))
+        }
+        arrow::datatypes::DataType::Float32 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Float32, false))
+        }
+        arrow::datatypes::DataType::Float64 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Float64, false))
+        }
+        arrow::datatypes::DataType::Timestamp(timeunit, timezone) => Arc::new(Field::new(
+            name,
+            arrow::datatypes::DataType::Timestamp(timeunit.clone(), timezone.clone()),
+            false,
+        )),
+        arrow::datatypes::DataType::Date32 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Date32, false))
+        }
+        arrow::datatypes::DataType::Time64(timeunit) => Arc::new(Field::new(
+            name,
+            arrow::datatypes::DataType::Time64(timeunit.clone()),
+            false,
+        )),
+        arrow::datatypes::DataType::Interval(interval_unit) => Arc::new(Field::new(
+            name,
+            arrow::datatypes::DataType::Interval(interval_unit.clone()),
+            false,
+        )),
+        arrow::datatypes::DataType::FixedSizeBinary(size) => Arc::new(Field::new(
+            name,
+            arrow::datatypes::DataType::FixedSizeBinary(size.clone()),
+            false,
+        )),
+        arrow::datatypes::DataType::Utf8 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Utf8, false))
+        }
+        _ => {
+            panic!("unsupported array type");
+        }
+    };
+
+    let list_array = ListArray::new(field.clone(), offsets, primitive_array, None);
+    let list_array = make_array(list_array.into());
+    let list_field = Arc::new(Field::new(
+        name,
+        arrow::datatypes::DataType::List(field),
+        false,
+    ));
+    (list_field, list_array)
+}
+
+fn list_array_from_struct_data(
+    struct_field: Arc<Field>,
+    struct_array: ArrayRef,
+    offsets: OffsetBuffer<i32>,
+) -> (Arc<Field>, ArrayRef) {
+    let list_array = ListArray::new(struct_field.clone(), offsets, struct_array, None);
+    let list_array = make_array(list_array.into());
+    let list_field = Arc::new(Field::new(
+        struct_field.name().clone(),
+        arrow::datatypes::DataType::List(struct_field),
+        false,
+    ));
+    (list_field, list_array)
+}
+
+pub(crate) fn visit_list_array(
+    name: &str,
+    array: pgrx::AnyArray,
+    tupledesc: Option<PgTupleDesc>,
+    offsets: OffsetBuffer<i32>,
+) -> (Arc<Field>, ArrayRef) {
+    let is_array_of_composite = tupledesc.is_some();
+    if is_array_of_composite {
+        let tupledesc = tupledesc.unwrap();
+        let (struct_field, struct_array) = visit_struct_array(name, array, &tupledesc);
+        list_array_from_struct_data(struct_field, struct_array, offsets)
+    } else {
+        let (_, primitive_array) = visit_primitive_array(name, array);
+        list_array_from_primitive_data(name, primitive_array, offsets)
+    }
+}
+
+pub(crate) fn visit_struct_array(
+    name: &str,
+    tuples: pgrx::AnyArray,
+    tupledesc: &PgTupleDesc,
+) -> (FieldRef, ArrayRef) {
+    let mut struct_fields_with_data: Vec<(Arc<Field>, ArrayRef)> = vec![];
+
+    let tuples = unsafe {
+        Vec::<PgHeapTuple<'_, AllocatedByRust>>::from_polymorphic_datum(
+            tuples.datum(),
+            false,
+            tuples.oid(),
+        )
+        .unwrap()
+    };
+
+    let attributes = collect_attributes(&tupledesc);
+
+    for attribute in attributes {
+        let attribute_name = attribute.name();
+        let attribute_typoid = attribute.type_oid().value();
+
+        let attribute_is_array = unsafe { pg_sys::type_is_array(attribute_typoid) };
+
+        let attribute_is_composite = unsafe { pg_sys::type_is_rowtype(attribute_typoid) };
+
+        let attribute_values = collect_attribute_array_from_tuples(&tuples, attribute_name);
+
+        let (field, array) = if attribute_is_array {
+            let (attribute_values, tupledesc, offsets) =
+                flatten_arrays(attribute_values, attribute_typoid);
+            visit_list_array(attribute_name, attribute_values, tupledesc, offsets)
+        } else if attribute_is_composite {
+            let (attribute_values, tupledesc) =
+                elements_to_anyarray(attribute_values, attribute_typoid);
+            visit_struct_array(attribute_name, attribute_values, &tupledesc.unwrap())
+        } else {
+            let (attribute_values, _) = elements_to_anyarray(attribute_values, attribute_typoid);
+            visit_primitive_array(attribute_name, attribute_values)
+        };
+
+        struct_fields_with_data.push((field, array));
+    }
+
+    // finalize StructArray
+    let mut struct_attribute_fields = vec![];
+    for (field, _) in struct_fields_with_data.iter() {
+        struct_attribute_fields.push(field.clone());
+    }
+
+    let struct_field = Arc::new(Field::new(
+        name,
+        arrow::datatypes::DataType::Struct(Fields::from(struct_attribute_fields)),
+        false,
+    ));
+
+    let struct_array = StructArray::from(struct_fields_with_data);
+    let struct_array = make_array(struct_array.into());
+
+    (struct_field, struct_array)
 }

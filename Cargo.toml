@@ -17,7 +17,9 @@ pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
 pg_test = []
 
 [dependencies]
+arrow = "52.1.0"
 parquet = { version = "52.0.0", features = [
+    "arrow",
     "snap",
     "brotli",
     "flate2",

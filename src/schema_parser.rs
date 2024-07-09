@@ -1,19 +1,21 @@
-use parquet::schema::types::TypePtr;
+use std::sync::Arc;
+
+use arrow::datatypes::{Field, Fields, Schema};
+use parquet::{arrow::arrow_to_parquet_schema, schema::types::SchemaDescriptor};
 use pg_sys::{
     Oid, BOOLARRAYOID, BOOLOID, BPCHARARRAYOID, BPCHAROID, CHARARRAYOID, CHAROID, DATEARRAYOID,
     DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID,
-    INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID, JSONARRAYOID,
-    JSONOID, NUMERICARRAYOID, NUMERICOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID,
+    INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID,
     TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID,
-    TIMETZOID, UUIDARRAYOID, UUIDOID, VARCHARARRAYOID, VARCHAROID,
+    TIMETZOID, VARCHARARRAYOID, VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
 use crate::serializer::tupledesc_for_typeoid;
 
-type Attributes<'a> = Vec<&'a pg_sys::FormData_pg_attribute>;
-
-fn collect_attributes<'a>(tupdesc: &'a PgTupleDesc) -> Attributes<'a> {
+pub(crate) fn collect_attributes<'a>(
+    tupdesc: &'a PgTupleDesc,
+) -> Vec<&'a pg_sys::FormData_pg_attribute> {
     let mut attributes = vec![];
 
     for i in 0..tupdesc.len() {
@@ -27,8 +29,24 @@ fn collect_attributes<'a>(tupdesc: &'a PgTupleDesc) -> Attributes<'a> {
     attributes
 }
 
-fn parse_record_schema<'a>(attributes: Attributes<'a>, elem_name: &'static str) -> TypePtr {
-    let mut child_fields: Vec<TypePtr> = vec![];
+pub(crate) fn parse_schema(
+    arraytypoid: Oid,
+    tupledesc: PgTupleDesc,
+    array_name: &'static str,
+) -> Schema {
+    let list_field = parse_array_schema(arraytypoid, Some(tupledesc), array_name);
+    Schema::new(vec![list_field])
+}
+
+pub(crate) fn to_parquet_schema(arrow_schema: &Schema) -> SchemaDescriptor {
+    arrow_to_parquet_schema(arrow_schema).unwrap()
+}
+
+fn parse_record_schema<'a>(
+    attributes: Vec<&'a pg_sys::FormData_pg_attribute>,
+    elem_name: &'static str,
+) -> Arc<Field> {
+    let mut child_fields: Vec<Arc<Field>> = vec![];
 
     for attribute in attributes {
         if attribute.is_dropped() {
@@ -69,310 +87,140 @@ fn parse_record_schema<'a>(attributes: Attributes<'a>, elem_name: &'static str) 
         child_fields.push(child_field);
     }
 
-    parquet::schema::types::Type::group_type_builder(elem_name)
-        .with_fields(child_fields)
-        .with_repetition(parquet::basic::Repetition::REQUIRED)
-        .build()
-        .unwrap()
-        .into()
+    Field::new(
+        elem_name,
+        arrow::datatypes::DataType::Struct(Fields::from(child_fields)),
+        false,
+    )
+    .into()
 }
 
-fn parse_array_schema_internal(
-    array_name: &'static str,
-    parquet_type: parquet::basic::Type,
-    logical_type: Option<parquet::basic::LogicalType>,
-) -> TypePtr {
-    let type_builder =
-        parquet::schema::types::Type::primitive_type_builder(array_name, parquet_type)
-            .with_repetition(parquet::basic::Repetition::REQUIRED)
-            .with_logical_type(logical_type)
-            .build()
-            .unwrap()
-            .into();
+fn list_field_from_primitive_field(array_name: &str, arraytypoid: Oid) -> Arc<Field> {
+    let field = match arraytypoid {
+        FLOAT4ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Float32, false),
+        FLOAT8ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Float64, false),
+        BOOLARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Int8, false),
+        INT2ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Int16, false),
+        INT4ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Int32, false),
+        INT8ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Int64, false),
+        DATEARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Date32, false),
+        TIMESTAMPARRAYOID => Field::new(
+            array_name,
+            arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+            false,
+        ),
+        TIMESTAMPTZARRAYOID => Field::new(
+            array_name,
+            arrow::datatypes::DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                Some("+00:00".into()),
+            ),
+            false,
+        ),
+        TIMEARRAYOID => Field::new(
+            array_name,
+            arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            false,
+        ),
+        TIMETZARRAYOID => Field::new(
+            array_name,
+            arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            false,
+        ),
 
-    let list_group_builder = parquet::schema::types::Type::group_type_builder(array_name)
-        .with_fields(vec![type_builder])
-        .with_repetition(parquet::basic::Repetition::REPEATED)
-        .with_logical_type(Some(parquet::basic::LogicalType::List))
-        .build()
-        .unwrap();
+        CHARARRAYOID => Field::new(
+            array_name,
+            arrow::datatypes::DataType::FixedSizeBinary(1),
+            false,
+        ),
+        TEXTARRAYOID | VARCHARARRAYOID | BPCHARARRAYOID => {
+            Field::new(array_name, arrow::datatypes::DataType::Utf8, false)
+        }
+        _ => {
+            panic!("unsupported array type {}", arraytypoid);
+        }
+    };
 
-    list_group_builder.into()
+    let list_field = Field::new(
+        array_name,
+        arrow::datatypes::DataType::List(field.into()),
+        false,
+    );
+
+    list_field.into()
 }
 
-pub(crate) fn parse_schema(
-    arraytypoid: Oid,
-    tupledesc: PgTupleDesc,
-    array_name: &'static str,
-) -> TypePtr {
-    let array_schema = parse_array_schema(arraytypoid, Some(tupledesc), array_name);
+fn list_field_from_struct_field(array_name: &str, struct_field: Arc<Field>) -> Arc<Field> {
+    let list_field = Field::new(
+        array_name,
+        arrow::datatypes::DataType::List(struct_field),
+        false,
+    );
 
-    let root_schema = parquet::schema::types::Type::group_type_builder("root")
-        .with_fields(vec![array_schema])
-        .with_repetition(parquet::basic::Repetition::REQUIRED)
-        .build()
-        .unwrap()
-        .into();
-
-    root_schema
+    list_field.into()
 }
 
 fn parse_array_schema(
     arraytypoid: Oid,
     tupledesc: Option<PgTupleDesc>,
     array_name: &'static str,
-) -> TypePtr {
+) -> Arc<Field> {
     let is_array_of_composite = tupledesc.is_some();
     if is_array_of_composite {
         let tupledesc = tupledesc.unwrap();
-
         let array_element_attributes = collect_attributes(&tupledesc);
-        let element_group_builder = parse_record_schema(array_element_attributes, array_name);
-
-        let list_group_builder = parquet::schema::types::Type::group_type_builder(array_name)
-            .with_fields(vec![element_group_builder.into()])
-            .with_repetition(parquet::basic::Repetition::REPEATED)
-            .with_logical_type(Some(parquet::basic::LogicalType::List))
-            .build()
-            .unwrap();
-
-        return list_group_builder.into();
-    }
-
-    match arraytypoid {
-        FLOAT4ARRAYOID => {
-            parse_array_schema_internal(array_name, parquet::basic::Type::FLOAT, None)
-        }
-        FLOAT8ARRAYOID => {
-            parse_array_schema_internal(array_name, parquet::basic::Type::DOUBLE, None)
-        }
-        BOOLARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::INT32,
-            Some(parquet::basic::LogicalType::Integer {
-                bit_width: 8,
-                is_signed: true,
-            }),
-        ),
-        INT2ARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::INT32,
-            Some(parquet::basic::LogicalType::Integer {
-                bit_width: 16,
-                is_signed: true,
-            }),
-        ),
-        INT4ARRAYOID => parse_array_schema_internal(array_name, parquet::basic::Type::INT32, None),
-        INT8ARRAYOID => parse_array_schema_internal(array_name, parquet::basic::Type::INT64, None),
-        NUMERICARRAYOID => {
-            unimplemented!("numeric type is not supported yet");
-        }
-        DATEARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::INT32,
-            Some(parquet::basic::LogicalType::Date),
-        ),
-        TIMESTAMPARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::INT64,
-            Some(parquet::basic::LogicalType::Timestamp {
-                is_adjusted_to_u_t_c: false,
-                unit: parquet::basic::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
-            }),
-        ),
-        TIMESTAMPTZARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::INT64,
-            Some(parquet::basic::LogicalType::Timestamp {
-                is_adjusted_to_u_t_c: true,
-                unit: parquet::basic::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
-            }),
-        ),
-        TIMEARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::INT64,
-            Some(parquet::basic::LogicalType::Time {
-                is_adjusted_to_u_t_c: false,
-                unit: parquet::basic::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
-            }),
-        ),
-        TIMETZARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::INT64,
-            Some(parquet::basic::LogicalType::Time {
-                is_adjusted_to_u_t_c: true,
-                unit: parquet::basic::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
-            }),
-        ),
-        INTERVALARRAYOID => {
-            let type_builder = parquet::schema::types::Type::primitive_type_builder(
-                array_name,
-                parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
-            )
-            .with_length(12)
-            .with_converted_type(parquet::basic::ConvertedType::INTERVAL)
-            .with_repetition(parquet::basic::Repetition::REQUIRED)
-            .build()
-            .unwrap()
-            .into();
-
-            let list_group_builder = parquet::schema::types::Type::group_type_builder(array_name)
-                .with_fields(vec![type_builder])
-                .with_repetition(parquet::basic::Repetition::REPEATED)
-                .with_logical_type(Some(parquet::basic::LogicalType::List))
-                .build()
-                .unwrap();
-
-            list_group_builder.into()
-        }
-        CHARARRAYOID => {
-            parse_array_schema_internal(array_name, parquet::basic::Type::BYTE_ARRAY, None)
-        }
-        TEXTARRAYOID | VARCHARARRAYOID | BPCHARARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::BYTE_ARRAY,
-            Some(parquet::basic::LogicalType::String),
-        ),
-        UUIDARRAYOID => {
-            let type_builder = parquet::schema::types::Type::primitive_type_builder(
-                array_name,
-                parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
-            )
-            .with_length(16)
-            .with_logical_type(Some(parquet::basic::LogicalType::Uuid))
-            .with_repetition(parquet::basic::Repetition::REQUIRED)
-            .build()
-            .unwrap()
-            .into();
-
-            let list_group_builder = parquet::schema::types::Type::group_type_builder(array_name)
-                .with_fields(vec![type_builder])
-                .with_repetition(parquet::basic::Repetition::REPEATED)
-                .with_logical_type(Some(parquet::basic::LogicalType::List))
-                .build()
-                .unwrap();
-
-            list_group_builder.into()
-        }
-        JSONARRAYOID => parse_array_schema_internal(
-            array_name,
-            parquet::basic::Type::BYTE_ARRAY,
-            Some(parquet::basic::LogicalType::Json),
-        ),
-        _ => {
-            panic!("unsupported array type {}", arraytypoid);
-        }
+        let struct_field = parse_record_schema(array_element_attributes, array_name);
+        return list_field_from_struct_field(array_name, struct_field);
+    } else {
+        list_field_from_primitive_field(array_name, arraytypoid)
     }
 }
 
-fn parse_primitive_schema_internal(
-    elem_name: &'static str,
-    parquet_type: parquet::basic::Type,
-    logical_type: Option<parquet::basic::LogicalType>,
-) -> TypePtr {
-    parquet::schema::types::Type::primitive_type_builder(elem_name, parquet_type)
-        .with_repetition(parquet::basic::Repetition::REQUIRED)
-        .with_logical_type(logical_type)
-        .build()
-        .unwrap()
-        .into()
-}
-
-fn parse_primitive_schema(typoid: Oid, elem_name: &'static str) -> TypePtr {
+fn parse_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
     match typoid {
-        FLOAT4OID => parse_primitive_schema_internal(elem_name, parquet::basic::Type::FLOAT, None),
-        FLOAT8OID => parse_primitive_schema_internal(elem_name, parquet::basic::Type::DOUBLE, None),
-        BOOLOID => parse_primitive_schema_internal(
+        FLOAT4OID => Field::new(elem_name, arrow::datatypes::DataType::Float32, false).into(),
+        FLOAT8OID => Field::new(elem_name, arrow::datatypes::DataType::Float64, false).into(),
+        BOOLOID => Field::new(elem_name, arrow::datatypes::DataType::Int8, false).into(),
+        INT2OID => Field::new(elem_name, arrow::datatypes::DataType::Int16, false).into(),
+        INT4OID => Field::new(elem_name, arrow::datatypes::DataType::Int32, false).into(),
+        INT8OID => Field::new(elem_name, arrow::datatypes::DataType::Int64, false).into(),
+        DATEOID => Field::new(elem_name, arrow::datatypes::DataType::Date32, false).into(),
+        TIMESTAMPOID => Field::new(
             elem_name,
-            parquet::basic::Type::INT32,
-            Some(parquet::basic::LogicalType::Integer {
-                bit_width: 8,
-                is_signed: true,
-            }),
-        ),
-        INT2OID => parse_primitive_schema_internal(
-            elem_name,
-            parquet::basic::Type::INT32,
-            Some(parquet::basic::LogicalType::Integer {
-                bit_width: 16,
-                is_signed: true,
-            }),
-        ),
-        INT4OID => parse_primitive_schema_internal(elem_name, parquet::basic::Type::INT32, None),
-        INT8OID => parse_primitive_schema_internal(elem_name, parquet::basic::Type::INT64, None),
-        NUMERICOID => {
-            unimplemented!("numeric type is not supported yet");
-        }
-        DATEOID => parse_primitive_schema_internal(
-            elem_name,
-            parquet::basic::Type::INT32,
-            Some(parquet::basic::LogicalType::Date),
-        ),
-        TIMESTAMPOID => parse_primitive_schema_internal(
-            elem_name,
-            parquet::basic::Type::INT64,
-            Some(parquet::basic::LogicalType::Timestamp {
-                is_adjusted_to_u_t_c: false,
-                unit: parquet::basic::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
-            }),
-        ),
-        TIMESTAMPTZOID => parse_primitive_schema_internal(
-            elem_name,
-            parquet::basic::Type::INT64,
-            Some(parquet::basic::LogicalType::Timestamp {
-                is_adjusted_to_u_t_c: true,
-                unit: parquet::basic::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
-            }),
-        ),
-        TIMEOID => parse_primitive_schema_internal(
-            elem_name,
-            parquet::basic::Type::INT64,
-            Some(parquet::basic::LogicalType::Time {
-                is_adjusted_to_u_t_c: false,
-                unit: parquet::basic::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
-            }),
-        ),
-        TIMETZOID => parse_primitive_schema_internal(
-            elem_name,
-            parquet::basic::Type::INT64,
-            Some(parquet::basic::LogicalType::Time {
-                is_adjusted_to_u_t_c: true,
-                unit: parquet::basic::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
-            }),
-        ),
-        INTERVALOID => parquet::schema::types::Type::primitive_type_builder(
-            elem_name,
-            parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
+            arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
+            false,
         )
-        .with_length(12)
-        .with_converted_type(parquet::basic::ConvertedType::INTERVAL)
-        .with_repetition(parquet::basic::Repetition::REQUIRED)
-        .build()
-        .unwrap()
         .into(),
-        CHAROID => {
-            parse_primitive_schema_internal(elem_name, parquet::basic::Type::BYTE_ARRAY, None)
-        }
-        TEXTOID | VARCHAROID | BPCHAROID => parse_primitive_schema_internal(
+        TIMESTAMPTZOID => Field::new(
             elem_name,
-            parquet::basic::Type::BYTE_ARRAY,
-            Some(parquet::basic::LogicalType::String),
-        ),
-        UUIDOID => parquet::schema::types::Type::primitive_type_builder(
-            elem_name,
-            parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
+            arrow::datatypes::DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Microsecond,
+                Some("+00:00".into()),
+            ),
+            false,
         )
-        .with_length(16)
-        .with_logical_type(Some(parquet::basic::LogicalType::Uuid))
-        .with_repetition(parquet::basic::Repetition::REQUIRED)
-        .build()
-        .unwrap()
         .into(),
-        JSONOID => parse_primitive_schema_internal(
+        TIMEOID => Field::new(
             elem_name,
-            parquet::basic::Type::BYTE_ARRAY,
-            Some(parquet::basic::LogicalType::Json),
-        ),
+            arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            false,
+        )
+        .into(),
+        TIMETZOID => Field::new(
+            elem_name,
+            arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            false,
+        )
+        .into(),
+        CHAROID => Field::new(
+            elem_name,
+            arrow::datatypes::DataType::FixedSizeBinary(1),
+            false,
+        )
+        .into(),
+        TEXTOID | VARCHAROID | BPCHAROID => {
+            Field::new(elem_name, arrow::datatypes::DataType::Utf8, false).into()
+        }
         _ => {
             panic!("unsupported primitive type {}", typoid)
         }

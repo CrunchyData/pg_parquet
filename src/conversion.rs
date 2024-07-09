@@ -1,7 +1,6 @@
-use parquet::data_type::{ByteArray, FixedLenByteArray};
 use pgrx::{
-    direct_function_call, pg_sys, AnyNumeric, Date, Interval, IntoDatum, Json, Time,
-    TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
+    direct_function_call, pg_sys, AnyNumeric, Date, Interval, IntoDatum, Time, TimeWithTimeZone,
+    Timestamp, TimestampWithTimeZone,
 };
 
 pub(crate) fn date_to_i32(date: Date) -> i32 {
@@ -82,38 +81,4 @@ pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> i64 {
         direct_function_call(pg_sys::timetz_send, &[adjusted_timetz.into_datum()]).unwrap()
     };
     i64::from_be_bytes(adjusted_timetz_as_bytes[0..8].try_into().unwrap())
-}
-
-pub(crate) fn interval_to_fixed_byte_array(interval: Interval) -> FixedLenByteArray {
-    let interval_as_bytes: Vec<u8> =
-        unsafe { direct_function_call(pg_sys::interval_send, &[interval.into_datum()]).unwrap() };
-
-    let time_in_microsec = i64::from_be_bytes(interval_as_bytes[0..8].try_into().unwrap());
-    let day = i32::from_be_bytes(interval_as_bytes[8..12].try_into().unwrap());
-    let month = i32::from_be_bytes(interval_as_bytes[12..16].try_into().unwrap());
-
-    // Postgres interval has microsecond resolution, parquet only milliseconds
-    // plus postgres doesn't overflow the seconds into the day field
-    let ms_per_day = 1000 * 60 * 60 * 24;
-    let millis_total = time_in_microsec / 1000;
-    let days = millis_total / ms_per_day;
-    let millis = millis_total % ms_per_day;
-    let mut adjusted_interval_bytes = vec![0u8; 12];
-    adjusted_interval_bytes[0..4].copy_from_slice(&i32::to_le_bytes(month));
-    adjusted_interval_bytes[4..8].copy_from_slice(&i32::to_le_bytes(day + days as i32));
-    adjusted_interval_bytes[8..12].copy_from_slice(&i32::to_le_bytes(millis as i32));
-
-    FixedLenByteArray::from(adjusted_interval_bytes)
-}
-
-pub(crate) fn uuid_to_fixed_byte_array(uuid: Uuid) -> FixedLenByteArray {
-    let uuid_as_bytes: Vec<u8> =
-        unsafe { direct_function_call(pg_sys::uuid_send, &[uuid.into_datum()]).unwrap() };
-    FixedLenByteArray::from(uuid_as_bytes)
-}
-
-pub(crate) fn json_to_byte_array(json: Json) -> ByteArray {
-    let json_as_bytes: Vec<u8> =
-        unsafe { direct_function_call(pg_sys::json_send, &[json.into_datum()]).unwrap() };
-    ByteArray::from(json_as_bytes)
 }
