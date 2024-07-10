@@ -1,7 +1,4 @@
-use std::{
-    sync::{mpsc::Sender, Arc},
-    thread::JoinHandle,
-};
+use std::sync::Arc;
 
 use arrow::{
     array::ArrayRef,
@@ -9,8 +6,7 @@ use arrow::{
     datatypes::SchemaRef,
 };
 use parquet::{
-    arrow::arrow_writer::{compute_leaves, get_column_writers, ArrowColumnChunk, ArrowLeafColumn},
-    errors::Result,
+    arrow::arrow_writer::{compute_leaves, get_column_writers},
     file::{
         properties::WriterProperties,
         writer::{SerializedFileWriter, SerializedRowGroupWriter},
@@ -65,30 +61,23 @@ fn write_to_row_group(
     writer_props: Arc<WriterProperties>,
     row_group: &mut SerializedRowGroupWriter<std::fs::File>,
 ) {
-    // Collect arrow root array
+    // compute arrow root array
     let root_array = collect_arrow_root_array(tuples, tupledesc);
     let root = vec![root_array];
 
-    // Spawn work to encode columns
-    let mut arrow_to_parquet_workers = start_arrow_to_parquet_writer_workers(
-        &arrow_schema.clone().into(),
-        &parquet_schema,
-        writer_props.clone(),
-    );
+    // get column writers
+    let col_writers = get_column_writers(&parquet_schema, &writer_props, &arrow_schema).unwrap();
 
-    // Spawn work to encode columns
-    let mut worker_iter = arrow_to_parquet_workers.iter_mut();
+    // compute and append leave columns to row group, each column writer writes a column chunk
+    let mut worker_iter = col_writers.into_iter();
     for (arr, field) in root.iter().zip(&arrow_schema.fields) {
-        for leaves in compute_leaves(field, arr).unwrap() {
-            worker_iter.next().unwrap().1.send(leaves).unwrap();
-        }
-    }
+        for leave_columns in compute_leaves(field, arr).unwrap() {
+            let mut col_writer = worker_iter.next().unwrap();
+            col_writer.write(&leave_columns).unwrap();
 
-    // Finish up parallel column encoding
-    for (handle, send) in arrow_to_parquet_workers {
-        drop(send); // Drop send side to signal termination
-        let chunk = handle.join().unwrap().unwrap();
-        chunk.append_to_row_group(row_group).unwrap();
+            let chunk = col_writer.close().unwrap();
+            chunk.append_to_row_group(row_group).unwrap();
+        }
     }
 }
 
@@ -128,30 +117,4 @@ fn collect_arrow_root_array(
     );
 
     data
-}
-
-fn start_arrow_to_parquet_writer_workers(
-    arrow_schema: &SchemaRef,
-    parquet_schema: &SchemaDescriptor,
-    writer_props: Arc<WriterProperties>,
-) -> Vec<(
-    JoinHandle<Result<ArrowColumnChunk>>,
-    Sender<ArrowLeafColumn>,
-)> {
-    let col_writers = get_column_writers(parquet_schema, &writer_props, arrow_schema).unwrap();
-
-    // todo: threads are dangerous with Postgres
-    col_writers
-        .into_iter()
-        .map(|mut col_writer| {
-            let (send, recv) = std::sync::mpsc::channel::<ArrowLeafColumn>();
-            let handle = std::thread::spawn(move || {
-                for col in recv {
-                    col_writer.write(&col)?;
-                }
-                col_writer.close()
-            });
-            (handle, send)
-        })
-        .collect::<Vec<_>>()
 }
