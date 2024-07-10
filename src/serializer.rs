@@ -160,7 +160,6 @@ fn collect_attribute_array_from_tuples(
     let mut attribute_values = vec![];
 
     for record in tuples {
-        // todo: verify no duplicates
         let attribute_val = record.get_by_name(attribute_name).unwrap().unwrap();
         attribute_values.push(attribute_val);
     }

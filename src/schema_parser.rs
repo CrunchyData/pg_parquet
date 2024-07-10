@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use arrow::datatypes::{Field, Fields, Schema};
 use parquet::{arrow::arrow_to_parquet_schema, schema::types::SchemaDescriptor};
@@ -17,12 +17,24 @@ pub(crate) fn collect_attributes<'a>(
     tupdesc: &'a PgTupleDesc,
 ) -> Vec<&'a pg_sys::FormData_pg_attribute> {
     let mut attributes = vec![];
+    let mut attributes_set = HashSet::<&str>::new();
 
     for i in 0..tupdesc.len() {
         let attribute = tupdesc.get(i).unwrap();
         if attribute.is_dropped() {
             continue;
         }
+
+        let name = attribute.name();
+
+        if attributes_set.contains(name) {
+            panic!(
+                "duplicate attribute {} is not allowed in parquet schema",
+                name
+            );
+        }
+        attributes_set.insert(name);
+
         attributes.push(attribute);
     }
 
