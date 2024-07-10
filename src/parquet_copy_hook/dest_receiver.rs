@@ -39,6 +39,25 @@ fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List, filename: *mut 
     }
 }
 
+/*
+ * slot_getallattrs
+ *		This function forces all the entries of the slot's Datum/isnull
+ *		arrays to be valid.  The caller may then extract data directly
+ *		from those arrays instead of using slot_getattr.
+ */
+fn slot_getallattrs(slot: *mut TupleTableSlot) {
+    // copied from Postgres since this method was inlined in the original code
+    // (not found in pg_sys)
+    // handles select * from table
+    unsafe {
+        let slot = PgBox::from_pg(slot);
+        let tts_tupledesc = PgBox::from_pg(slot.tts_tupleDescriptor);
+        if (slot.tts_nvalid as i32) < tts_tupledesc.natts {
+            pg_sys::slot_getsomeattrs_int(slot.as_ptr(), tts_tupledesc.natts);
+        }
+    };
+}
+
 #[pg_guard]
 pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceiver) -> bool {
     let parquet_dest = dest as *mut ParquetCopyDestReceiver;
@@ -46,7 +65,7 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
 
     let natts = parquet_dest.natts as usize;
 
-    // todo: slot_getallattrs is not available in pg_sys
+    slot_getallattrs(slot);
 
     let slot = unsafe { PgBox::from_pg(slot) };
     let datums = slot.tts_values;
@@ -61,12 +80,13 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
     parquet_dest.tuples = tuples.into_pg();
     parquet_dest.tuple_count += 1;
 
-    if parquet_dest.tuple_count > 100 {
+    if parquet_dest.tuple_count == 100 {
         copy_buffered_tuples(
             parquet_dest.tupledesc,
             parquet_dest.tuples,
             parquet_dest.filename,
         );
+
         parquet_dest.tuple_count = 0;
         parquet_dest.tuples = PgList::<HeapTupleData>::new().into_pg();
     }
