@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use arrow::datatypes::{Field, Fields, Schema};
 use parquet::{arrow::arrow_to_parquet_schema, schema::types::SchemaDescriptor};
@@ -11,34 +11,19 @@ use pg_sys::{
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
-use crate::serializer::tupledesc_for_typeoid;
+use crate::pgrx_utils::{collect_attributes, tupledesc_for_tuples, tupledesc_for_typeoid};
 
-pub(crate) fn collect_attributes<'a>(
-    tupdesc: &'a PgTupleDesc,
-) -> Vec<&'a pg_sys::FormData_pg_attribute> {
-    let mut attributes = vec![];
-    let mut attributes_set = HashSet::<&str>::new();
+pub(crate) fn schema_string_for_tuples(tuples: Vec<PgHeapTuple<'_, AllocatedByRust>>) -> String {
+    let array_oid = tuples.composite_type_oid().unwrap();
 
-    for i in 0..tupdesc.len() {
-        let attribute = tupdesc.get(i).unwrap();
-        if attribute.is_dropped() {
-            continue;
-        }
+    let (_, tupledesc) = tupledesc_for_tuples(tuples);
 
-        let name = attribute.name();
+    let arrow_schema = parse_schema(array_oid, tupledesc, "root");
+    let parquet_schema = to_parquet_schema(&arrow_schema);
 
-        if attributes_set.contains(name) {
-            panic!(
-                "duplicate attribute {} is not allowed in parquet schema",
-                name
-            );
-        }
-        attributes_set.insert(name);
-
-        attributes.push(attribute);
-    }
-
-    attributes
+    let mut buf = Vec::new();
+    parquet::schema::printer::print_schema(&mut buf, &parquet_schema.root_schema_ptr());
+    String::from_utf8(buf).unwrap()
 }
 
 pub(crate) fn parse_schema(
@@ -46,65 +31,12 @@ pub(crate) fn parse_schema(
     tupledesc: PgTupleDesc,
     array_name: &'static str,
 ) -> Schema {
-    let list_field = parse_array_schema(arraytypoid, Some(tupledesc), array_name);
+    let list_field = visit_list_schema(arraytypoid, Some(tupledesc), array_name);
     Schema::new(vec![list_field])
 }
 
 pub(crate) fn to_parquet_schema(arrow_schema: &Schema) -> SchemaDescriptor {
     arrow_to_parquet_schema(arrow_schema).unwrap()
-}
-
-fn parse_record_schema<'a>(
-    attributes: Vec<&'a pg_sys::FormData_pg_attribute>,
-    elem_name: &'static str,
-) -> Arc<Field> {
-    let mut child_fields: Vec<Arc<Field>> = vec![];
-
-    for attribute in attributes {
-        if attribute.is_dropped() {
-            continue;
-        }
-
-        let attribute_name = attribute.name();
-        let attribute_oid = attribute.type_oid().value();
-
-        let is_attribute_composite = unsafe { pg_sys::type_is_rowtype(attribute_oid) };
-        let is_attribute_array = unsafe { pg_sys::type_is_array(attribute_oid) };
-
-        let child_field = if is_attribute_composite {
-            let attribute_tupledesc = tupledesc_for_typeoid(attribute_oid).unwrap();
-            let attribute_attributes = collect_attributes(&attribute_tupledesc);
-            parse_record_schema(
-                attribute_attributes,
-                // todo: do not leak
-                attribute_name.to_string().leak(),
-            )
-        } else if is_attribute_array {
-            let attribute_element_typoid = unsafe { pg_sys::get_element_type(attribute_oid) };
-            let attribute_tupledesc = tupledesc_for_typeoid(attribute_element_typoid);
-            parse_array_schema(
-                attribute.type_oid().value(),
-                attribute_tupledesc,
-                // todo: do not leak
-                attribute_name.to_string().leak(),
-            )
-        } else {
-            parse_primitive_schema(
-                attribute.type_oid().value(),
-                // todo: do not leak
-                attribute_name.to_string().leak(),
-            )
-        };
-
-        child_fields.push(child_field);
-    }
-
-    Field::new(
-        elem_name,
-        arrow::datatypes::DataType::Struct(Fields::from(child_fields)),
-        false,
-    )
-    .into()
 }
 
 fn list_field_from_primitive_field(array_name: &str, arraytypoid: Oid) -> Arc<Field> {
@@ -172,7 +104,60 @@ fn list_field_from_struct_field(array_name: &str, struct_field: Arc<Field>) -> A
     list_field.into()
 }
 
-fn parse_array_schema(
+fn visit_struct_schema<'a>(
+    attributes: Vec<&'a pg_sys::FormData_pg_attribute>,
+    elem_name: &'static str,
+) -> Arc<Field> {
+    let mut child_fields: Vec<Arc<Field>> = vec![];
+
+    for attribute in attributes {
+        if attribute.is_dropped() {
+            continue;
+        }
+
+        let attribute_name = attribute.name();
+        let attribute_oid = attribute.type_oid().value();
+
+        let is_attribute_composite = unsafe { pg_sys::type_is_rowtype(attribute_oid) };
+        let is_attribute_array = unsafe { pg_sys::type_is_array(attribute_oid) };
+
+        let child_field = if is_attribute_composite {
+            let attribute_tupledesc = tupledesc_for_typeoid(attribute_oid).unwrap();
+            let attribute_attributes = collect_attributes(&attribute_tupledesc);
+            visit_struct_schema(
+                attribute_attributes,
+                // todo: do not leak
+                attribute_name.to_string().leak(),
+            )
+        } else if is_attribute_array {
+            let attribute_element_typoid = unsafe { pg_sys::get_element_type(attribute_oid) };
+            let attribute_tupledesc = tupledesc_for_typeoid(attribute_element_typoid);
+            visit_list_schema(
+                attribute.type_oid().value(),
+                attribute_tupledesc,
+                // todo: do not leak
+                attribute_name.to_string().leak(),
+            )
+        } else {
+            visit_primitive_schema(
+                attribute.type_oid().value(),
+                // todo: do not leak
+                attribute_name.to_string().leak(),
+            )
+        };
+
+        child_fields.push(child_field);
+    }
+
+    Field::new(
+        elem_name,
+        arrow::datatypes::DataType::Struct(Fields::from(child_fields)),
+        false,
+    )
+    .into()
+}
+
+fn visit_list_schema(
     arraytypoid: Oid,
     tupledesc: Option<PgTupleDesc>,
     array_name: &'static str,
@@ -181,14 +166,14 @@ fn parse_array_schema(
     if is_array_of_composite {
         let tupledesc = tupledesc.unwrap();
         let array_element_attributes = collect_attributes(&tupledesc);
-        let struct_field = parse_record_schema(array_element_attributes, array_name);
+        let struct_field = visit_struct_schema(array_element_attributes, array_name);
         return list_field_from_struct_field(array_name, struct_field);
     } else {
         list_field_from_primitive_field(array_name, arraytypoid)
     }
 }
 
-fn parse_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
+fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
     match typoid {
         FLOAT4OID => Field::new(elem_name, arrow::datatypes::DataType::Float32, false).into(),
         FLOAT8OID => Field::new(elem_name, arrow::datatypes::DataType::Float64, false).into(),

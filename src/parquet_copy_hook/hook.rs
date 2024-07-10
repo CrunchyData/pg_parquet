@@ -1,7 +1,7 @@
 use pg_sys::{CommandTag_CMDTAG_COPY, CopyStmt, NodeTag::T_CopyStmt};
 use pgrx::{is_a, prelude::*, register_hook, HookResult, PgHooks};
 
-use crate::parquet_dest_receiver::{
+use crate::parquet_copy_hook::dest_receiver::{
     create_parquet_dest_receiver, execute_query_with_dest_receiver,
 };
 

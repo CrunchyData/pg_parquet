@@ -20,7 +20,7 @@ use pgrx::{direct_function_call, PgTupleDesc};
 
 use crate::{
     conversion::{date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64},
-    schema_parser::collect_attributes,
+    pgrx_utils::{collect_attributes, tupledesc_for_typeoid},
 };
 
 fn array_default(array_typoid: Oid) -> pgrx::AnyArray {
@@ -167,36 +167,162 @@ fn collect_attribute_array_from_tuples(
     attribute_values
 }
 
-pub(crate) fn tupledesc_for_typeoid(typoid: Oid) -> Option<PgTupleDesc<'static>> {
-    let is_composite_type = unsafe { pg_sys::type_is_rowtype(typoid) };
-    if !is_composite_type {
-        return None;
-    }
+fn list_array_from_primitive_data(
+    name: &str,
+    primitive_array: ArrayRef,
+    offsets: OffsetBuffer<i32>,
+) -> (Arc<Field>, ArrayRef) {
+    let field = match primitive_array.data_type() {
+        arrow::datatypes::DataType::Boolean => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Boolean, false))
+        }
+        arrow::datatypes::DataType::Int16 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Int16, false))
+        }
+        arrow::datatypes::DataType::Int32 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Int32, false))
+        }
+        arrow::datatypes::DataType::Int64 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Int64, false))
+        }
+        arrow::datatypes::DataType::Float32 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Float32, false))
+        }
+        arrow::datatypes::DataType::Float64 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Float64, false))
+        }
+        arrow::datatypes::DataType::Timestamp(timeunit, timezone) => Arc::new(Field::new(
+            name,
+            arrow::datatypes::DataType::Timestamp(timeunit.clone(), timezone.clone()),
+            false,
+        )),
+        arrow::datatypes::DataType::Date32 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Date32, false))
+        }
+        arrow::datatypes::DataType::Time64(timeunit) => Arc::new(Field::new(
+            name,
+            arrow::datatypes::DataType::Time64(timeunit.clone()),
+            false,
+        )),
+        arrow::datatypes::DataType::Interval(interval_unit) => Arc::new(Field::new(
+            name,
+            arrow::datatypes::DataType::Interval(interval_unit.clone()),
+            false,
+        )),
+        arrow::datatypes::DataType::FixedSizeBinary(size) => Arc::new(Field::new(
+            name,
+            arrow::datatypes::DataType::FixedSizeBinary(size.clone()),
+            false,
+        )),
+        arrow::datatypes::DataType::Utf8 => {
+            Arc::new(Field::new(name, arrow::datatypes::DataType::Utf8, false))
+        }
+        _ => {
+            panic!("unsupported array type");
+        }
+    };
 
-    PgTupleDesc::for_composite_type_by_oid(typoid)
+    let list_array = ListArray::new(field.clone(), offsets, primitive_array, None);
+    let list_array = make_array(list_array.into());
+    let list_field = Arc::new(Field::new(
+        name,
+        arrow::datatypes::DataType::List(field),
+        false,
+    ));
+    (list_field, list_array)
 }
 
-pub(crate) fn tupledesc_for_tuples(
-    tuples: Vec<PgHeapTuple<'_, AllocatedByRust>>,
-) -> (Vec<PgHeapTuple<'_, AllocatedByRust>>, PgTupleDesc) {
-    unsafe {
-        let tuples = tuples
-            .into_iter()
-            .map(|x| x.into_datum().unwrap())
-            .collect::<Vec<_>>();
+fn list_array_from_struct_data(
+    struct_field: Arc<Field>,
+    struct_array: ArrayRef,
+    offsets: OffsetBuffer<i32>,
+) -> (Arc<Field>, ArrayRef) {
+    let list_array = ListArray::new(struct_field.clone(), offsets, struct_array, None);
+    let list_array = make_array(list_array.into());
+    let list_field = Arc::new(Field::new(
+        struct_field.name().clone(),
+        arrow::datatypes::DataType::List(struct_field),
+        false,
+    ));
+    (list_field, list_array)
+}
 
-        let tuple_datum = tuples.first().unwrap();
-        let htup_header =
-            pg_sys::pg_detoast_datum(tuple_datum.cast_mut_ptr()) as pg_sys::HeapTupleHeader;
-        let tup_type = htup_header.as_ref().unwrap().t_choice.t_datum.datum_typeid;
-        let tup_typmod = htup_header.as_ref().unwrap().t_choice.t_datum.datum_typmod;
-        let tup_desc = pg_sys::lookup_rowtype_tupdesc(tup_type, tup_typmod);
+fn visit_struct_array(
+    name: &str,
+    tuples: pgrx::AnyArray,
+    tupledesc: &PgTupleDesc,
+) -> (FieldRef, ArrayRef) {
+    let mut struct_fields_with_data: Vec<(Arc<Field>, ArrayRef)> = vec![];
 
-        let tuples = tuples
-            .into_iter()
-            .map(|x| PgHeapTuple::from_datum(x, false).unwrap())
-            .collect::<Vec<_>>();
-        (tuples, PgTupleDesc::from_pg(tup_desc))
+    let tuples = unsafe {
+        Vec::<PgHeapTuple<'_, AllocatedByRust>>::from_polymorphic_datum(
+            tuples.datum(),
+            false,
+            tuples.oid(),
+        )
+        .unwrap()
+    };
+
+    let attributes = collect_attributes(&tupledesc);
+
+    for attribute in attributes {
+        let attribute_name = attribute.name();
+        let attribute_typoid = attribute.type_oid().value();
+
+        let attribute_is_array = unsafe { pg_sys::type_is_array(attribute_typoid) };
+
+        let attribute_is_composite = unsafe { pg_sys::type_is_rowtype(attribute_typoid) };
+
+        let attribute_values = collect_attribute_array_from_tuples(&tuples, attribute_name);
+
+        let (field, array) = if attribute_is_array {
+            let (attribute_values, tupledesc, offsets) =
+                flatten_arrays(attribute_values, attribute_typoid);
+            visit_list_array(attribute_name, attribute_values, tupledesc, offsets)
+        } else if attribute_is_composite {
+            let (attribute_values, tupledesc) =
+                elements_to_anyarray(attribute_values, attribute_typoid);
+            visit_struct_array(attribute_name, attribute_values, &tupledesc.unwrap())
+        } else {
+            let (attribute_values, _) = elements_to_anyarray(attribute_values, attribute_typoid);
+            visit_primitive_array(attribute_name, attribute_values)
+        };
+
+        struct_fields_with_data.push((field, array));
+    }
+
+    // finalize StructArray
+    let mut struct_attribute_fields = vec![];
+    for (field, _) in struct_fields_with_data.iter() {
+        struct_attribute_fields.push(field.clone());
+    }
+
+    let struct_field = Arc::new(Field::new(
+        name,
+        arrow::datatypes::DataType::Struct(Fields::from(struct_attribute_fields)),
+        false,
+    ));
+
+    let struct_array = StructArray::from(struct_fields_with_data);
+    let struct_array = make_array(struct_array.into());
+
+    (struct_field, struct_array)
+}
+
+pub(crate) fn visit_list_array(
+    name: &str,
+    array: pgrx::AnyArray,
+    tupledesc: Option<PgTupleDesc>,
+    offsets: OffsetBuffer<i32>,
+) -> (Arc<Field>, ArrayRef) {
+    let is_array_of_composite = tupledesc.is_some();
+    if is_array_of_composite {
+        let tupledesc = tupledesc.unwrap();
+        let (struct_field, struct_array) = visit_struct_array(name, array, &tupledesc);
+        list_array_from_struct_data(struct_field, struct_array, offsets)
+    } else {
+        let (_, primitive_array) = visit_primitive_array(name, array);
+        list_array_from_primitive_data(name, primitive_array, offsets)
     }
 }
 
@@ -380,163 +506,4 @@ fn visit_primitive_array(name: &str, array: pgrx::AnyArray) -> (Arc<Field>, Arra
             panic!("unsupported array type {}", array_oid);
         }
     }
-}
-
-fn list_array_from_primitive_data(
-    name: &str,
-    primitive_array: ArrayRef,
-    offsets: OffsetBuffer<i32>,
-) -> (Arc<Field>, ArrayRef) {
-    let field = match primitive_array.data_type() {
-        arrow::datatypes::DataType::Boolean => {
-            Arc::new(Field::new(name, arrow::datatypes::DataType::Boolean, false))
-        }
-        arrow::datatypes::DataType::Int16 => {
-            Arc::new(Field::new(name, arrow::datatypes::DataType::Int16, false))
-        }
-        arrow::datatypes::DataType::Int32 => {
-            Arc::new(Field::new(name, arrow::datatypes::DataType::Int32, false))
-        }
-        arrow::datatypes::DataType::Int64 => {
-            Arc::new(Field::new(name, arrow::datatypes::DataType::Int64, false))
-        }
-        arrow::datatypes::DataType::Float32 => {
-            Arc::new(Field::new(name, arrow::datatypes::DataType::Float32, false))
-        }
-        arrow::datatypes::DataType::Float64 => {
-            Arc::new(Field::new(name, arrow::datatypes::DataType::Float64, false))
-        }
-        arrow::datatypes::DataType::Timestamp(timeunit, timezone) => Arc::new(Field::new(
-            name,
-            arrow::datatypes::DataType::Timestamp(timeunit.clone(), timezone.clone()),
-            false,
-        )),
-        arrow::datatypes::DataType::Date32 => {
-            Arc::new(Field::new(name, arrow::datatypes::DataType::Date32, false))
-        }
-        arrow::datatypes::DataType::Time64(timeunit) => Arc::new(Field::new(
-            name,
-            arrow::datatypes::DataType::Time64(timeunit.clone()),
-            false,
-        )),
-        arrow::datatypes::DataType::Interval(interval_unit) => Arc::new(Field::new(
-            name,
-            arrow::datatypes::DataType::Interval(interval_unit.clone()),
-            false,
-        )),
-        arrow::datatypes::DataType::FixedSizeBinary(size) => Arc::new(Field::new(
-            name,
-            arrow::datatypes::DataType::FixedSizeBinary(size.clone()),
-            false,
-        )),
-        arrow::datatypes::DataType::Utf8 => {
-            Arc::new(Field::new(name, arrow::datatypes::DataType::Utf8, false))
-        }
-        _ => {
-            panic!("unsupported array type");
-        }
-    };
-
-    let list_array = ListArray::new(field.clone(), offsets, primitive_array, None);
-    let list_array = make_array(list_array.into());
-    let list_field = Arc::new(Field::new(
-        name,
-        arrow::datatypes::DataType::List(field),
-        false,
-    ));
-    (list_field, list_array)
-}
-
-fn list_array_from_struct_data(
-    struct_field: Arc<Field>,
-    struct_array: ArrayRef,
-    offsets: OffsetBuffer<i32>,
-) -> (Arc<Field>, ArrayRef) {
-    let list_array = ListArray::new(struct_field.clone(), offsets, struct_array, None);
-    let list_array = make_array(list_array.into());
-    let list_field = Arc::new(Field::new(
-        struct_field.name().clone(),
-        arrow::datatypes::DataType::List(struct_field),
-        false,
-    ));
-    (list_field, list_array)
-}
-
-pub(crate) fn visit_list_array(
-    name: &str,
-    array: pgrx::AnyArray,
-    tupledesc: Option<PgTupleDesc>,
-    offsets: OffsetBuffer<i32>,
-) -> (Arc<Field>, ArrayRef) {
-    let is_array_of_composite = tupledesc.is_some();
-    if is_array_of_composite {
-        let tupledesc = tupledesc.unwrap();
-        let (struct_field, struct_array) = visit_struct_array(name, array, &tupledesc);
-        list_array_from_struct_data(struct_field, struct_array, offsets)
-    } else {
-        let (_, primitive_array) = visit_primitive_array(name, array);
-        list_array_from_primitive_data(name, primitive_array, offsets)
-    }
-}
-
-pub(crate) fn visit_struct_array(
-    name: &str,
-    tuples: pgrx::AnyArray,
-    tupledesc: &PgTupleDesc,
-) -> (FieldRef, ArrayRef) {
-    let mut struct_fields_with_data: Vec<(Arc<Field>, ArrayRef)> = vec![];
-
-    let tuples = unsafe {
-        Vec::<PgHeapTuple<'_, AllocatedByRust>>::from_polymorphic_datum(
-            tuples.datum(),
-            false,
-            tuples.oid(),
-        )
-        .unwrap()
-    };
-
-    let attributes = collect_attributes(&tupledesc);
-
-    for attribute in attributes {
-        let attribute_name = attribute.name();
-        let attribute_typoid = attribute.type_oid().value();
-
-        let attribute_is_array = unsafe { pg_sys::type_is_array(attribute_typoid) };
-
-        let attribute_is_composite = unsafe { pg_sys::type_is_rowtype(attribute_typoid) };
-
-        let attribute_values = collect_attribute_array_from_tuples(&tuples, attribute_name);
-
-        let (field, array) = if attribute_is_array {
-            let (attribute_values, tupledesc, offsets) =
-                flatten_arrays(attribute_values, attribute_typoid);
-            visit_list_array(attribute_name, attribute_values, tupledesc, offsets)
-        } else if attribute_is_composite {
-            let (attribute_values, tupledesc) =
-                elements_to_anyarray(attribute_values, attribute_typoid);
-            visit_struct_array(attribute_name, attribute_values, &tupledesc.unwrap())
-        } else {
-            let (attribute_values, _) = elements_to_anyarray(attribute_values, attribute_typoid);
-            visit_primitive_array(attribute_name, attribute_values)
-        };
-
-        struct_fields_with_data.push((field, array));
-    }
-
-    // finalize StructArray
-    let mut struct_attribute_fields = vec![];
-    for (field, _) in struct_fields_with_data.iter() {
-        struct_attribute_fields.push(field.clone());
-    }
-
-    let struct_field = Arc::new(Field::new(
-        name,
-        arrow::datatypes::DataType::Struct(Fields::from(struct_attribute_fields)),
-        false,
-    ));
-
-    let struct_array = StructArray::from(struct_fields_with_data);
-    let struct_array = make_array(struct_array.into());
-
-    (struct_field, struct_array)
 }
