@@ -11,7 +11,7 @@ use arrow::{
 };
 
 use pg_sys::{
-    InputFunctionCall, Oid, BOOLARRAYOID, BPCHARARRAYOID, CHARARRAYOID, DATEARRAYOID,
+    Datum, InputFunctionCall, Oid, BOOLARRAYOID, BPCHARARRAYOID, CHARARRAYOID, DATEARRAYOID,
     FLOAT4ARRAYOID, FLOAT8ARRAYOID, INT2ARRAYOID, INT4ARRAYOID, INT8ARRAYOID, TEXTARRAYOID,
     TIMEARRAYOID, TIMESTAMPARRAYOID, TIMESTAMPTZARRAYOID, TIMETZARRAYOID, VARCHARARRAYOID,
 };
@@ -40,6 +40,29 @@ fn array_default(array_typoid: Oid) -> pgrx::AnyArray {
         let arg_typmod = -1;
         let datum = InputFunctionCall(arg_flinfo, arg_str_, arg_typioparam, arg_typmod);
         pgrx::AnyArray::from_polymorphic_datum(datum, false, array_typoid).unwrap()
+    }
+}
+
+fn flatten_arrays_helper<T: IntoDatum + FromDatum>(
+    array_typoid: Oid,
+    array_datums: Vec<Datum>,
+) -> pgrx::AnyArray {
+    let mut array_vectors = Vec::with_capacity(array_datums.len());
+    for datum in array_datums.into_iter() {
+        let array =
+            unsafe { Vec::<T>::from_polymorphic_datum(datum, false, array_typoid).unwrap() };
+        array_vectors.push(array);
+    }
+
+    let flatten_array = array_vectors.into_iter().flatten().collect::<Vec<_>>();
+
+    unsafe {
+        pgrx::AnyArray::from_polymorphic_datum(
+            flatten_array.into_datum().unwrap(),
+            false,
+            array_typoid,
+        )
+        .unwrap()
     }
 }
 
@@ -77,15 +100,35 @@ fn flatten_arrays(
         offsets.push(current_offset);
     }
 
-    let flatten_array_datum = array_datums
-        .into_iter()
-        .reduce(|a, b| unsafe {
-            direct_function_call(pg_sys::array_cat, &[a.into_datum(), b.into_datum()]).unwrap()
-        })
-        .unwrap();
-
-    let flatten_array = unsafe {
-        pgrx::AnyArray::from_polymorphic_datum(flatten_array_datum, false, array_typoid).unwrap()
+    let flatten_array = match array_typoid {
+        FLOAT4ARRAYOID => flatten_arrays_helper::<f32>(array_typoid, array_datums),
+        FLOAT8ARRAYOID => flatten_arrays_helper::<f64>(array_typoid, array_datums),
+        BOOLARRAYOID => flatten_arrays_helper::<bool>(array_typoid, array_datums),
+        INT2ARRAYOID => flatten_arrays_helper::<i16>(array_typoid, array_datums),
+        INT4ARRAYOID => flatten_arrays_helper::<i32>(array_typoid, array_datums),
+        INT8ARRAYOID => flatten_arrays_helper::<i64>(array_typoid, array_datums),
+        DATEARRAYOID => flatten_arrays_helper::<Date>(array_typoid, array_datums),
+        TIMESTAMPARRAYOID => flatten_arrays_helper::<Timestamp>(array_typoid, array_datums),
+        TIMESTAMPTZARRAYOID => {
+            flatten_arrays_helper::<TimestampWithTimeZone>(array_typoid, array_datums)
+        }
+        TIMEARRAYOID => flatten_arrays_helper::<Time>(array_typoid, array_datums),
+        TIMETZARRAYOID => flatten_arrays_helper::<TimeWithTimeZone>(array_typoid, array_datums),
+        CHARARRAYOID => flatten_arrays_helper::<i8>(array_typoid, array_datums),
+        TEXTARRAYOID | VARCHARARRAYOID | BPCHARARRAYOID => {
+            flatten_arrays_helper::<String>(array_typoid, array_datums)
+        }
+        _ => {
+            let is_composite_array = unsafe { pg_sys::type_is_rowtype(array_element_typoid) };
+            if is_composite_array {
+                flatten_arrays_helper::<PgHeapTuple<'_, AllocatedByRust>>(
+                    array_element_typoid,
+                    array_datums,
+                )
+            } else {
+                panic!("unsupported array type {}", array_typoid);
+            }
+        }
     };
 
     (
