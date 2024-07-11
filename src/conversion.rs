@@ -71,7 +71,7 @@ pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> i64 {
     let timezone_as_interval = Interval::from_seconds(timezone_as_secs);
     let adjusted_timetz: TimeWithTimeZone = unsafe {
         direct_function_call(
-            pg_sys::timetz_pl_interval,
+            pg_sys::timetz_mi_interval,
             &[timetz.into_datum(), timezone_as_interval.into_datum()],
         )
         .unwrap()

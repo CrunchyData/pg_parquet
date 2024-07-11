@@ -88,6 +88,7 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
         );
 
         parquet_dest.tuple_count = 0;
+        unsafe {pg_sys::list_free_deep(parquet_dest.tuples)};
         parquet_dest.tuples = PgList::<HeapTupleData>::new().into_pg();
     }
 
@@ -133,6 +134,8 @@ pub extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
             parquet_dest.filename,
         );
     }
+
+    unsafe {pg_sys::list_free_deep(parquet_dest.tuples)};
 
     if !parquet_dest.file.is_null() {
         unsafe { FreeFile(parquet_dest.file) };
