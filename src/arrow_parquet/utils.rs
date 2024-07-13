@@ -30,6 +30,8 @@ pub(crate) fn create_arrow_list_array(
 }
 
 pub(crate) fn array_offsets<T>(arrays: &Vec<Option<Vec<Option<T>>>>) -> (OffsetBuffer<i32>, bool) {
+    pgrx::pg_sys::check_for_interrupts!();
+
     let mut has_some = false;
     let mut offsets = vec![0];
     let mut current_offset = 0;

@@ -91,6 +91,8 @@ fn list_field_from_struct_field(array_name: &str, struct_field: Arc<Field>) -> A
 }
 
 fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> Arc<Field> {
+    pgrx::pg_sys::check_for_interrupts!();
+
     let mut child_fields: Vec<Arc<Field>> = vec![];
 
     let attributes = collect_attributes(&tupledesc);
@@ -140,6 +142,8 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> Arc<F
 }
 
 fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &'static str) -> Arc<Field> {
+    pgrx::pg_sys::check_for_interrupts!();
+
     if is_composite_type(typoid) {
         let tupledesc = tuple_desc(typoid, typmod);
         let struct_field = visit_struct_schema(tupledesc, array_name);
@@ -150,6 +154,8 @@ fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &'static str) -> Arc<
 }
 
 fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
+    pgrx::pg_sys::check_for_interrupts!();
+
     match typoid {
         FLOAT4OID => Field::new(elem_name, arrow::datatypes::DataType::Float32, true).into(),
         FLOAT8OID => Field::new(elem_name, arrow::datatypes::DataType::Float64, true).into(),

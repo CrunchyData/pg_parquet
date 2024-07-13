@@ -64,6 +64,8 @@ fn write_to_row_group(
     writer_props: Arc<WriterProperties>,
     row_group: &mut SerializedRowGroupWriter<std::fs::File>,
 ) {
+    pgrx::pg_sys::check_for_interrupts!();
+
     // compute arrow root array
     assert!(typoid == RECORDOID);
     let (_, root_array) = vec![Some(tuples)].as_arrow_array("root", typoid, typmod);

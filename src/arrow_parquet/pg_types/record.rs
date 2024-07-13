@@ -339,6 +339,8 @@ where
     let mut attribute_values = vec![];
 
     for record in tuples {
+        pgrx::pg_sys::check_for_interrupts!();
+
         if let Some(record) = record {
             let attribute_val: Option<T> = record.get_by_name(attribute_name).unwrap();
             attribute_values.push(attribute_val);
