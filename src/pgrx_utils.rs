@@ -5,7 +5,9 @@ use pgrx::{
     PgTupleDesc,
 };
 
-pub(crate) fn collect_attributes<'a>(tupdesc: &'a PgTupleDesc) -> Vec<&'a FormData_pg_attribute> {
+pub(crate) fn collect_valid_attributes<'a>(
+    tupdesc: &'a PgTupleDesc,
+) -> Vec<&'a FormData_pg_attribute> {
     let mut attributes = vec![];
     let mut attributes_set = HashSet::<&str>::new();
 

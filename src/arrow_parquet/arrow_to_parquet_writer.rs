@@ -18,12 +18,12 @@ use pgrx::{
 use crate::{
     arrow_parquet::{
         pg_to_arrow::PgTypeToArrowArray,
-        schema_visitor::{parse_schema, to_parquet_schema},
+        schema_visitor::{parse_arrow_schema_from_tupledesc, parse_parquet_schema_from_tupledesc},
     },
     pgrx_utils::tuple_desc,
 };
 
-pub(crate) fn write_to_parquet(
+pub(crate) fn write_tuples_to_parquet(
     filename: &str,
     tuples: Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>,
     typoid: Oid,
@@ -32,8 +32,8 @@ pub(crate) fn write_to_parquet(
     let tupledesc = tuple_desc(typoid, typmod);
 
     // parse and verify schema for given tuples
-    let arrow_schema = parse_schema(tupledesc, "root");
-    let parquet_schema = to_parquet_schema(&arrow_schema);
+    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc.clone(), "root");
+    let parquet_schema = parse_parquet_schema_from_tupledesc(tupledesc, "root");
 
     // write tuples to parquet file
     let writer_props = Arc::new(WriterProperties::default());

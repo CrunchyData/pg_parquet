@@ -8,7 +8,8 @@ use pg_sys::{
 use pgrx::{is_a, prelude::*, PgList, PgTupleDesc};
 
 use crate::arrow_parquet::{
-    arrow_to_parquet_writer::write_to_parquet, schema_visitor::schema_string,
+    arrow_to_parquet_writer::write_tuples_to_parquet,
+    schema_visitor::parquet_schema_string_from_tupledesc,
 };
 
 #[repr(C)]
@@ -61,9 +62,12 @@ fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List, filename: *mut 
     let typoid = tupledesc.tdtypeid;
     let typmod = tupledesc.tdtypmod;
 
-    pgrx::debug2!("schema for tuples: {}", schema_string(tupledesc.clone()));
+    pgrx::debug2!(
+        "schema for tuples: {}",
+        parquet_schema_string_from_tupledesc(tupledesc.clone())
+    );
 
-    write_to_parquet(filename, tuples, typoid, typmod);
+    write_tuples_to_parquet(filename, tuples, typoid, typmod);
 }
 
 #[pg_guard]

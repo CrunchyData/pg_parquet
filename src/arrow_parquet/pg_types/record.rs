@@ -21,12 +21,13 @@ use pgrx::{
 use crate::{
     arrow_parquet::{
         pg_to_arrow::PgTypeToArrowArray,
-        utils::{array_offsets, create_arrow_list_array, create_arrow_null_list_array},
+        utils::{arrow_array_offsets, create_arrow_list_array, create_arrow_null_list_array},
     },
-    pgrx_utils::{array_element_typoid, is_array_type, is_composite_type},
+    pgrx_utils::{
+        array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
+        tuple_desc,
+    },
 };
-
-use crate::pgrx_utils::{collect_attributes, tuple_desc};
 
 // PgHeapTuple
 impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
@@ -38,7 +39,7 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 
         let tupledesc = tuple_desc(typoid, typmod);
 
-        let attributes = collect_attributes(&tupledesc);
+        let attributes = collect_valid_attributes(&tupledesc);
 
         for attribute in attributes {
             let attribute_name = attribute.name();
@@ -83,7 +84,7 @@ impl PgTypeToArrowArray<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>
     for Vec<Option<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>>
 {
     fn as_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
-        let (offsets, all_nulls) = array_offsets(&self);
+        let (offsets, all_nulls) = arrow_array_offsets(&self);
 
         let len = self.len();
 
@@ -111,194 +112,151 @@ fn collect_attribute_array_from_tuples(
     };
 
     match attribute_typoid {
-        FLOAT4OID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<f32>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        FLOAT4ARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<f32>>>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        FLOAT8OID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<f64>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        FLOAT8ARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<f64>>>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        INT2OID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<i16>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        INT2ARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<i16>>>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        INT4OID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<i32>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        INT4ARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<i32>>>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        INT8OID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<i64>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        INT8ARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<i64>>>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        BOOLOID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<bool>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        BOOLARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<bool>>>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        DATEOID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<Date>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        DATEARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<Date>>>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        TIMEOID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<Time>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        TIMEARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<Time>>>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        TIMETZOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<TimeWithTimeZone>(
-                tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
+        FLOAT4OID => collect_attribute_array_from_tuples_helper::<f32>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        FLOAT4ARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<f32>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        FLOAT8OID => collect_attribute_array_from_tuples_helper::<f64>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        FLOAT8ARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<f64>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        INT2OID => collect_attribute_array_from_tuples_helper::<i16>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        INT2ARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<i16>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        INT4OID => collect_attribute_array_from_tuples_helper::<i32>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        INT4ARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<i32>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        INT8OID => collect_attribute_array_from_tuples_helper::<i64>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        INT8ARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<i64>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        BOOLOID => collect_attribute_array_from_tuples_helper::<bool>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        BOOLARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<bool>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        DATEOID => collect_attribute_array_from_tuples_helper::<Date>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        DATEARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Date>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        TIMEOID => collect_attribute_array_from_tuples_helper::<Time>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        TIMEARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Time>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        TIMETZOID => collect_attribute_array_from_tuples_helper::<TimeWithTimeZone>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
         TIMETZARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<
-                Vec<Option<TimeWithTimeZone>>,
-            >(tuples, attribute_name);
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        TIMESTAMPOID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<Timestamp>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
-        TIMESTAMPARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<
-                Vec<Option<Timestamp>>,
-            >(tuples, attribute_name);
-            attribute_array.as_arrow_array(
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
-        TIMESTAMPTZOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<TimestampWithTimeZone>(
+            collect_attribute_array_from_tuples_helper::<Vec<Option<TimeWithTimeZone>>>(
                 tuples,
                 attribute_name,
-            );
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
+                attribute_element_typoid,
+                attribute_typmod,
+            )
         }
+        TIMESTAMPOID => collect_attribute_array_from_tuples_helper::<Timestamp>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        TIMESTAMPARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Timestamp>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        TIMESTAMPTZOID => collect_attribute_array_from_tuples_helper::<TimestampWithTimeZone>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
         TIMESTAMPTZARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<
-                Vec<Option<TimestampWithTimeZone>>,
-            >(tuples, attribute_name);
-            attribute_array.as_arrow_array(
+            collect_attribute_array_from_tuples_helper::<Vec<Option<TimestampWithTimeZone>>>(
+                tuples,
                 attribute_name,
                 attribute_element_typoid,
                 attribute_typmod,
             )
         }
-        TEXTOID | VARCHAROID => {
-            let attribute_array =
-                collect_attribute_array_from_tuples_helper::<String>(tuples, attribute_name);
-            attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
-        }
+        TEXTOID | VARCHAROID => collect_attribute_array_from_tuples_helper::<String>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
         TEXTARRAYOID | VARCHARARRAYOID => {
-            let attribute_array = collect_attribute_array_from_tuples_helper::<Vec<Option<String>>>(
+            collect_attribute_array_from_tuples_helper::<Vec<Option<String>>>(
                 tuples,
-                attribute_name,
-            );
-            attribute_array.as_arrow_array(
                 attribute_name,
                 attribute_element_typoid,
                 attribute_typmod,
@@ -306,17 +264,17 @@ fn collect_attribute_array_from_tuples(
         }
         _ => {
             if is_composite_type(attribute_typoid) {
-                let attribute_array = collect_attribute_array_from_tuples_helper::<
-                    PgHeapTuple<AllocatedByRust>,
-                >(tuples, attribute_name);
-
-                attribute_array.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
+                collect_attribute_array_from_tuples_helper::<PgHeapTuple<AllocatedByRust>>(
+                    tuples,
+                    attribute_name,
+                    attribute_typoid,
+                    attribute_typmod,
+                )
             } else if is_composite_type(attribute_element_typoid) {
-                let attribute_array = collect_attribute_array_from_tuples_helper::<
+                collect_attribute_array_from_tuples_helper::<
                     Vec<Option<PgHeapTuple<AllocatedByRust>>>,
-                >(tuples, attribute_name);
-
-                attribute_array.as_arrow_array(
+                >(
+                    tuples,
                     attribute_name,
                     attribute_element_typoid,
                     attribute_typmod,
@@ -331,7 +289,9 @@ fn collect_attribute_array_from_tuples(
 fn collect_attribute_array_from_tuples_helper<T>(
     tuples: &[Option<PgHeapTuple<'_, AllocatedByRust>>],
     attribute_name: &str,
-) -> impl PgTypeToArrowArray<T>
+    attribute_typoid: Oid,
+    attribute_typmod: i32,
+) -> (FieldRef, ArrayRef)
 where
     T: IntoDatum + FromDatum + 'static,
     Vec<Option<T>>: PgTypeToArrowArray<T>,
@@ -349,5 +309,5 @@ where
         }
     }
 
-    attribute_values
+    attribute_values.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
 }

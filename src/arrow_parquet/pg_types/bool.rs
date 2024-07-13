@@ -8,7 +8,7 @@ use pgrx::pg_sys::Oid;
 
 use crate::arrow_parquet::{
     pg_to_arrow::PgTypeToArrowArray,
-    utils::{array_offsets, create_arrow_list_array, create_arrow_null_list_array},
+    utils::{arrow_array_offsets, create_arrow_list_array, create_arrow_null_list_array},
 };
 
 // Bool
@@ -27,7 +27,7 @@ impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
 // Bool[]
 impl PgTypeToArrowArray<Vec<Option<bool>>> for Vec<Option<Vec<Option<bool>>>> {
     fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
-        let (offsets, all_nulls) = array_offsets(&self);
+        let (offsets, all_nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Int8, true);
 

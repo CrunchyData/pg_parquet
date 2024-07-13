@@ -9,19 +9,22 @@ use pg_sys::{
 use pgrx::{prelude::*, PgTupleDesc};
 
 use crate::pgrx_utils::{
-    array_element_typoid, collect_attributes, is_array_type, is_composite_type, tuple_desc,
+    array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type, tuple_desc,
 };
 
-pub(crate) fn schema_string(tupledesc: PgTupleDesc) -> String {
-    let arrow_schema = parse_schema(tupledesc, "root");
-    let parquet_schema = to_parquet_schema(&arrow_schema);
+pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> String {
+    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc, "root");
+    let parquet_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();
 
     let mut buf = Vec::new();
     parquet::schema::printer::print_schema(&mut buf, &parquet_schema.root_schema_ptr());
     String::from_utf8(buf).unwrap()
 }
 
-pub(crate) fn parse_schema(tupledesc: PgTupleDesc, array_name: &'static str) -> Schema {
+pub(crate) fn parse_arrow_schema_from_tupledesc(
+    tupledesc: PgTupleDesc,
+    array_name: &'static str,
+) -> Schema {
     let typoid = tupledesc.oid();
     let typmod = tupledesc.typmod();
     assert!(typoid == RECORDOID);
@@ -29,11 +32,15 @@ pub(crate) fn parse_schema(tupledesc: PgTupleDesc, array_name: &'static str) -> 
     Schema::new(vec![list_field])
 }
 
-pub(crate) fn to_parquet_schema(arrow_schema: &Schema) -> SchemaDescriptor {
-    arrow_to_parquet_schema(arrow_schema).unwrap()
+pub(crate) fn parse_parquet_schema_from_tupledesc(
+    tupledesc: PgTupleDesc,
+    array_name: &'static str,
+) -> SchemaDescriptor {
+    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc, array_name);
+    arrow_to_parquet_schema(&arrow_schema).unwrap()
 }
 
-fn list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<Field> {
+fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<Field> {
     let field = match typoid {
         FLOAT4OID => Field::new(array_name, arrow::datatypes::DataType::Float32, true),
         FLOAT8OID => Field::new(array_name, arrow::datatypes::DataType::Float64, true),
@@ -80,7 +87,7 @@ fn list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<Field> 
     list_field.into()
 }
 
-fn list_field_from_struct_field(array_name: &str, struct_field: Arc<Field>) -> Arc<Field> {
+fn create_list_field_from_struct_field(array_name: &str, struct_field: Arc<Field>) -> Arc<Field> {
     let list_field = Field::new(
         array_name,
         arrow::datatypes::DataType::List(struct_field),
@@ -95,7 +102,7 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> Arc<F
 
     let mut child_fields: Vec<Arc<Field>> = vec![];
 
-    let attributes = collect_attributes(&tupledesc);
+    let attributes = collect_valid_attributes(&tupledesc);
 
     for attribute in attributes {
         if attribute.is_dropped() {
@@ -147,9 +154,9 @@ fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &'static str) -> Arc<
     if is_composite_type(typoid) {
         let tupledesc = tuple_desc(typoid, typmod);
         let struct_field = visit_struct_schema(tupledesc, array_name);
-        list_field_from_struct_field(array_name, struct_field)
+        create_list_field_from_struct_field(array_name, struct_field)
     } else {
-        list_field_from_primitive_field(array_name, typoid)
+        create_list_field_from_primitive_field(array_name, typoid)
     }
 }
 

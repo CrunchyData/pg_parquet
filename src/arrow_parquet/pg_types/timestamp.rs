@@ -9,7 +9,7 @@ use pgrx::{pg_sys::Oid, Timestamp};
 use crate::{
     arrow_parquet::{
         pg_to_arrow::PgTypeToArrowArray,
-        utils::{array_offsets, create_arrow_list_array, create_arrow_null_list_array},
+        utils::{arrow_array_offsets, create_arrow_list_array, create_arrow_null_list_array},
     },
     type_compat::timestamp_to_i64,
 };
@@ -32,7 +32,7 @@ impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
 // Timestamp[]
 impl PgTypeToArrowArray<Vec<Option<Timestamp>>> for Vec<Option<Vec<Option<Timestamp>>>> {
     fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
-        let (offsets, all_nulls) = array_offsets(&self);
+        let (offsets, all_nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Timestamp(TimeUnit::Microsecond, None), true);
 
