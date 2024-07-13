@@ -7,6 +7,10 @@ use pg_sys::{
 };
 use pgrx::{is_a, prelude::*, PgList, PgTupleDesc};
 
+use crate::arrow_parquet::{
+    arrow_to_parquet_writer::write_to_parquet, schema_visitor::schema_string,
+};
+
 #[repr(C)]
 struct ParquetCopyDestReceiver {
     dest: DestReceiver,
@@ -27,16 +31,22 @@ fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List, filename: *mut 
 
     let tuples = tuples
         .iter_ptr()
-        .map(|tup_ptr| unsafe { PgHeapTuple::from_heap_tuple(tupledesc.clone(), tup_ptr) })
+        .map(|tup_ptr: *mut HeapTupleData| unsafe {
+            if tup_ptr.is_null() {
+                None
+            } else {
+                let tup = PgHeapTuple::from_heap_tuple(tupledesc.clone(), tup_ptr).into_owned();
+                Some(tup)
+            }
+        })
         .collect::<Vec<_>>();
 
-    unsafe {
-        pgrx::direct_function_call::<Datum>(
-            crate::pgparquet::serialize,
-            &[tuples.into_datum(), filename.into_datum()],
-        )
-        .unwrap();
-    }
+    let typeoid = tupledesc.tdtypeid;
+    let typmod = tupledesc.tdtypmod;
+
+    pgrx::debug2!("schema for tuples: {}", schema_string(tupledesc.clone()));
+
+    write_to_parquet(filename, tuples, typeoid, typmod);
 }
 
 /*
@@ -70,7 +80,10 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
     let slot = unsafe { PgBox::from_pg(slot) };
     let datums = slot.tts_values;
     let datums: Vec<Datum> = unsafe { std::slice::from_raw_parts(datums, natts).to_vec() };
-    let datums: Vec<Option<Datum>> = datums.into_iter().map(|d| Some(d)).collect();
+    let datums: Vec<Option<Datum>> = datums
+        .into_iter()
+        .map(|d| if d.is_null() { None } else { Some(d) })
+        .collect();
     let tupledesc = unsafe { PgTupleDesc::from_pg(parquet_dest.tupledesc) };
 
     let heap_tuple = unsafe { PgHeapTuple::from_datums(tupledesc.clone(), datums).unwrap() };
@@ -88,7 +101,7 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
         );
 
         parquet_dest.tuple_count = 0;
-        unsafe {pg_sys::list_free_deep(parquet_dest.tuples)};
+        unsafe { pg_sys::list_free_deep(parquet_dest.tuples) };
         parquet_dest.tuples = PgList::<HeapTupleData>::new().into_pg();
     }
 
@@ -135,7 +148,7 @@ pub extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
         );
     }
 
-    unsafe {pg_sys::list_free_deep(parquet_dest.tuples)};
+    unsafe { pg_sys::list_free_deep(parquet_dest.tuples) };
 
     if !parquet_dest.file.is_null() {
         unsafe { FreeFile(parquet_dest.file) };

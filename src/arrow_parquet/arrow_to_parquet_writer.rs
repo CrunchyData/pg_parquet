@@ -9,23 +9,30 @@ use parquet::{
     },
     schema::types::SchemaDescriptor,
 };
-use pgrx::{heap_tuple::PgHeapTuple, AllocatedByRust, IntoDatum};
-
-use crate::{
-    arrow_parquet::pg_to_arrow_types::PgTypeToArrowArray,
-    arrow_parquet::schema_visitor::{parse_schema, to_parquet_schema},
-    pgrx_utils::tupledesc_for_tuples,
+use pgrx::{
+    heap_tuple::PgHeapTuple,
+    pg_sys::{Oid, RECORDOID},
+    AllocatedByRust,
 };
 
-pub(crate) fn write_to_parquet(filename: &str, tuples: Vec<PgHeapTuple<'_, AllocatedByRust>>) {
-    let (tuples, tupledesc) = tupledesc_for_tuples(tuples);
+use crate::{
+    arrow_parquet::{
+        pg_to_arrow_types::PgTypeToArrowArray,
+        schema_visitor::{parse_schema, to_parquet_schema},
+    },
+    pgrx_utils::tuple_desc,
+};
 
-    let array_oid = tuples
-        .composite_type_oid()
-        .expect("array of records are expected");
+pub(crate) fn write_to_parquet(
+    filename: &str,
+    tuples: Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>,
+    typeoid: Oid,
+    typemod: i32,
+) {
+    let tupledesc = tuple_desc(typeoid, typemod);
 
     // parse and verify schema for given tuples
-    let arrow_schema = parse_schema(array_oid, tupledesc, "root");
+    let arrow_schema = parse_schema(tupledesc, "root");
     let parquet_schema = to_parquet_schema(&arrow_schema);
 
     // write tuples to parquet file
@@ -36,6 +43,8 @@ pub(crate) fn write_to_parquet(filename: &str, tuples: Vec<PgHeapTuple<'_, Alloc
 
     write_to_row_group(
         tuples,
+        typeoid,
+        typemod,
         parquet_schema.into(),
         arrow_schema.into(),
         writer_props,
@@ -47,14 +56,17 @@ pub(crate) fn write_to_parquet(filename: &str, tuples: Vec<PgHeapTuple<'_, Alloc
 }
 
 fn write_to_row_group(
-    tuples: Vec<PgHeapTuple<'_, AllocatedByRust>>,
+    tuples: Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>,
+    typoid: Oid,
+    typmod: i32,
     parquet_schema: Arc<SchemaDescriptor>,
     arrow_schema: SchemaRef,
     writer_props: Arc<WriterProperties>,
     row_group: &mut SerializedRowGroupWriter<std::fs::File>,
 ) {
     // compute arrow root array
-    let (_, root_array) = vec![tuples].as_arrow_array("root");
+    assert!(typoid == RECORDOID);
+    let (_, root_array) = vec![Some(tuples)].as_arrow_array("root", typoid, typmod);
 
     let root = vec![root_array];
 
