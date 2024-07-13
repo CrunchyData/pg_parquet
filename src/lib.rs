@@ -1,9 +1,9 @@
 use pgrx::prelude::*;
 
 mod arrow_parquet;
-mod conversion;
 mod parquet_copy_hook;
 mod pgrx_utils;
+mod type_compat;
 
 pgrx::pg_module_magic!();
 

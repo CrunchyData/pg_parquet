@@ -41,12 +41,12 @@ fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List, filename: *mut 
         })
         .collect::<Vec<_>>();
 
-    let typeoid = tupledesc.tdtypeid;
+    let typoid = tupledesc.tdtypeid;
     let typmod = tupledesc.tdtypmod;
 
     pgrx::debug2!("schema for tuples: {}", schema_string(tupledesc.clone()));
 
-    write_to_parquet(filename, tuples, typeoid, typmod);
+    write_to_parquet(filename, tuples, typoid, typmod);
 }
 
 /*

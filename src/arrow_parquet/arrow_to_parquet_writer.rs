@@ -17,7 +17,7 @@ use pgrx::{
 
 use crate::{
     arrow_parquet::{
-        pg_to_arrow_types::PgTypeToArrowArray,
+        pg_to_arrow::PgTypeToArrowArray,
         schema_visitor::{parse_schema, to_parquet_schema},
     },
     pgrx_utils::tuple_desc,
@@ -26,10 +26,10 @@ use crate::{
 pub(crate) fn write_to_parquet(
     filename: &str,
     tuples: Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>,
-    typeoid: Oid,
-    typemod: i32,
+    typoid: Oid,
+    typmod: i32,
 ) {
-    let tupledesc = tuple_desc(typeoid, typemod);
+    let tupledesc = tuple_desc(typoid, typmod);
 
     // parse and verify schema for given tuples
     let arrow_schema = parse_schema(tupledesc, "root");
@@ -43,8 +43,8 @@ pub(crate) fn write_to_parquet(
 
     write_to_row_group(
         tuples,
-        typeoid,
-        typemod,
+        typoid,
+        typmod,
         parquet_schema.into(),
         arrow_schema.into(),
         writer_props,

@@ -3,14 +3,14 @@ use std::sync::Arc;
 use arrow::datatypes::{Field, Fields, Schema};
 use parquet::{arrow::arrow_to_parquet_schema, schema::types::SchemaDescriptor};
 use pg_sys::{
-    Oid, BOOLARRAYOID, BOOLOID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID,
-    FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, TEXTARRAYOID,
-    TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID,
-    TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID, VARCHAROID,
+    Oid, BOOLOID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, RECORDOID, TEXTOID,
+    TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
-use crate::pgrx_utils::{collect_attributes, tuple_desc};
+use crate::pgrx_utils::{
+    array_element_typoid, collect_attributes, is_array_type, is_composite_type, tuple_desc,
+};
 
 pub(crate) fn schema_string(tupledesc: PgTupleDesc) -> String {
     let arrow_schema = parse_schema(tupledesc, "root");
@@ -22,7 +22,10 @@ pub(crate) fn schema_string(tupledesc: PgTupleDesc) -> String {
 }
 
 pub(crate) fn parse_schema(tupledesc: PgTupleDesc, array_name: &'static str) -> Schema {
-    let list_field = visit_list_schema(tupledesc.oid(), Some(tupledesc), array_name);
+    let typoid = tupledesc.oid();
+    let typmod = tupledesc.typmod();
+    assert!(typoid == RECORDOID);
+    let list_field = visit_list_schema(typoid, typmod, array_name);
     Schema::new(vec![list_field])
 }
 
@@ -30,21 +33,21 @@ pub(crate) fn to_parquet_schema(arrow_schema: &Schema) -> SchemaDescriptor {
     arrow_to_parquet_schema(arrow_schema).unwrap()
 }
 
-fn list_field_from_primitive_field(array_name: &str, arraytypoid: Oid) -> Arc<Field> {
-    let field = match arraytypoid {
-        FLOAT4ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Float32, true),
-        FLOAT8ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Float64, true),
-        BOOLARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Int8, true),
-        INT2ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Int16, true),
-        INT4ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Int32, true),
-        INT8ARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Int64, true),
-        DATEARRAYOID => Field::new(array_name, arrow::datatypes::DataType::Date32, true),
-        TIMESTAMPARRAYOID => Field::new(
+fn list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<Field> {
+    let field = match typoid {
+        FLOAT4OID => Field::new(array_name, arrow::datatypes::DataType::Float32, true),
+        FLOAT8OID => Field::new(array_name, arrow::datatypes::DataType::Float64, true),
+        BOOLOID => Field::new(array_name, arrow::datatypes::DataType::Int8, true),
+        INT2OID => Field::new(array_name, arrow::datatypes::DataType::Int16, true),
+        INT4OID => Field::new(array_name, arrow::datatypes::DataType::Int32, true),
+        INT8OID => Field::new(array_name, arrow::datatypes::DataType::Int64, true),
+        DATEOID => Field::new(array_name, arrow::datatypes::DataType::Date32, true),
+        TIMESTAMPOID => Field::new(
             array_name,
             arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
             true,
         ),
-        TIMESTAMPTZARRAYOID => Field::new(
+        TIMESTAMPTZOID => Field::new(
             array_name,
             arrow::datatypes::DataType::Timestamp(
                 arrow::datatypes::TimeUnit::Microsecond,
@@ -52,21 +55,19 @@ fn list_field_from_primitive_field(array_name: &str, arraytypoid: Oid) -> Arc<Fi
             ),
             true,
         ),
-        TIMEARRAYOID => Field::new(
+        TIMEOID => Field::new(
             array_name,
             arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             true,
         ),
-        TIMETZARRAYOID => Field::new(
+        TIMETZOID => Field::new(
             array_name,
             arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             true,
         ),
-        TEXTARRAYOID | VARCHARARRAYOID => {
-            Field::new(array_name, arrow::datatypes::DataType::Utf8, true)
-        }
+        TEXTOID | VARCHAROID => Field::new(array_name, arrow::datatypes::DataType::Utf8, true),
         _ => {
-            panic!("unsupported array type {}", arraytypoid);
+            panic!("unsupported array type {}", typoid);
         }
     };
 
@@ -89,11 +90,10 @@ fn list_field_from_struct_field(array_name: &str, struct_field: Arc<Field>) -> A
     list_field.into()
 }
 
-fn visit_struct_schema<'a>(
-    attributes: Vec<&'a pg_sys::FormData_pg_attribute>,
-    elem_name: &'static str,
-) -> Arc<Field> {
+fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> Arc<Field> {
     let mut child_fields: Vec<Arc<Field>> = vec![];
+
+    let attributes = collect_attributes(&tupledesc);
 
     for attribute in attributes {
         if attribute.is_dropped() {
@@ -104,38 +104,24 @@ fn visit_struct_schema<'a>(
         let attribute_oid = attribute.type_oid().value();
         let attribute_typmod = attribute.type_mod();
 
-        let is_attribute_composite = unsafe { pg_sys::type_is_rowtype(attribute_oid) };
-        let is_attribute_array = unsafe { pg_sys::type_is_array(attribute_oid) };
-
-        let child_field = if is_attribute_composite {
+        let child_field = if is_composite_type(attribute_oid) {
             let attribute_tupledesc = tuple_desc(attribute_oid, attribute_typmod);
-            let attribute_attributes = collect_attributes(&attribute_tupledesc);
             visit_struct_schema(
-                attribute_attributes,
+                attribute_tupledesc,
                 // todo: do not leak
                 attribute_name.to_string().leak(),
             )
-        } else if is_attribute_array {
-            let attribute_element_typoid = unsafe { pg_sys::get_element_type(attribute_oid) };
-            let is_array_of_composite =
-                unsafe { pg_sys::type_is_rowtype(attribute_element_typoid) };
-
-            let attribute_tupledesc = if is_array_of_composite {
-                let tupledesc = tuple_desc(attribute_element_typoid, attribute_typmod);
-                Some(tupledesc)
-            } else {
-                None
-            };
-
+        } else if is_array_type(attribute_oid) {
+            let attribute_element_typoid = array_element_typoid(attribute_oid);
             visit_list_schema(
-                attribute.type_oid().value(),
-                attribute_tupledesc,
+                attribute_element_typoid,
+                attribute_typmod,
                 // todo: do not leak
                 attribute_name.to_string().leak(),
             )
         } else {
             visit_primitive_schema(
-                attribute.type_oid().value(),
+                attribute_oid,
                 // todo: do not leak
                 attribute_name.to_string().leak(),
             )
@@ -144,27 +130,22 @@ fn visit_struct_schema<'a>(
         child_fields.push(child_field);
     }
 
-    Field::new(
+    let field = Field::new(
         elem_name,
         arrow::datatypes::DataType::Struct(Fields::from(child_fields)),
         true,
-    )
-    .into()
+    );
+
+    field.into()
 }
 
-fn visit_list_schema(
-    arraytypoid: Oid,
-    tupledesc: Option<PgTupleDesc>,
-    array_name: &'static str,
-) -> Arc<Field> {
-    let is_array_of_composite = tupledesc.is_some();
-    if is_array_of_composite {
-        let tupledesc = tupledesc.unwrap();
-        let array_element_attributes = collect_attributes(&tupledesc);
-        let struct_field = visit_struct_schema(array_element_attributes, array_name);
-        return list_field_from_struct_field(array_name, struct_field);
+fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &'static str) -> Arc<Field> {
+    if is_composite_type(typoid) {
+        let tupledesc = tuple_desc(typoid, typmod);
+        let struct_field = visit_struct_schema(tupledesc, array_name);
+        list_field_from_struct_field(array_name, struct_field)
     } else {
-        list_field_from_primitive_field(array_name, arraytypoid)
+        list_field_from_primitive_field(array_name, typoid)
     }
 }
 
