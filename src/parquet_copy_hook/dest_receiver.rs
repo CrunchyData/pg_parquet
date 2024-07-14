@@ -25,6 +25,7 @@ struct ParquetCopyDestReceiver {
     natts: i32,
     tuple_count: i64,
     tuples: *mut List,
+    batch_size: i64,
 }
 
 static mut PARQUET_WRITER_CONTEXT: RefCell<Option<ParquetWriterContext>> = RefCell::new(None);
@@ -129,9 +130,8 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
 
     collect_tuple(&mut parquet_dest, heap_tuple);
 
-    if parquet_dest.tuple_count == 100 {
+    if parquet_dest.tuple_count == parquet_dest.batch_size {
         copy_buffered_tuples(parquet_dest.tupledesc, parquet_dest.tuples);
-
         reset_collected_tuples(&mut parquet_dest);
     }
 
@@ -159,7 +159,10 @@ pub extern "C" fn copy_destroy(_dest: *mut DestReceiver) {
     ()
 }
 
-pub(crate) fn create_parquet_dest_receiver(filename: *mut i8) -> PgBox<DestReceiver> {
+pub(crate) fn create_parquet_dest_receiver(
+    filename: *mut i8,
+    batch_size: i64,
+) -> PgBox<DestReceiver> {
     let mut parquet_dest = unsafe { PgBox::<ParquetCopyDestReceiver>::alloc0() };
     parquet_dest.dest.receiveSlot = Some(copy_receive);
     parquet_dest.dest.rStartup = Some(copy_startup);
@@ -171,6 +174,7 @@ pub(crate) fn create_parquet_dest_receiver(filename: *mut i8) -> PgBox<DestRecei
     parquet_dest.natts = 0;
     parquet_dest.tuple_count = 0;
     parquet_dest.tuples = std::ptr::null_mut();
+    parquet_dest.batch_size = batch_size;
 
     // it should be into_pg() (not as_ptr()) to prevent pfree of Rust allocated memory
     let dest: *mut DestReceiver = unsafe { std::mem::transmute(parquet_dest.into_pg()) };
