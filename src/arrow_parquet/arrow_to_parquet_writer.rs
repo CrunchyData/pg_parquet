@@ -1,104 +1,125 @@
-use std::sync::Arc;
+use std::{fs::File, sync::Arc};
 
-use arrow::datatypes::SchemaRef;
+use arrow::{
+    array::ArrayRef,
+    datatypes::{FieldRef, SchemaRef},
+};
 use parquet::{
     arrow::arrow_writer::{compute_leaves, get_column_writers},
-    file::{
-        properties::WriterProperties,
-        writer::{SerializedFileWriter, SerializedRowGroupWriter},
-    },
+    file::{properties::WriterProperties, writer::SerializedFileWriter},
     schema::types::SchemaDescriptor,
 };
-use pgrx::{
-    heap_tuple::PgHeapTuple,
-    pg_sys::{Oid, RECORDOID},
-    AllocatedByRust,
-};
+use pgrx::{heap_tuple::PgHeapTuple, pg_sys::RECORDOID, AllocatedByRust, PgTupleDesc};
 
 use crate::{
     arrow_parquet::{
-        pg_to_arrow::PgTypeToArrowArray,
+        pg_types::record::collect_attribute_array_from_tuples,
         schema_visitor::{parse_arrow_schema_from_tupledesc, parse_parquet_schema_from_tupledesc},
     },
-    pgrx_utils::tuple_desc,
+    pgrx_utils::collect_valid_attributes,
 };
 
-pub(crate) fn write_tuples_to_parquet(
-    filename: &str,
-    tuples: Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>,
-    typoid: Oid,
-    typmod: i32,
-) {
-    let tupledesc = tuple_desc(typoid, typmod);
-
-    // parse and verify schema for given tuples
-    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc.clone(), "root");
-    let parquet_schema = parse_parquet_schema_from_tupledesc(tupledesc, "root");
-
-    // write tuples to parquet file
-    let writer_props = Arc::new(WriterProperties::default());
-    let mut parquet_writer =
-        prepare_parquet_writer(filename, &parquet_schema, writer_props.clone());
-    let mut row_group = parquet_writer.next_row_group().unwrap();
-
-    write_to_row_group(
-        tuples,
-        typoid,
-        typmod,
-        parquet_schema.into(),
-        arrow_schema.into(),
-        writer_props,
-        &mut row_group,
-    );
-
-    row_group.close().unwrap();
-    parquet_writer.close().unwrap();
+pub(crate) struct ParquetWriterContext<'a> {
+    writer_props: Arc<WriterProperties>,
+    parquet_writer: SerializedFileWriter<File>,
+    tupledesc: PgTupleDesc<'a>,
+    parquet_schema: SchemaDescriptor,
+    arrow_schema: SchemaRef,
 }
 
-fn write_to_row_group(
-    tuples: Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>,
-    typoid: Oid,
-    typmod: i32,
-    parquet_schema: Arc<SchemaDescriptor>,
-    arrow_schema: SchemaRef,
-    writer_props: Arc<WriterProperties>,
-    row_group: &mut SerializedRowGroupWriter<std::fs::File>,
-) {
-    pgrx::pg_sys::check_for_interrupts!();
+impl<'a> ParquetWriterContext<'a> {
+    pub(crate) fn new(filename: &str, tupledesc: PgTupleDesc<'a>) -> ParquetWriterContext<'a> {
+        assert!(tupledesc.oid() == RECORDOID);
 
-    // compute arrow root array
-    assert!(typoid == RECORDOID);
-    let (_, root_array) = vec![Some(tuples)].as_arrow_array("root", typoid, typmod);
+        let writer_props = Arc::new(WriterProperties::default());
 
-    let root = vec![root_array];
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(filename)
+            .unwrap();
 
-    // get column writers
-    let col_writers = get_column_writers(&parquet_schema, &writer_props, &arrow_schema).unwrap();
+        let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc.clone()).into();
+        let parquet_schema = parse_parquet_schema_from_tupledesc(tupledesc.clone());
 
-    // compute and append leave columns to row group, each column writer writes a column chunk
-    let mut worker_iter = col_writers.into_iter();
-    for (arr, field) in root.iter().zip(&arrow_schema.fields) {
-        for leave_columns in compute_leaves(field, arr).unwrap() {
-            let mut col_writer = worker_iter.next().unwrap();
-            col_writer.write(&leave_columns).unwrap();
+        let root_schema = parquet_schema.root_schema_ptr();
+        let parquet_writer =
+            SerializedFileWriter::new(file, root_schema, writer_props.clone()).unwrap();
 
-            let chunk = col_writer.close().unwrap();
-            chunk.append_to_row_group(row_group).unwrap();
+        ParquetWriterContext {
+            writer_props,
+            parquet_writer,
+            parquet_schema,
+            arrow_schema,
+            tupledesc,
         }
+    }
+
+    pub(crate) fn write_new_row_group(
+        &mut self,
+        tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+    ) {
+        pgrx::pg_sys::check_for_interrupts!();
+
+        let parquet_schema = &self.parquet_schema;
+        let writer_props = self.writer_props.clone();
+        let arrow_schema = self.arrow_schema.clone();
+        let parquet_writer = &mut self.parquet_writer;
+
+        let mut row_group = parquet_writer.next_row_group().unwrap();
+
+        // collect arrow arrays for each attribute in the tuples
+        let tuple_attribute_arrow_arrays =
+            collect_arrow_attribute_arrays_from_tupledesc(&tuples, &self.tupledesc);
+
+        // get column writers
+        let col_writers =
+            get_column_writers(&parquet_schema, &writer_props, &arrow_schema).unwrap();
+
+        // compute and append leave columns to row group, each column writer writes a column chunk
+        let mut worker_iter = col_writers.into_iter();
+        for (field, arr) in tuple_attribute_arrow_arrays.iter() {
+            for leave_columns in compute_leaves(field, arr).unwrap() {
+                let mut col_writer = worker_iter.next().unwrap();
+                col_writer.write(&leave_columns).unwrap();
+
+                let chunk = col_writer.close().unwrap();
+                chunk.append_to_row_group(&mut row_group).unwrap();
+            }
+        }
+
+        row_group.close().unwrap();
     }
 }
 
-fn prepare_parquet_writer(
-    filename: &str,
-    parquet_schema: &SchemaDescriptor,
-    writer_props: Arc<WriterProperties>,
-) -> SerializedFileWriter<std::fs::File> {
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .open(filename)
-        .unwrap();
+impl Drop for ParquetWriterContext<'_> {
+    fn drop(&mut self) {
+        self.parquet_writer.finish().unwrap();
+    }
+}
 
-    let root_schema = parquet_schema.root_schema_ptr();
-    SerializedFileWriter::new(file, root_schema, writer_props).unwrap()
+fn collect_arrow_attribute_arrays_from_tupledesc(
+    tuples: &[Option<PgHeapTuple<'_, AllocatedByRust>>],
+    tupledesc: &PgTupleDesc,
+) -> Vec<(FieldRef, ArrayRef)> {
+    let attributes = collect_valid_attributes(tupledesc);
+
+    let mut tuple_attribute_arrow_arrays = vec![];
+
+    for attribute in attributes {
+        let attribute_name = attribute.name();
+        let attribute_typoid = attribute.type_oid().value();
+        let attribute_typmod = attribute.type_mod();
+
+        let tuple_attribute_arrow_array = collect_attribute_array_from_tuples(
+            &tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        );
+
+        tuple_attribute_arrow_arrays.push(tuple_attribute_arrow_array);
+    }
+
+    tuple_attribute_arrow_arrays
 }

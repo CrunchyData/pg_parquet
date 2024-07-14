@@ -27,7 +27,6 @@ parquet = { version = "52.0.0", features = [
     "zstd",
     "base64"
 ]}
-parquet_derive = "52.0.0"
 pgrx = "=0.11.4"
 
 [dev-dependencies]

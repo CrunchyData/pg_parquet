@@ -13,7 +13,7 @@ use crate::pgrx_utils::{
 };
 
 pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> String {
-    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc, "root");
+    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc);
     let parquet_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();
 
     let mut buf = Vec::new();
@@ -21,22 +21,43 @@ pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> St
     String::from_utf8(buf).unwrap()
 }
 
-pub(crate) fn parse_arrow_schema_from_tupledesc(
-    tupledesc: PgTupleDesc,
-    array_name: &'static str,
-) -> Schema {
-    let typoid = tupledesc.oid();
-    let typmod = tupledesc.typmod();
-    assert!(typoid == RECORDOID);
-    let list_field = visit_list_schema(typoid, typmod, array_name);
-    Schema::new(vec![list_field])
+pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schema {
+    assert!(tupledesc.oid() == RECORDOID);
+
+    let mut struct_attribute_fields = vec![];
+
+    let attributes = collect_valid_attributes(&tupledesc);
+
+    for attribute in attributes {
+        let attribute_name = attribute.name();
+        let attribute_typoid = attribute.type_oid().value();
+        let attribute_typmod = attribute.type_mod();
+
+        let is_composite = is_composite_type(attribute_typoid);
+        let is_array = is_array_type(attribute_typoid);
+
+        let field = if is_composite {
+            let attribute_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
+            visit_struct_schema(attribute_tupledesc, attribute_name.to_string().leak())
+        } else if is_array {
+            let attribute_element_typoid = array_element_typoid(attribute_typoid);
+            visit_list_schema(
+                attribute_element_typoid,
+                attribute_typmod,
+                attribute_name.to_string().leak(),
+            )
+        } else {
+            visit_primitive_schema(attribute_typoid, attribute_name.to_string().leak())
+        };
+
+        struct_attribute_fields.push(field);
+    }
+
+    Schema::new(Fields::from(struct_attribute_fields))
 }
 
-pub(crate) fn parse_parquet_schema_from_tupledesc(
-    tupledesc: PgTupleDesc,
-    array_name: &'static str,
-) -> SchemaDescriptor {
-    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc, array_name);
+pub(crate) fn parse_parquet_schema_from_tupledesc(tupledesc: PgTupleDesc) -> SchemaDescriptor {
+    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc);
     arrow_to_parquet_schema(&arrow_schema).unwrap()
 }
 

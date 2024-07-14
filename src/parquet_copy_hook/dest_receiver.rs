@@ -1,27 +1,33 @@
+use std::cell::RefCell;
+
 use pg_sys::{
-    pg_analyze_and_rewrite_fixedparams, pg_plan_query, AllocateFile, BlessTupleDesc,
-    CommandDest_DestCopyOut, CommandTag_CMDTAG_COPY, CopyStmt, CreateNewPortal, Datum,
-    DestReceiver, FreeFile, GetActiveSnapshot, HeapTupleData, List, NodeTag::T_CopyStmt,
-    ParamListInfo, PlannedStmt, Portal, PortalDefineQuery, PortalDrop, QueryCompletion, RawStmt,
-    Snapshot, TupleDesc, TupleTableSlot, CURSOR_OPT_PARALLEL_OK, PG_BINARY_W, _IO_FILE,
+    pg_analyze_and_rewrite_fixedparams, pg_plan_query, BlessTupleDesc, CommandDest_DestCopyOut,
+    CommandTag_CMDTAG_COPY, CopyStmt, CreateNewPortal, Datum, DestReceiver, GetActiveSnapshot,
+    HeapTupleData, List, NodeTag::T_CopyStmt, ParamListInfo, PlannedStmt, Portal,
+    PortalDefineQuery, PortalDrop, QueryCompletion, RawStmt, Snapshot, TupleDesc, TupleTableSlot,
+    CURSOR_OPT_PARALLEL_OK,
 };
 use pgrx::{is_a, prelude::*, PgList, PgTupleDesc};
 
-use crate::arrow_parquet::{
-    arrow_to_parquet_writer::write_tuples_to_parquet,
-    schema_visitor::parquet_schema_string_from_tupledesc,
+use crate::{
+    arrow_parquet::{
+        arrow_to_parquet_writer::ParquetWriterContext,
+        schema_visitor::parquet_schema_string_from_tupledesc,
+    },
+    pgrx_utils::collect_valid_attributes,
 };
 
 #[repr(C)]
 struct ParquetCopyDestReceiver {
     dest: DestReceiver,
     filename: *mut i8,
-    file: *mut _IO_FILE,
     tupledesc: TupleDesc,
     natts: i32,
     tuple_count: i64,
     tuples: *mut List,
 }
+
+static mut PARQUET_WRITER_CONTEXT: RefCell<Option<ParquetWriterContext>> = RefCell::new(None);
 
 fn collect_tuple(
     parquet_dest: &mut PgBox<ParquetCopyDestReceiver>,
@@ -40,13 +46,9 @@ fn reset_collected_tuples(parquet_dest: &mut PgBox<ParquetCopyDestReceiver>) {
     parquet_dest.tuples = PgList::<HeapTupleData>::new().into_pg();
 }
 
-fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List, filename: *mut i8) {
+fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List) {
     let tupledesc = unsafe { PgTupleDesc::from_pg(tupledesc) };
     let tuples = unsafe { PgList::from_pg(tuples) };
-    let filename = unsafe { std::ffi::CStr::from_ptr(filename) }
-        .to_str()
-        .unwrap();
-
     let tuples = tuples
         .iter_ptr()
         .map(|tup_ptr: *mut HeapTupleData| unsafe {
@@ -59,15 +61,44 @@ fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List, filename: *mut 
         })
         .collect::<Vec<_>>();
 
-    let typoid = tupledesc.tdtypeid;
-    let typmod = tupledesc.tdtypmod;
-
     pgrx::debug2!(
         "schema for tuples: {}",
         parquet_schema_string_from_tupledesc(tupledesc.clone())
     );
 
-    write_tuples_to_parquet(filename, tuples, typoid, typmod);
+    unsafe {
+        PARQUET_WRITER_CONTEXT
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .write_new_row_group(tuples)
+    };
+}
+
+#[pg_guard]
+pub extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tupledesc: TupleDesc) {
+    let parquet_dest = dest as *mut ParquetCopyDestReceiver;
+    let mut parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
+
+    // bless tupledesc, otherwise lookup_row_tupledesc would fail for row types
+    let tupledesc = unsafe { BlessTupleDesc(tupledesc) };
+    let tupledesc = unsafe { PgTupleDesc::from_pg(tupledesc) };
+
+    let filename = unsafe { std::ffi::CStr::from_ptr(parquet_dest.filename) }
+        .to_str()
+        .unwrap();
+
+    // create parquet writer context
+    let parquet_writer_context = ParquetWriterContext::new(filename, tupledesc.clone().to_owned());
+    unsafe { PARQUET_WRITER_CONTEXT = RefCell::new(Some(parquet_writer_context)) };
+
+    // count the number of attributes that are not dropped
+    let attributes = collect_valid_attributes(&tupledesc);
+    let natts = attributes.len() as i32;
+
+    parquet_dest.tupledesc = tupledesc.as_ptr();
+    parquet_dest.natts = natts;
+    parquet_dest.tuples = PgList::<HeapTupleData>::new().into_pg();
 }
 
 #[pg_guard]
@@ -99,11 +130,7 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
     collect_tuple(&mut parquet_dest, heap_tuple);
 
     if parquet_dest.tuple_count == 100 {
-        copy_buffered_tuples(
-            parquet_dest.tupledesc,
-            parquet_dest.tuples,
-            parquet_dest.filename,
-        );
+        copy_buffered_tuples(parquet_dest.tupledesc, parquet_dest.tuples);
 
         reset_collected_tuples(&mut parquet_dest);
     }
@@ -112,50 +139,19 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
 }
 
 #[pg_guard]
-pub extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tupledesc: TupleDesc) {
-    let parquet_dest = dest as *mut ParquetCopyDestReceiver;
-    let mut parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
-
-    // bless tupledesc, otherwise lookup_row_tupledesc would fail for row types
-    let tupledesc = unsafe { BlessTupleDesc(tupledesc) };
-    let tupledesc = unsafe { PgTupleDesc::from_pg(tupledesc) };
-
-    // count the number of attributes that are not dropped
-    let mut natts = 0;
-    for attr in tupledesc.iter() {
-        if attr.is_dropped() {
-            continue;
-        }
-        natts += 1;
-    }
-
-    // open the file
-    let file = unsafe { AllocateFile(parquet_dest.filename, PG_BINARY_W.as_ptr() as _) };
-
-    parquet_dest.file = file;
-    parquet_dest.tupledesc = tupledesc.as_ptr();
-    parquet_dest.natts = natts;
-    parquet_dest.tuples = PgList::<HeapTupleData>::new().into_pg();
-}
-
-#[pg_guard]
 pub extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
     let parquet_dest = dest as *mut ParquetCopyDestReceiver;
     let mut parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
 
     if parquet_dest.tuple_count > 0 {
-        copy_buffered_tuples(
-            parquet_dest.tupledesc,
-            parquet_dest.tuples,
-            parquet_dest.filename,
-        );
+        copy_buffered_tuples(parquet_dest.tupledesc, parquet_dest.tuples);
     }
 
     reset_collected_tuples(&mut parquet_dest);
 
-    if !parquet_dest.file.is_null() {
-        unsafe { FreeFile(parquet_dest.file) };
-    }
+    unsafe {
+        PARQUET_WRITER_CONTEXT = RefCell::new(None);
+    };
 }
 
 #[pg_guard]
@@ -171,7 +167,6 @@ pub(crate) fn create_parquet_dest_receiver(filename: *mut i8) -> PgBox<DestRecei
     parquet_dest.dest.rDestroy = Some(copy_destroy);
     parquet_dest.dest.mydest = CommandDest_DestCopyOut;
     parquet_dest.filename = filename;
-    parquet_dest.file = std::ptr::null_mut();
     parquet_dest.tupledesc = std::ptr::null_mut();
     parquet_dest.natts = 0;
     parquet_dest.tuple_count = 0;
