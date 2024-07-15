@@ -100,7 +100,7 @@ impl PgTypeToArrowArray<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>
 }
 
 pub(crate) fn collect_attribute_array_from_tuples(
-    tuples: &[Option<PgHeapTuple<'_, AllocatedByRust>>],
+    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
     attribute_name: &str,
     attribute_typoid: Oid,
     attribute_typmod: i32,
@@ -287,7 +287,7 @@ pub(crate) fn collect_attribute_array_from_tuples(
 }
 
 fn collect_attribute_array_from_tuples_helper<T>(
-    tuples: &[Option<PgHeapTuple<'_, AllocatedByRust>>],
+    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
     attribute_name: &str,
     attribute_typoid: Oid,
     attribute_typmod: i32,

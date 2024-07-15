@@ -99,7 +99,7 @@ impl Drop for ParquetWriterContext<'_> {
 }
 
 fn collect_arrow_attribute_arrays_from_tupledesc(
-    tuples: &[Option<PgHeapTuple<'_, AllocatedByRust>>],
+    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
     tupledesc: &PgTupleDesc,
 ) -> Vec<(FieldRef, ArrayRef)> {
     let attributes = collect_valid_attributes(tupledesc);
