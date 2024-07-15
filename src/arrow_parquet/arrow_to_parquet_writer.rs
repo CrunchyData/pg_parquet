@@ -70,7 +70,7 @@ impl<'a> ParquetWriterContext<'a> {
 
         // collect arrow arrays for each attribute in the tuples
         let tuple_attribute_arrow_arrays =
-            collect_arrow_attribute_arrays_from_tupledesc(&tuples, &self.tupledesc);
+            collect_arrow_attribute_arrays_from_tupledesc(tuples, self.tupledesc.clone());
 
         // get column writers
         let col_writers =
@@ -99,24 +99,30 @@ impl Drop for ParquetWriterContext<'_> {
 }
 
 fn collect_arrow_attribute_arrays_from_tupledesc(
-    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
-    tupledesc: &PgTupleDesc,
+    tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+    tupledesc: PgTupleDesc,
 ) -> Vec<(FieldRef, ArrayRef)> {
-    let attributes = collect_valid_attributes(tupledesc);
+    let attributes = collect_valid_attributes(&tupledesc);
 
     let mut tuple_attribute_arrow_arrays = vec![];
+
+    let mut tuples = tuples;
 
     for attribute in attributes {
         let attribute_name = attribute.name();
         let attribute_typoid = attribute.type_oid().value();
         let attribute_typmod = attribute.type_mod();
 
-        let tuple_attribute_arrow_array = collect_attribute_array_from_tuples(
-            &tuples,
+        let (field, array, tups) = collect_attribute_array_from_tuples(
+            tuples,
+            tupledesc.clone(),
             attribute_name,
             attribute_typoid,
             attribute_typmod,
         );
+
+        tuples = tups;
+        let tuple_attribute_arrow_array = (field, array);
 
         tuple_attribute_arrow_arrays.push(tuple_attribute_arrow_array);
     }

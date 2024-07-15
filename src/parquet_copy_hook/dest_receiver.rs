@@ -2,12 +2,12 @@ use std::cell::RefCell;
 
 use pg_sys::{
     pg_analyze_and_rewrite_fixedparams, pg_plan_query, BlessTupleDesc, CommandDest_DestCopyOut,
-    CommandTag_CMDTAG_COPY, CopyStmt, CreateNewPortal, Datum, DestReceiver, GetActiveSnapshot,
-    HeapTupleData, List, NodeTag::T_CopyStmt, ParamListInfo, PlannedStmt, Portal,
-    PortalDefineQuery, PortalDrop, QueryCompletion, RawStmt, Snapshot, TupleDesc, TupleTableSlot,
-    CURSOR_OPT_PARALLEL_OK,
+    CommandTag_CMDTAG_COPY, CopyStmt, CreateNewPortal, CurrentMemoryContext, Datum, DestReceiver,
+    GetActiveSnapshot, HeapTupleData, List, MemoryContext, NodeTag::T_CopyStmt, ParamListInfo,
+    PlannedStmt, Portal, PortalDefineQuery, PortalDrop, QueryCompletion, RawStmt, Snapshot,
+    TupleDesc, TupleTableSlot, CURSOR_OPT_PARALLEL_OK,
 };
-use pgrx::{is_a, prelude::*, PgList, PgTupleDesc};
+use pgrx::{is_a, prelude::*, PgList, PgMemoryContexts, PgTupleDesc};
 
 use crate::{
     arrow_parquet::{
@@ -26,6 +26,7 @@ struct ParquetCopyDestReceiver {
     tuple_count: i64,
     tuples: *mut List,
     batch_size: i64,
+    per_copy_context: MemoryContext,
 }
 
 static mut PARQUET_WRITER_CONTEXT: RefCell<Option<ParquetWriterContext>> = RefCell::new(None);
@@ -107,33 +108,40 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
     let parquet_dest = dest as *mut ParquetCopyDestReceiver;
     let mut parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
 
-    let natts = parquet_dest.natts as usize;
+    unsafe {
+        let mut per_copy_ctx = PgMemoryContexts::For(parquet_dest.per_copy_context);
 
-    slot_getallattrs(slot);
-    let slot = unsafe { PgBox::from_pg(slot) };
+        per_copy_ctx.switch_to(|context| {
+            let natts = parquet_dest.natts as usize;
 
-    let datums = slot.tts_values;
-    let datums: Vec<Datum> = unsafe { std::slice::from_raw_parts(datums, natts).to_vec() };
+            slot_getallattrs(slot);
+            let slot = PgBox::from_pg(slot);
 
-    let nulls = slot.tts_isnull;
-    let nulls: Vec<bool> = unsafe { std::slice::from_raw_parts(nulls, natts).to_vec() };
+            let datums = slot.tts_values;
+            let datums: Vec<Datum> = std::slice::from_raw_parts(datums, natts).to_vec();
 
-    let datums: Vec<Option<Datum>> = datums
-        .into_iter()
-        .zip(nulls.into_iter())
-        .map(|(datum, is_null)| if is_null { None } else { Some(datum) })
-        .collect();
+            let nulls = slot.tts_isnull;
+            let nulls: Vec<bool> = std::slice::from_raw_parts(nulls, natts).to_vec();
 
-    let tupledesc = unsafe { PgTupleDesc::from_pg(parquet_dest.tupledesc) };
+            let datums: Vec<Option<Datum>> = datums
+                .into_iter()
+                .zip(nulls.into_iter())
+                .map(|(datum, is_null)| if is_null { None } else { Some(datum) })
+                .collect();
 
-    let heap_tuple = unsafe { PgHeapTuple::from_datums(tupledesc, datums).unwrap() };
+            let tupledesc = PgTupleDesc::from_pg(parquet_dest.tupledesc);
 
-    collect_tuple(&mut parquet_dest, heap_tuple);
+            let heap_tuple = PgHeapTuple::from_datums(tupledesc, datums).unwrap();
 
-    if parquet_dest.tuple_count == parquet_dest.batch_size {
-        copy_buffered_tuples(parquet_dest.tupledesc, parquet_dest.tuples);
-        reset_collected_tuples(&mut parquet_dest);
-    }
+            collect_tuple(&mut parquet_dest, heap_tuple);
+
+            if parquet_dest.tuple_count == parquet_dest.batch_size {
+                copy_buffered_tuples(parquet_dest.tupledesc, parquet_dest.tuples);
+                reset_collected_tuples(&mut parquet_dest);
+                context.reset()
+            };
+        });
+    };
 
     true
 }
@@ -152,6 +160,10 @@ pub extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
     unsafe {
         PARQUET_WRITER_CONTEXT = RefCell::new(None);
     };
+
+    let mut per_copy_ctx = PgMemoryContexts::For(parquet_dest.per_copy_context);
+    unsafe { per_copy_ctx.reset() };
+    unsafe { pg_sys::MemoryContextDelete(parquet_dest.per_copy_context) };
 }
 
 #[pg_guard]
@@ -163,6 +175,16 @@ pub(crate) fn create_parquet_dest_receiver(
     filename: *mut i8,
     batch_size: i64,
 ) -> PgBox<DestReceiver> {
+    let per_copy_context = unsafe {
+        pg_sys::AllocSetContextCreateExtended(
+            CurrentMemoryContext as _,
+            "ParquetCopyDestReceiver\0".as_ptr() as _,
+            pg_sys::ALLOCSET_DEFAULT_MINSIZE as _,
+            pg_sys::ALLOCSET_DEFAULT_INITSIZE as _,
+            pg_sys::ALLOCSET_DEFAULT_MAXSIZE as _,
+        )
+    };
+
     let mut parquet_dest = unsafe { PgBox::<ParquetCopyDestReceiver>::alloc0() };
     parquet_dest.dest.receiveSlot = Some(copy_receive);
     parquet_dest.dest.rStartup = Some(copy_startup);
@@ -175,6 +197,7 @@ pub(crate) fn create_parquet_dest_receiver(
     parquet_dest.tuple_count = 0;
     parquet_dest.tuples = std::ptr::null_mut();
     parquet_dest.batch_size = batch_size;
+    parquet_dest.per_copy_context = per_copy_context;
 
     // it should be into_pg() (not as_ptr()) to prevent pfree of Rust allocated memory
     let dest: *mut DestReceiver = unsafe { std::mem::transmute(parquet_dest.into_pg()) };

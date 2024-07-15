@@ -8,14 +8,14 @@ use arrow::{
 use pgrx::{
     heap_tuple::PgHeapTuple,
     pg_sys::{
-        InvalidOid, Oid, BOOLARRAYOID, BOOLOID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID,
-        FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID,
-        INT8OID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
-        TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID,
-        VARCHAROID,
+        self, deconstruct_array, heap_getattr, Datum, InvalidOid, Oid, BOOLARRAYOID, BOOLOID,
+        DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID,
+        INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID,
+        TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID,
+        TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID, VARCHAROID,
     },
-    AllocatedByRust, Date, FromDatum, IntoDatum, Time, TimeWithTimeZone, Timestamp,
-    TimestampWithTimeZone,
+    AllocatedByRust, Date, FromDatum, IntoDatum, PgBox, PgTupleDesc, Time, TimeWithTimeZone,
+    Timestamp, TimestampWithTimeZone,
 };
 
 use crate::{
@@ -41,18 +41,22 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 
         let attributes = collect_valid_attributes(&tupledesc);
 
+        let mut tuples = self;
+
         for attribute in attributes {
             let attribute_name = attribute.name();
             let attribute_typoid = attribute.type_oid().value();
             let attribute_typmod = attribute.type_mod();
 
-            let (field, array) = collect_attribute_array_from_tuples(
-                &self,
+            let (field, array, tups) = collect_attribute_array_from_tuples(
+                tuples,
+                tupledesc.clone(),
                 attribute_name,
                 attribute_typoid,
                 attribute_typmod,
             );
 
+            tuples = tups;
             struct_attribute_fields.push(field);
             struct_attribute_arrays.push(array);
         }
@@ -65,7 +69,7 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 
         // determines which structs in the array are null
         let is_null_buffer =
-            BooleanBuffer::collect_bool(self.len(), |idx| self.get(idx).unwrap().is_some());
+            BooleanBuffer::collect_bool(tuples.len(), |idx| tuples.get(idx).unwrap().is_some());
         let struct_null_buffer = NullBuffer::new(is_null_buffer);
 
         let struct_array = StructArray::new(
@@ -99,12 +103,17 @@ impl PgTypeToArrowArray<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>
     }
 }
 
-pub(crate) fn collect_attribute_array_from_tuples(
-    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
+pub(crate) fn collect_attribute_array_from_tuples<'a>(
+    tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
+    tupledesc: PgTupleDesc<'a>,
     attribute_name: &str,
     attribute_typoid: Oid,
     attribute_typmod: i32,
-) -> (FieldRef, ArrayRef) {
+) -> (
+    FieldRef,
+    ArrayRef,
+    Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
+) {
     let attribute_element_typoid = if is_array_type(attribute_typoid) {
         array_element_typoid(attribute_typoid)
     } else {
@@ -264,17 +273,17 @@ pub(crate) fn collect_attribute_array_from_tuples(
         }
         _ => {
             if is_composite_type(attribute_typoid) {
-                collect_attribute_array_from_tuples_helper::<PgHeapTuple<AllocatedByRust>>(
+                collect_tuple_attribute_array_from_tuples_helper(
                     tuples,
+                    tupledesc,
                     attribute_name,
                     attribute_typoid,
                     attribute_typmod,
                 )
             } else if is_composite_type(attribute_element_typoid) {
-                collect_attribute_array_from_tuples_helper::<
-                    Vec<Option<PgHeapTuple<AllocatedByRust>>>,
-                >(
+                collect_array_of_tuple_attribute_array_from_tuples_helper(
                     tuples,
+                    tupledesc,
                     attribute_name,
                     attribute_element_typoid,
                     attribute_typmod,
@@ -286,19 +295,23 @@ pub(crate) fn collect_attribute_array_from_tuples(
     }
 }
 
-fn collect_attribute_array_from_tuples_helper<T>(
-    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
+fn collect_attribute_array_from_tuples_helper<'a, T>(
+    tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
     attribute_name: &str,
     attribute_typoid: Oid,
     attribute_typmod: i32,
-) -> (FieldRef, ArrayRef)
+) -> (
+    FieldRef,
+    ArrayRef,
+    Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
+)
 where
     T: IntoDatum + FromDatum + 'static,
     Vec<Option<T>>: PgTypeToArrowArray<T>,
 {
     let mut attribute_values = vec![];
 
-    for record in tuples {
+    for record in tuples.iter() {
         pgrx::pg_sys::check_for_interrupts!();
 
         if let Some(record) = record {
@@ -309,5 +322,184 @@ where
         }
     }
 
-    attribute_values.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod)
+    let (field, array) =
+        attribute_values.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
+    (field, array, tuples)
+}
+
+fn collect_tuple_attribute_array_from_tuples_helper<'a>(
+    tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
+    tuple_tupledesc: PgTupleDesc<'a>,
+    attribute_name: &str,
+    attribute_typoid: Oid,
+    attribute_typmod: i32,
+) -> (
+    FieldRef,
+    ArrayRef,
+    Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
+) {
+    let mut attribute_values = vec![];
+
+    let att_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
+
+    let attnum = tuple_tupledesc
+        .iter()
+        .find(|attr| attr.name() == attribute_name)
+        .unwrap()
+        .attnum;
+
+    let mut tuples_restored = vec![];
+
+    for record in tuples.into_iter() {
+        pgrx::pg_sys::check_for_interrupts!();
+
+        if let Some(record) = record {
+            unsafe {
+                let mut isnull = false;
+                let record = record.into_pg();
+                let att_datum =
+                    heap_getattr(record, attnum as _, tuple_tupledesc.as_ptr(), &mut isnull);
+
+                if isnull {
+                    attribute_values.push(None);
+                } else {
+                    let att_val = tuple_from_datum_and_tupdesc(att_datum, att_tupledesc.clone());
+                    attribute_values.push(Some(att_val));
+                }
+
+                let record = PgHeapTuple::from_heap_tuple(tuple_tupledesc.clone(), record);
+                tuples_restored.push(Some(record.into_owned()));
+            }
+        } else {
+            attribute_values.push(None);
+            tuples_restored.push(None);
+        }
+    }
+
+    let (field, array) =
+        attribute_values.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
+    (field, array, tuples_restored)
+}
+
+fn collect_array_of_tuple_attribute_array_from_tuples_helper<'a>(
+    tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
+    tuple_tupledesc: PgTupleDesc<'a>,
+    attribute_name: &str,
+    attribute_typoid: Oid,
+    attribute_typmod: i32,
+) -> (
+    FieldRef,
+    ArrayRef,
+    Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
+) {
+    let mut attribute_values = vec![];
+
+    let att_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
+
+    let attnum = tuple_tupledesc
+        .iter()
+        .find(|attr| attr.name() == attribute_name)
+        .unwrap()
+        .attnum;
+
+    let mut tuples_restored = vec![];
+
+    for record in tuples.into_iter() {
+        pgrx::pg_sys::check_for_interrupts!();
+
+        if let Some(record) = record {
+            unsafe {
+                let mut isnull = false;
+                let record = record.into_pg();
+                let att_datum =
+                    heap_getattr(record, attnum as _, tuple_tupledesc.as_ptr(), &mut isnull);
+
+                if isnull {
+                    attribute_values.push(None);
+                } else {
+                    let att_val =
+                        tuple_array_from_datum_and_tupdesc(att_datum, att_tupledesc.clone());
+                    attribute_values.push(Some(att_val));
+                }
+
+                let record = PgHeapTuple::from_heap_tuple(tuple_tupledesc.clone(), record);
+                tuples_restored.push(Some(record.into_owned()));
+            }
+        } else {
+            attribute_values.push(None);
+            tuples_restored.push(None);
+        }
+    }
+
+    let (field, array) =
+        attribute_values.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
+    (field, array, tuples_restored)
+}
+
+fn tuple_from_datum_and_tupdesc<'a>(
+    datum: Datum,
+    tupledesc: PgTupleDesc<'a>,
+) -> PgHeapTuple<'a, AllocatedByRust> {
+    unsafe {
+        let htup_header = pg_sys::pg_detoast_datum(datum.cast_mut_ptr()) as pg_sys::HeapTupleHeader;
+
+        let mut data = PgBox::<pg_sys::HeapTupleData>::alloc0();
+        data.t_len = pgrx::heap_tuple_header_get_datum_length(htup_header) as u32;
+        data.t_data = htup_header;
+
+        PgHeapTuple::from_heap_tuple(tupledesc.clone(), data.as_ptr()).into_owned()
+    }
+}
+
+fn tuple_array_from_datum_and_tupdesc<'a>(
+    datum: Datum,
+    tupledesc: PgTupleDesc<'a>,
+) -> Vec<Option<PgHeapTuple<'a, AllocatedByRust>>> {
+    unsafe {
+        let arraytype = pg_sys::pg_detoast_datum(datum.cast_mut_ptr()) as *mut pg_sys::ArrayType;
+
+        let element_oid = tupledesc.oid();
+
+        let mut num_elem = 0;
+        let mut datums = std::ptr::null_mut();
+        let mut nulls = std::ptr::null_mut();
+
+        let mut type_len = 0;
+        let mut type_by_val = false;
+        let mut type_by_align = 0;
+
+        pg_sys::get_typlenbyvalalign(
+            element_oid,
+            &mut type_len,
+            &mut type_by_val,
+            &mut type_by_align,
+        );
+
+        deconstruct_array(
+            arraytype,
+            element_oid,
+            type_len as _,
+            type_by_val,
+            type_by_align,
+            &mut datums as _,
+            &mut nulls as _,
+            &mut num_elem,
+        );
+
+        let datums = std::slice::from_raw_parts(datums as *const Datum, num_elem as _);
+        let nulls = std::slice::from_raw_parts(nulls as *const bool, num_elem as _);
+
+        let mut tuples = vec![];
+
+        for (datum, isnull) in datums.into_iter().zip(nulls.into_iter()) {
+            if *isnull {
+                tuples.push(None);
+            } else {
+                let tuple = tuple_from_datum_and_tupdesc(datum.to_owned(), tupledesc.clone());
+                tuples.push(Some(tuple));
+            }
+        }
+
+        tuples
+    }
 }

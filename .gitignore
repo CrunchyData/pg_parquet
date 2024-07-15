@@ -6,3 +6,4 @@
 Cargo.lock
 *.parquet
 **/*.code-workspace
+*.csv
