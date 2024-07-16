@@ -65,7 +65,7 @@ fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<
     let field = match typoid {
         FLOAT4OID => Field::new(array_name, arrow::datatypes::DataType::Float32, true),
         FLOAT8OID => Field::new(array_name, arrow::datatypes::DataType::Float64, true),
-        BOOLOID => Field::new(array_name, arrow::datatypes::DataType::Int8, true),
+        BOOLOID => Field::new(array_name, arrow::datatypes::DataType::Boolean, true),
         INT2OID => Field::new(array_name, arrow::datatypes::DataType::Int16, true),
         INT4OID => Field::new(array_name, arrow::datatypes::DataType::Int32, true),
         INT8OID => Field::new(array_name, arrow::datatypes::DataType::Int64, true),
@@ -193,7 +193,7 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
     match typoid {
         FLOAT4OID => Field::new(elem_name, arrow::datatypes::DataType::Float32, true).into(),
         FLOAT8OID => Field::new(elem_name, arrow::datatypes::DataType::Float64, true).into(),
-        BOOLOID => Field::new(elem_name, arrow::datatypes::DataType::Int8, true).into(),
+        BOOLOID => Field::new(elem_name, arrow::datatypes::DataType::Boolean, true).into(),
         INT2OID => Field::new(elem_name, arrow::datatypes::DataType::Int16, true).into(),
         INT4OID => Field::new(elem_name, arrow::datatypes::DataType::Int32, true).into(),
         INT8OID => Field::new(elem_name, arrow::datatypes::DataType::Int64, true).into(),
