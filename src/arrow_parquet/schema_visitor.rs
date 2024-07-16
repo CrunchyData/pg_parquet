@@ -3,8 +3,8 @@ use std::sync::Arc;
 use arrow::datatypes::{Field, Fields, Schema};
 use parquet::{arrow::arrow_to_parquet_schema, schema::types::SchemaDescriptor};
 use pg_sys::{
-    Oid, BOOLOID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID, RECORDOID,
-    TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
+    Oid, BOOLOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID,
+    RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -98,6 +98,7 @@ fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<
             arrow::datatypes::DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
             true,
         ),
+        CHAROID => Field::new(array_name, arrow::datatypes::DataType::Utf8, true),
         TEXTOID | VARCHAROID => Field::new(array_name, arrow::datatypes::DataType::Utf8, true),
         _ => {
             panic!("unsupported array type {}", typoid);
@@ -230,6 +231,7 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
             true,
         )
         .into(),
+        CHAROID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into(),
         TEXTOID | VARCHAROID => {
             Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
         }

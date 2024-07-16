@@ -1,4 +1,5 @@
 pub(crate) mod bool;
+pub(crate) mod char;
 pub(crate) mod date;
 pub(crate) mod float4;
 pub(crate) mod float8;
