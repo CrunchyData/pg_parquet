@@ -3,8 +3,8 @@ use std::sync::Arc;
 use arrow::datatypes::{Field, Fields, Schema};
 use parquet::{arrow::arrow_to_parquet_schema, schema::types::SchemaDescriptor};
 use pg_sys::{
-    Oid, BOOLOID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, RECORDOID, TEXTOID,
-    TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
+    Oid, BOOLOID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID, RECORDOID,
+    TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -91,6 +91,11 @@ fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<
         TIMETZOID => Field::new(
             array_name,
             arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            true,
+        ),
+        INTERVALOID => Field::new(
+            array_name,
+            arrow::datatypes::DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
             true,
         ),
         TEXTOID | VARCHAROID => Field::new(array_name, arrow::datatypes::DataType::Utf8, true),
@@ -216,6 +221,12 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
         TIMETZOID => Field::new(
             elem_name,
             arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
+            true,
+        )
+        .into(),
+        INTERVALOID => Field::new(
+            elem_name,
+            arrow::datatypes::DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
             true,
         )
         .into(),

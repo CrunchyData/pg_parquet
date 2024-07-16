@@ -10,12 +10,13 @@ use pgrx::{
     pg_sys::{
         self, deconstruct_array, heap_getattr, Datum, InvalidOid, Oid, BOOLARRAYOID, BOOLOID,
         DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID,
-        INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID,
-        TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID,
-        TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID, VARCHAROID,
+        INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID,
+        TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
+        TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID,
+        VARCHAROID,
     },
-    AllocatedByRust, Date, FromDatum, IntoDatum, PgBox, PgTupleDesc, Time, TimeWithTimeZone,
-    Timestamp, TimestampWithTimeZone,
+    AllocatedByRust, Date, FromDatum, Interval, IntoDatum, PgBox, PgTupleDesc, Time,
+    TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
 };
 
 use crate::{
@@ -231,6 +232,18 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
                 attribute_typmod,
             )
         }
+        INTERVALOID => collect_attribute_array_from_tuples_helper::<Interval>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        INTERVALARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Interval>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
         TIMESTAMPOID => collect_attribute_array_from_tuples_helper::<Timestamp>(
             tuples,
             attribute_name,

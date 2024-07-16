@@ -5,6 +5,7 @@ pub(crate) mod float8;
 pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
+pub(crate) mod interval;
 pub(crate) mod record;
 pub(crate) mod text;
 pub(crate) mod time;

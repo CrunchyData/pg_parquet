@@ -1,3 +1,4 @@
+use arrow::datatypes::IntervalMonthDayNano;
 use pgrx::{
     direct_function_call, pg_sys, AnyNumeric, Date, Interval, IntoDatum, Time, TimeWithTimeZone,
     Timestamp, TimestampWithTimeZone,
@@ -89,4 +90,16 @@ pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> Option<i64> {
     Some(i64::from_be_bytes(
         adjusted_timetz_as_bytes[0..8].try_into().unwrap(),
     ))
+}
+
+pub(crate) fn interval_to_nano(interval: Interval) -> Option<IntervalMonthDayNano> {
+    let months = interval.months();
+    let days = interval.days();
+    let microseconds = interval.micros();
+
+    let months = months as i32;
+    let days = days as i32;
+    let microseconds = microseconds;
+
+    Some(IntervalMonthDayNano::new(months, days, microseconds))
 }
