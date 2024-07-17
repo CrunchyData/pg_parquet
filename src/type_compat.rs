@@ -1,3 +1,5 @@
+use std::ffi::CStr;
+
 use arrow::datatypes::IntervalMonthDayNano;
 use pgrx::{
     direct_function_call, pg_sys, AnyNumeric, Date, Interval, IntoDatum, Time, TimeWithTimeZone,
@@ -102,4 +104,57 @@ pub(crate) fn interval_to_nano(interval: Interval) -> Option<IntervalMonthDayNan
     let microseconds = microseconds;
 
     Some(IntervalMonthDayNano::new(months, days, microseconds))
+}
+
+pub(crate) fn numeric_to_fixed(numeric: AnyNumeric) -> Option<i128> {
+    let numeric_str: &CStr =
+        unsafe { direct_function_call(pg_sys::numeric_out, &[numeric.into_datum()]).unwrap() };
+    let numeric_str = numeric_str.to_str().unwrap();
+
+    let sign = if numeric_str.starts_with('-') { -1 } else { 1 };
+    let numeric_str = numeric_str.trim_start_matches('-');
+
+    let integral = numeric_str.split('.').nth(0).unwrap();
+    let mut integral = i128::from_str_radix(integral, 10).unwrap();
+    let fraction = if let Some(fraction) = numeric_str.split('.').nth(1) {
+        fraction
+    } else {
+        "0"
+    };
+    let fraction_len = fraction.len();
+    let mut fraction = i128::from_str_radix(fraction, 10).unwrap();
+    let zeros_needed = if fraction == 0 { 8 } else { 8 - fraction_len };
+
+    let mut integral_digits = vec![];
+    while integral > 0 {
+        let digit = integral % 10;
+        integral_digits.push(digit);
+        integral /= 10;
+    }
+
+    let mut fraction_digits = vec![];
+    if zeros_needed > 0 {
+        for _ in 0..zeros_needed {
+            fraction_digits.push(0);
+        }
+    }
+    while fraction > 0 {
+        let digit = fraction % 10;
+        fraction_digits.push(digit);
+        fraction /= 10;
+    }
+
+    let digits_ordered_and_merged = integral_digits
+        .into_iter()
+        .rev()
+        .chain(fraction_digits.into_iter().rev())
+        .collect::<Vec<_>>();
+
+    let mut decimal: i128 = 0;
+    for (i, digit) in digits_ordered_and_merged.iter().rev().enumerate() {
+        decimal += digit * 10_i128.pow(i as u32);
+    }
+    decimal *= sign;
+
+    Some(decimal)
 }

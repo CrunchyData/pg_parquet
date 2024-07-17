@@ -11,11 +11,11 @@ use pgrx::{
         self, deconstruct_array, heap_getattr, Datum, InvalidOid, Oid, BOOLARRAYOID, BOOLOID,
         CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID,
         FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID,
-        INTERVALARRAYOID, INTERVALOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID,
-        TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID,
-        TIMETZOID, VARCHARARRAYOID, VARCHAROID,
+        INTERVALARRAYOID, INTERVALOID, NUMERICARRAYOID, NUMERICOID, TEXTARRAYOID, TEXTOID,
+        TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID,
+        TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID, VARCHAROID,
     },
-    AllocatedByRust, Date, FromDatum, Interval, IntoDatum, PgBox, PgTupleDesc, Time,
+    AllocatedByRust, AnyNumeric, Date, FromDatum, Interval, IntoDatum, PgBox, PgTupleDesc, Time,
     TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
 };
 
@@ -180,6 +180,18 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             tuples,
             attribute_name,
             attribute_element_typoid,
+            attribute_typmod,
+        ),
+        NUMERICOID => collect_attribute_array_from_tuples_helper::<AnyNumeric>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        NUMERICARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<AnyNumeric>>>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
             attribute_typmod,
         ),
         BOOLOID => collect_attribute_array_from_tuples_helper::<bool>(

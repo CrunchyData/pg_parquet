@@ -4,7 +4,7 @@ use arrow::datatypes::{Field, Fields, Schema};
 use parquet::{arrow::arrow_to_parquet_schema, schema::types::SchemaDescriptor};
 use pg_sys::{
     Oid, BOOLOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID,
-    RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
+    NUMERICOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -69,6 +69,11 @@ fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<
         INT2OID => Field::new(array_name, arrow::datatypes::DataType::Int16, true),
         INT4OID => Field::new(array_name, arrow::datatypes::DataType::Int32, true),
         INT8OID => Field::new(array_name, arrow::datatypes::DataType::Int64, true),
+        NUMERICOID => Field::new(
+            array_name,
+            arrow::datatypes::DataType::Decimal128(30, 8),
+            true,
+        ),
         DATEOID => Field::new(array_name, arrow::datatypes::DataType::Date32, true),
         TIMESTAMPOID => Field::new(
             array_name,
@@ -197,6 +202,12 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
         INT2OID => Field::new(elem_name, arrow::datatypes::DataType::Int16, true).into(),
         INT4OID => Field::new(elem_name, arrow::datatypes::DataType::Int32, true).into(),
         INT8OID => Field::new(elem_name, arrow::datatypes::DataType::Int64, true).into(),
+        NUMERICOID => Field::new(
+            elem_name,
+            arrow::datatypes::DataType::Decimal128(30, 8),
+            true,
+        )
+        .into(),
         DATEOID => Field::new(elem_name, arrow::datatypes::DataType::Date32, true).into(),
         TIMESTAMPOID => Field::new(
             elem_name,
