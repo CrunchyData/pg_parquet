@@ -44,7 +44,7 @@ pub(crate) fn arrow_array_offsets<T>(
             offsets.push(current_offset);
             has_some = true;
         } else {
-            offsets.push(0);
+            offsets.push(current_offset);
         }
     }
 

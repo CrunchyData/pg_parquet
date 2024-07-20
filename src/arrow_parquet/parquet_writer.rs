@@ -13,7 +13,7 @@ use pgrx::{heap_tuple::PgHeapTuple, pg_sys::RECORDOID, AllocatedByRust, PgTupleD
 
 use crate::{
     arrow_parquet::{
-        pg_types::record::collect_attribute_array_from_tuples,
+        pg_to_arrow::record::collect_attribute_array_from_tuples,
         schema_visitor::{parse_arrow_schema_from_tupledesc, parse_parquet_schema_from_tupledesc},
     },
     pgrx_utils::collect_valid_attributes,

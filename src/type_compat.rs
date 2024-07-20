@@ -2,8 +2,10 @@ use std::ffi::CStr;
 
 use arrow::datatypes::IntervalMonthDayNano;
 use pgrx::{
-    direct_function_call, pg_sys, AnyNumeric, Date, Interval, IntoDatum, Time, TimeWithTimeZone,
-    Timestamp, TimestampWithTimeZone,
+    direct_function_call,
+    pg_sys::{self, TimeTzADT, TIME_UTC},
+    AnyNumeric, Date, Interval, IntoDatum, Time, TimeWithTimeZone, Timestamp,
+    TimestampWithTimeZone,
 };
 
 pub(crate) fn date_to_i32(date: Date) -> Option<i32> {
@@ -17,6 +19,12 @@ pub(crate) fn date_to_i32(date: Date) -> Option<i32> {
     Some(i32::from_be_bytes(
         adjusted_date_as_bytes[0..4].try_into().unwrap(),
     ))
+}
+
+pub(crate) fn i32_to_date(i32_date: i32) -> Option<Date> {
+    // Duckdb epoch is Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
+    let adjusted_date = unsafe { Date::from_pg_epoch_days(i32_date - 10957) };
+    Some(adjusted_date)
 }
 
 pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> Option<i64> {
@@ -36,6 +44,38 @@ pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> Option<i64> {
     Some(i64::from_be_bytes(
         adjusted_timestamp_as_bytes[0..8].try_into().unwrap(),
     ))
+}
+
+pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Option<Timestamp> {
+    let timestamp: Timestamp = i64_timestamp.into();
+
+    // Duckdb epoch is Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
+    let adjustment_interval = Interval::from_days(10957);
+    let adjusted_timestamp: Timestamp = unsafe {
+        direct_function_call(
+            pg_sys::timestamp_mi_interval,
+            &[timestamp.into_datum(), adjustment_interval.into_datum()],
+        )
+        .unwrap()
+    };
+
+    Some(adjusted_timestamp)
+}
+
+pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64) -> Option<TimestampWithTimeZone> {
+    let timestamptz: TimestampWithTimeZone = i64_timestamptz.try_into().unwrap();
+
+    // Duckdb epoch is Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
+    let adjustment_interval = Interval::from_days(10957);
+    let adjusted_timestamptz: TimestampWithTimeZone = unsafe {
+        direct_function_call(
+            pg_sys::timestamptz_mi_interval,
+            &[timestamptz.into_datum(), adjustment_interval.into_datum()],
+        )
+        .unwrap()
+    };
+
+    Some(adjusted_timestamptz)
 }
 
 pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> Option<i64> {
@@ -67,6 +107,11 @@ pub(crate) fn time_to_i64(time: Time) -> Option<i64> {
     Some(i64::from_be_bytes(time_as_bytes[0..8].try_into().unwrap()))
 }
 
+pub(crate) fn i64_to_time(i64_time: i64) -> Option<Time> {
+    let time: Time = i64_time.into();
+    Some(time)
+}
+
 pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> Option<i64> {
     let timezone_as_secs: AnyNumeric = unsafe {
         direct_function_call(
@@ -94,6 +139,34 @@ pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> Option<i64> {
     ))
 }
 
+pub(crate) fn i64_to_timetz(i64_timetz: i64) -> Option<TimeWithTimeZone> {
+    let timetz = TimeTzADT {
+        time: i64_timetz,
+        zone: TIME_UTC as _,
+    };
+    let timetz: TimeWithTimeZone = timetz.into();
+
+    let timezone_as_secs: AnyNumeric = unsafe {
+        direct_function_call(
+            pg_sys::extract_timetz,
+            &["timezone".into_datum(), timetz.into_datum()],
+        )
+    }
+    .unwrap();
+
+    let timezone_as_secs: f64 = timezone_as_secs.try_into().unwrap();
+    let timezone_as_interval = Interval::from_seconds(timezone_as_secs);
+    let adjusted_timetz: TimeWithTimeZone = unsafe {
+        direct_function_call(
+            pg_sys::timetz_pl_interval,
+            &[timetz.into_datum(), timezone_as_interval.into_datum()],
+        )
+        .unwrap()
+    };
+
+    Some(adjusted_timetz)
+}
+
 pub(crate) fn interval_to_nano(interval: Interval) -> Option<IntervalMonthDayNano> {
     let months = interval.months();
     let days = interval.days();
@@ -104,6 +177,14 @@ pub(crate) fn interval_to_nano(interval: Interval) -> Option<IntervalMonthDayNan
     let microseconds = microseconds;
 
     Some(IntervalMonthDayNano::new(months, days, microseconds))
+}
+
+pub(crate) fn nano_to_interval(nano: IntervalMonthDayNano) -> Option<Interval> {
+    let months = nano.months;
+    let days = nano.days;
+    let microseconds = nano.nanoseconds / 1000;
+
+    Some(Interval::new(months, days, microseconds).unwrap())
 }
 
 pub(crate) fn numeric_to_fixed(numeric: AnyNumeric) -> Option<i128> {
@@ -157,4 +238,49 @@ pub(crate) fn numeric_to_fixed(numeric: AnyNumeric) -> Option<i128> {
     decimal *= sign;
 
     Some(decimal)
+}
+
+pub(crate) fn i128_to_numeric(i128_decimal: i128) -> Option<AnyNumeric> {
+    let sign = if i128_decimal < 0 { "-" } else { "" };
+    let i128_decimal = i128_decimal.abs();
+
+    let mut decimal_digits = vec![];
+    let mut decimal = i128_decimal;
+    while decimal > 0 {
+        let digit = decimal % 10;
+        decimal_digits.push(digit);
+        decimal /= 10;
+    }
+
+    let mut integral = vec![];
+    let mut fraction = vec![];
+    let mut is_integral = true;
+    for digit in decimal_digits.into_iter().rev() {
+        if is_integral {
+            integral.push(digit);
+        } else {
+            fraction.push(digit);
+        }
+        if integral.len() == 8 {
+            is_integral = false;
+        }
+    }
+
+    let integral = integral
+        .into_iter()
+        .rev()
+        .map(|d| d.to_string())
+        .collect::<String>();
+    let fraction = fraction
+        .into_iter()
+        .map(|d| d.to_string())
+        .collect::<String>();
+
+    let numeric_str = format!("{}{}.{}", sign, integral, fraction);
+    let numeric_str = std::ffi::CString::new(numeric_str).unwrap();
+
+    let numeric: AnyNumeric =
+        unsafe { direct_function_call(pg_sys::numeric_in, &[numeric_str.into_datum()]).unwrap() };
+
+    Some(numeric)
 }
