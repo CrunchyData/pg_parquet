@@ -1,26 +1,27 @@
 use arrow::array::{Array, Float32Array};
-use pgrx::{
-    pg_sys::{Datum, Oid},
-    IntoDatum,
-};
-
-use crate::pgrx_utils::is_array_type;
+use pgrx::PgTupleDesc;
 
 use super::ArrowArrayToPgType;
 
-impl ArrowArrayToPgType<Float32Array> for Float32Array {
-    fn as_pg_datum(self, typoid: Oid, _typmod: i32) -> Option<Datum> {
-        if is_array_type(typoid) {
-            let mut vals = vec![];
-            for val in self.iter() {
-                vals.push(val);
-            }
-            vals.into_datum()
-        } else if self.is_null(0) {
+// Float4
+impl<'a> ArrowArrayToPgType<'_, Float32Array, f32> for f32 {
+    fn as_pg(arr: Float32Array, _tupledesc: Option<PgTupleDesc>) -> Option<f32> {
+        if arr.is_null(0) {
             None
         } else {
-            let val = self.value(0);
-            val.into_datum()
+            let val = arr.value(0);
+            Some(val)
         }
+    }
+}
+
+// Float4[]
+impl<'a> ArrowArrayToPgType<'_, Float32Array, Vec<Option<f32>>> for Vec<Option<f32>> {
+    fn as_pg(arr: Float32Array, _tupledesc: Option<PgTupleDesc>) -> Option<Vec<Option<f32>>> {
+        let mut vals = vec![];
+        for val in arr.iter() {
+            vals.push(val);
+        }
+        Some(vals)
     }
 }

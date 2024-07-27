@@ -25,7 +25,7 @@ impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
     }
 }
 
-// Char[]
+// "Char"[]
 impl PgTypeToArrowArray<Vec<Option<i8>>> for Vec<Option<Vec<Option<i8>>>> {
     fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, all_nulls) = arrow_array_offsets(&self);

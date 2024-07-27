@@ -1,28 +1,36 @@
 use arrow::array::{Array, IntervalMonthDayNanoArray};
-use pgrx::{
-    pg_sys::{Datum, Oid},
-    IntoDatum,
-};
+use pgrx::{Interval, PgTupleDesc};
 
-use crate::{pgrx_utils::is_array_type, type_compat::nano_to_interval};
+use crate::type_compat::nano_to_interval;
 
 use super::ArrowArrayToPgType;
 
-impl ArrowArrayToPgType<IntervalMonthDayNanoArray> for IntervalMonthDayNanoArray {
-    fn as_pg_datum(self, typoid: Oid, _typmod: i32) -> Option<Datum> {
-        if is_array_type(typoid) {
-            let mut vals = vec![];
-            for val in self.iter() {
-                let val = val.and_then(nano_to_interval);
-                vals.push(val);
-            }
-            vals.into_datum()
-        } else if self.is_null(0) {
+// Interval
+impl<'a> ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Interval> for Interval {
+    fn as_pg(arr: IntervalMonthDayNanoArray, _tupledesc: Option<PgTupleDesc>) -> Option<Interval> {
+        if arr.is_null(0) {
             None
         } else {
-            let val = self.value(0);
+            let val = arr.value(0);
             let val = nano_to_interval(val).unwrap();
-            val.into_datum()
+            Some(val)
         }
+    }
+}
+
+// Interval[]
+impl<'a> ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Vec<Option<Interval>>>
+    for Vec<Option<Interval>>
+{
+    fn as_pg(
+        arr: IntervalMonthDayNanoArray,
+        _tupledesc: Option<PgTupleDesc>,
+    ) -> Option<Vec<Option<Interval>>> {
+        let mut vals = vec![];
+        for val in arr.iter() {
+            let val = val.and_then(nano_to_interval);
+            vals.push(val);
+        }
+        Some(vals)
     }
 }

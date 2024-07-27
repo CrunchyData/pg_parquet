@@ -13,14 +13,14 @@ use pgrx::{
         VARCHAROID,
     },
     prelude::PgHeapTuple,
-    AllocatedByRust, IntoDatum, PgTupleDesc,
+    AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, PgTupleDesc, Time, TimeWithTimeZone,
+    Timestamp, TimestampWithTimeZone,
 };
 
-use crate::pgrx_utils::{
-    array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type, tuple_desc,
-};
+use crate::pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc};
 
 pub(crate) mod bool;
+pub(crate) mod char;
 pub(crate) mod date;
 pub(crate) mod float4;
 pub(crate) mod float8;
@@ -33,77 +33,130 @@ pub(crate) mod record;
 pub(crate) mod text;
 pub(crate) mod time;
 pub(crate) mod timestamp;
+pub(crate) mod timestamptz;
+pub(crate) mod timetz;
 
-pub(crate) trait ArrowArrayToPgType<T: From<ArrayData>> {
-    fn as_pg_datum(self, typoid: Oid, typmod: i32) -> Option<Datum>;
+pub(crate) trait ArrowArrayToPgType<'a, A: From<ArrayData>, T: 'a + IntoDatum> {
+    fn as_pg(array: A, tupledesc: Option<PgTupleDesc<'a>>) -> Option<T>;
 }
 
 pub(crate) fn as_pg_datum(row: ArrayData, typoid: Oid, typmod: i32) -> Option<Datum> {
-    let is_array = is_array_type(typoid);
-    let is_composite = is_composite_type(typoid);
-
-    if is_array {
+    if is_array_type(typoid) {
         as_pg_array_datum(row, typoid, typmod)
-    } else if is_composite {
-        let tupledesc = tuple_desc(typoid, typmod);
-        as_pg_tuple(row, tupledesc).into_datum()
     } else {
-        as_pg_primitive_datum(row, typoid)
+        as_pg_primitive_datum(row, typoid, typmod)
     }
 }
 
-fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid) -> Option<Datum> {
+fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -> Option<Datum> {
     match typoid {
         FLOAT4OID => {
-            let arrow_array: Float32Array = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val =
+                <f32 as ArrowArrayToPgType<Float32Array, f32>>::as_pg(primitive_array.into(), None);
+            val.into_datum()
         }
         FLOAT8OID => {
-            let arrow_array: Float64Array = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val =
+                <f64 as ArrowArrayToPgType<Float64Array, f64>>::as_pg(primitive_array.into(), None);
+            val.into_datum()
         }
         INT2OID => {
-            let arrow_array: Int16Array = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val =
+                <i16 as ArrowArrayToPgType<Int16Array, i16>>::as_pg(primitive_array.into(), None);
+            val.into_datum()
         }
         INT4OID => {
-            let arrow_array: Int32Array = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val =
+                <i32 as ArrowArrayToPgType<Int32Array, i32>>::as_pg(primitive_array.into(), None);
+            val.into_datum()
         }
         INT8OID => {
-            let arrow_array: Int64Array = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val =
+                <i64 as ArrowArrayToPgType<Int64Array, i64>>::as_pg(primitive_array.into(), None);
+            val.into_datum()
         }
         BOOLOID => {
-            let arrow_array: BooleanArray = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val = <bool as ArrowArrayToPgType<BooleanArray, bool>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
         }
-        CHAROID | TEXTOID | VARCHAROID => {
-            let arrow_array: StringArray = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+        CHAROID => {
+            let val =
+                <i8 as ArrowArrayToPgType<StringArray, i8>>::as_pg(primitive_array.into(), None);
+            val.into_datum()
+        }
+        TEXTOID | VARCHAROID => {
+            let val = <String as ArrowArrayToPgType<StringArray, String>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
         }
         NUMERICOID => {
-            let arrow_array: Decimal128Array = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val = <AnyNumeric as ArrowArrayToPgType<Decimal128Array, AnyNumeric>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
         }
         DATEOID => {
-            let arrow_array: Date32Array = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val = <Date as ArrowArrayToPgType<Date32Array, Date>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
         }
-        TIMEOID | TIMETZOID => {
-            let arrow_array: Time64MicrosecondArray = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+        TIMEOID => {
+            let val = <Time as ArrowArrayToPgType<Time64MicrosecondArray, Time>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
         }
-        TIMESTAMPOID | TIMESTAMPTZOID => {
-            let arrow_array: TimestampMicrosecondArray = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+        TIMETZOID => {
+            let val = <TimeWithTimeZone as ArrowArrayToPgType<
+                Time64MicrosecondArray,
+                TimeWithTimeZone,
+            >>::as_pg(primitive_array.into(), None);
+            val.into_datum()
+        }
+        TIMESTAMPOID => {
+            let val =
+                <Timestamp as ArrowArrayToPgType<TimestampMicrosecondArray, Timestamp>>::as_pg(
+                    primitive_array.into(),
+                    None,
+                );
+            val.into_datum()
+        }
+        TIMESTAMPTZOID => {
+            let val = <TimestampWithTimeZone as ArrowArrayToPgType<
+                TimestampMicrosecondArray,
+                TimestampWithTimeZone,
+            >>::as_pg(primitive_array.into(), None);
+            val.into_datum()
         }
         INTERVALOID => {
-            let arrow_array: IntervalMonthDayNanoArray = primitive_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, -1)
+            let val = <Interval as ArrowArrayToPgType<IntervalMonthDayNanoArray, Interval>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
         }
         _ => {
-            panic!("unsupported primitive type {:?}", primitive_array)
+            if is_composite_type(typoid) {
+                let tupledesc = tuple_desc(typoid, typmod);
+
+                let val = <PgHeapTuple<AllocatedByRust> as ArrowArrayToPgType<
+                    StructArray,
+                    PgHeapTuple<AllocatedByRust>,
+                >>::as_pg(primitive_array.into(), Some(tupledesc));
+
+                val.into_datum()
+            } else {
+                panic!("unsupported primitive type {:?}", primitive_array)
+            }
         }
     }
 }
@@ -119,107 +172,129 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
 
     match typoid {
         FLOAT4ARRAYOID => {
-            let arrow_array: Float32Array = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val =
+                <Vec<Option<f32>> as ArrowArrayToPgType<Float32Array, Vec<Option<f32>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
+            val.into_datum()
         }
         FLOAT8ARRAYOID => {
-            let arrow_array: Float64Array = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val =
+                <Vec<Option<f64>> as ArrowArrayToPgType<Float64Array, Vec<Option<f64>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
+            val.into_datum()
         }
         INT2ARRAYOID => {
-            let arrow_array: Int16Array = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val = <Vec<Option<i16>> as ArrowArrayToPgType<Int16Array, Vec<Option<i16>>>>::as_pg(
+                list_array.into(),
+                None,
+            );
+            val.into_datum()
         }
         INT4ARRAYOID => {
-            let arrow_array: Int32Array = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val = <Vec<Option<i32>> as ArrowArrayToPgType<Int32Array, Vec<Option<i32>>>>::as_pg(
+                list_array.into(),
+                None,
+            );
+            val.into_datum()
         }
         INT8ARRAYOID => {
-            let arrow_array: Int64Array = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val = <Vec<Option<i64>> as ArrowArrayToPgType<Int64Array, Vec<Option<i64>>>>::as_pg(
+                list_array.into(),
+                None,
+            );
+            val.into_datum()
         }
         BOOLARRAYOID => {
-            let arrow_array: BooleanArray = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val =
+                <Vec<Option<bool>> as ArrowArrayToPgType<BooleanArray, Vec<Option<bool>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
+            val.into_datum()
         }
-        CHARARRAYOID | TEXTARRAYOID | VARCHARARRAYOID => {
-            let arrow_array: StringArray = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+        CHARARRAYOID => {
+            let val = <Vec<Option<i8>> as ArrowArrayToPgType<StringArray, Vec<Option<i8>>>>::as_pg(
+                list_array.into(),
+                None,
+            );
+            val.into_datum()
+        }
+        TEXTARRAYOID | VARCHARARRAYOID => {
+            let val = <Vec<Option<String>> as ArrowArrayToPgType<
+                StringArray,
+                Vec<Option<String>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
         }
         NUMERICARRAYOID => {
-            let arrow_array: Decimal128Array = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val = <Vec<Option<AnyNumeric>> as ArrowArrayToPgType<
+                Decimal128Array,
+                Vec<Option<AnyNumeric>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
         }
         DATEARRAYOID => {
-            let arrow_array: Date32Array = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val =
+                <Vec<Option<Date>> as ArrowArrayToPgType<Date32Array, Vec<Option<Date>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
+            val.into_datum()
         }
-        TIMEARRAYOID | TIMETZARRAYOID => {
-            let arrow_array: Time64MicrosecondArray = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+        TIMEARRAYOID => {
+            let val = <Vec<Option<Time>> as ArrowArrayToPgType<
+                Time64MicrosecondArray,
+                Vec<Option<Time>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
         }
-        TIMESTAMPARRAYOID | TIMESTAMPTZARRAYOID => {
-            let arrow_array: TimestampMicrosecondArray = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+        TIMETZARRAYOID => {
+            let val = <Vec<Option<TimeWithTimeZone>> as ArrowArrayToPgType<
+                Time64MicrosecondArray,
+                Vec<Option<TimeWithTimeZone>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        TIMESTAMPARRAYOID => {
+            let val = <Vec<Option<Timestamp>> as ArrowArrayToPgType<
+                TimestampMicrosecondArray,
+                Vec<Option<Timestamp>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        TIMESTAMPTZARRAYOID => {
+            let val = <Vec<Option<TimestampWithTimeZone>> as ArrowArrayToPgType<
+                TimestampMicrosecondArray,
+                Vec<Option<TimestampWithTimeZone>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
         }
         INTERVALARRAYOID => {
-            let arrow_array: IntervalMonthDayNanoArray = list_array.into();
-            ArrowArrayToPgType::as_pg_datum(arrow_array, typoid, typmod)
+            let val = <Vec<Option<Interval>> as ArrowArrayToPgType<
+                IntervalMonthDayNanoArray,
+                Vec<Option<Interval>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
         }
         _ => {
             let element_typoid = array_element_typoid(typoid);
 
             if is_composite_type(element_typoid) {
-                as_pg_tuple_array(list_array, element_typoid, typmod).into_datum()
+                let tupledesc = tuple_desc(element_typoid, typmod);
+
+                let val = <Vec<Option<PgHeapTuple<AllocatedByRust>>> as ArrowArrayToPgType<
+                    StructArray,
+                    Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+                >>::as_pg(list_array.into(), Some(tupledesc));
+
+                val.into_datum()
             } else {
                 panic!("unsupported array type {:?}", typoid)
             }
         }
     }
-}
-
-fn as_pg_tuple(tuple: ArrayData, tupledesc: PgTupleDesc) -> Option<PgHeapTuple<AllocatedByRust>> {
-    let arrow_struct_array: StructArray = tuple.into();
-
-    if arrow_struct_array.is_null(0) {
-        return None;
-    }
-
-    let mut datums = vec![];
-
-    let attributes = collect_valid_attributes(&tupledesc);
-
-    for attribute in attributes {
-        let name = attribute.name();
-        let typoid = attribute.type_oid().value();
-        let typmod = attribute.type_mod();
-
-        let column_data = arrow_struct_array.column_by_name(name).unwrap();
-
-        let datum = as_pg_datum(column_data.into_data(), typoid, typmod);
-        datums.push(datum);
-    }
-
-    Some(unsafe { PgHeapTuple::from_datums(tupledesc, datums) }.unwrap())
-}
-
-fn as_pg_tuple_array(
-    tuples: ArrayData,
-    typoid: Oid,
-    typmod: i32,
-) -> Option<Vec<Option<PgHeapTuple<'static, AllocatedByRust>>>> {
-    let struct_array: StructArray = tuples.into();
-
-    let len = struct_array.len();
-    let mut values = Vec::with_capacity(len);
-
-    let tupledesc = tuple_desc(typoid, typmod);
-
-    for i in 0..len {
-        let tuple = struct_array.slice(i, 1);
-        let tuple = as_pg_tuple(tuple.to_data(), tupledesc.clone());
-        values.push(tuple);
-    }
-
-    Some(values)
 }

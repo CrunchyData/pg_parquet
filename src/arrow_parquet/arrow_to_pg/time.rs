@@ -1,48 +1,33 @@
 use arrow::array::{Array, Time64MicrosecondArray};
-use pgrx::{
-    pg_sys::{Datum, Oid, TIMEARRAYOID, TIMEOID, TIMETZARRAYOID, TIMETZOID},
-    IntoDatum,
-};
+use pgrx::{PgTupleDesc, Time};
 
-use crate::{
-    pgrx_utils::is_array_type,
-    type_compat::{i64_to_time, i64_to_timetz},
-};
+use crate::type_compat::i64_to_time;
 
 use super::ArrowArrayToPgType;
 
-impl ArrowArrayToPgType<Time64MicrosecondArray> for Time64MicrosecondArray {
-    fn as_pg_datum(self, typoid: Oid, _typmod: i32) -> Option<Datum> {
-        if is_array_type(typoid) {
-            if typoid == TIMEARRAYOID {
-                let mut vals = vec![];
-                for val in self.iter() {
-                    let val = val.and_then(i64_to_time);
-                    vals.push(val);
-                }
-                return vals.into_datum();
-            } else {
-                assert!(typoid == TIMETZARRAYOID);
-                let mut vals = vec![];
-                for val in self.iter() {
-                    let val = val.and_then(i64_to_timetz);
-                    vals.push(val);
-                }
-                return vals.into_datum();
-            }
-        }
-
-        if self.is_null(0) {
+// Time
+impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, Time> for Time {
+    fn as_pg(arr: Time64MicrosecondArray, _tupledesc: Option<PgTupleDesc>) -> Option<Time> {
+        if arr.is_null(0) {
             None
-        } else if typoid == TIMEOID {
-            let val = self.value(0);
-            let val = i64_to_time(val).unwrap();
-            val.into_datum()
         } else {
-            assert!(typoid == TIMETZOID);
-            let val = self.value(0);
-            let val = i64_to_timetz(val).unwrap();
-            val.into_datum()
+            let val = arr.value(0);
+            i64_to_time(val)
         }
+    }
+}
+
+// Time[]
+impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, Vec<Option<Time>>> for Vec<Option<Time>> {
+    fn as_pg(
+        arr: Time64MicrosecondArray,
+        _tupledesc: Option<PgTupleDesc>,
+    ) -> Option<Vec<Option<Time>>> {
+        let mut vals = vec![];
+        for val in arr.iter() {
+            let val = val.and_then(i64_to_time);
+            vals.push(val);
+        }
+        Some(vals)
     }
 }
