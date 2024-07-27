@@ -1,6 +1,6 @@
 [package]
 name = "pg_parquet"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 
 [lib]
@@ -28,9 +28,11 @@ parquet = { version = "52.0.0", features = [
     "base64"
 ]}
 pgrx = "=0.11.4"
+tempfile = "3.10.1"
 
 [dev-dependencies]
 pgrx-tests = "=0.11.4"
+tempfile = "3.10.1"
 
 [profile.dev]
 panic = "unwind"

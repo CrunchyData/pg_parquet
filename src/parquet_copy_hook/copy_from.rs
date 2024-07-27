@@ -15,13 +15,11 @@ use crate::{
     arrow_parquet::parquet_reader::ParquetReaderContext,
     parquet_copy_hook::copy_utils::{
         addNSItemToQuery, addRangeTableEntryForRelation, assign_expr_collations, copy_lock_mode,
-        copy_relation_oid, copy_stmt_batch_size_option, copy_stmt_filename,
+        copy_options, copy_relation_oid, copy_stmt_batch_size_option, copy_stmt_filename,
         is_copy_from_parquet_stmt, transformExpr, BeginCopyFrom, CopyFrom, CopyFromState,
         EndCopyFrom,
     },
 };
-
-use super::copy_utils::copy_options;
 
 static mut PARQUET_READER_CONTEXT: RefCell<Option<ParquetReaderContext>> = RefCell::new(None);
 

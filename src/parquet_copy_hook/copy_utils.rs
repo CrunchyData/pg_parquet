@@ -69,7 +69,35 @@ pub(crate) fn copy_stmt_batch_size_option(pstmt: &PgBox<pg_sys::PlannedStmt>) ->
 
 pub(crate) fn copy_options(pstmt: &PgBox<pg_sys::PlannedStmt>) -> PgList<DefElem> {
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
-    unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) }
+
+    // change (format parquet) to (format binary)
+    let binary = std::ffi::CString::new("binary").unwrap();
+    let binary = unsafe { pg_sys::makeString(binary.into_raw() as _) };
+
+    let mut found_parquet_format = false;
+    let mut copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
+    for option in copy_options.iter_ptr() {
+        let mut option = unsafe { PgBox::<DefElem>::from_pg(option) };
+        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        if key != "format" {
+            continue;
+        }
+
+        let format = unsafe { defGetString(option.as_ptr()) };
+        let format = unsafe { std::ffi::CStr::from_ptr(format).to_str().unwrap() };
+        if format == "parquet" {
+            option.arg = binary as _;
+            found_parquet_format = true;
+        }
+    }
+
+    if !found_parquet_format {
+        let format = std::ffi::CString::new("format").unwrap();
+        let format = unsafe { pg_sys::makeDefElem(format.into_raw() as _, binary as _, -1) };
+        copy_options.push(format);
+    }
+
+    copy_options
 }
 
 pub(crate) fn is_copy_to_parquet_stmt(pstmt: &PgBox<pg_sys::PlannedStmt>) -> bool {
