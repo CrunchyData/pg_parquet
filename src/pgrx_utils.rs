@@ -7,6 +7,7 @@ use pgrx::{
 
 pub(crate) fn collect_valid_attributes<'a>(
     tupdesc: &'a PgTupleDesc,
+    include_generated_columns: bool,
 ) -> Vec<&'a FormData_pg_attribute> {
     let mut attributes = vec![];
     let mut attributes_set = HashSet::<&str>::new();
@@ -14,6 +15,10 @@ pub(crate) fn collect_valid_attributes<'a>(
     for i in 0..tupdesc.len() {
         let attribute = tupdesc.get(i).unwrap();
         if attribute.is_dropped() {
+            continue;
+        }
+
+        if !include_generated_columns && attribute.attgenerated != 0 {
             continue;
         }
 

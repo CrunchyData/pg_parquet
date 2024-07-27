@@ -102,7 +102,8 @@ fn collect_arrow_attribute_arrays_from_tupledesc(
     tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     tupledesc: PgTupleDesc,
 ) -> Vec<(FieldRef, ArrayRef)> {
-    let attributes = collect_valid_attributes(&tupledesc);
+    let include_generated_columns = true;
+    let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
     let mut tuple_attribute_arrow_arrays = vec![];
 

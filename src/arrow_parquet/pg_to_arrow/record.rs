@@ -40,7 +40,8 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 
         let tupledesc = tuple_desc(typoid, typmod);
 
-        let attributes = collect_valid_attributes(&tupledesc);
+        let include_generated_columns = true;
+        let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
         let mut tuples = self;
 

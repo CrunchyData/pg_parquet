@@ -25,7 +25,7 @@ mod tests {
     use pgrx::{
         composite_type, Date, Interval, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
     };
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempPath};
 
     struct TestTable<T: IntoDatum + FromDatum> {
         tmp_file: NamedTempFile,
@@ -754,6 +754,85 @@ mod tests {
         Spi::run("DROP TABLE dog_owners;").unwrap();
         Spi::run("DROP TYPE dog_owner;").unwrap();
         Spi::run("DROP TYPE dog;").unwrap();
+    }
+
+    #[pg_test]
+    fn test_copy_without_format() {
+        Spi::run("CREATE TABLE test (a int);").unwrap();
+
+        Spi::run("INSERT INTO test VALUES (1);").unwrap();
+
+        let file = std::fs::File::create("/tmp/test.parquet").unwrap();
+        let tmp_file = NamedTempFile::from_parts(file, TempPath::from_path("/tmp/test.parquet"));
+        let path = tmp_file.path().to_str().unwrap();
+        let copy_to_query = format!("COPY (SELECT a FROM test) TO '{}';", path);
+        Spi::run(copy_to_query.as_str()).unwrap();
+
+        let expected = vec![(Some(1),)];
+
+        Spi::run("TRUNCATE test;").unwrap();
+
+        let copy_from_query = format!("COPY test FROM '{}';", path);
+        Spi::run(copy_from_query.as_str()).unwrap();
+
+        let select_command = "SELECT a FROM test ORDER BY a;";
+        let result = Spi::connect(|client| {
+            let mut results = Vec::new();
+            let tup_table = client.select(select_command, None, None).unwrap();
+
+            for row in tup_table {
+                let val = row["a"].value::<i32>();
+                results.push((val.unwrap(),));
+            }
+
+            results
+        });
+
+        assert_eq!(expected, result);
+    }
+
+    #[pg_test]
+    fn test_with_generated_and_dropped_columns() {
+        Spi::run("CREATE TABLE test (a int, b int generated always as (10) stored, c text);")
+            .unwrap();
+
+        Spi::run("ALTER TABLE test DROP COLUMN a;").unwrap();
+
+        Spi::run("INSERT INTO test (c) VALUES ('test');").unwrap();
+
+        let tmp_file = NamedTempFile::new().unwrap();
+        let path = tmp_file.path().to_str().unwrap();
+        let copy_to_query = format!(
+            "COPY (SELECT * FROM test) TO '{}' WITH (format parquet);",
+            path
+        );
+        Spi::run(copy_to_query.as_str()).unwrap();
+
+        let expected = vec![(Some(10), Some("test".to_string()))];
+
+        Spi::run("TRUNCATE test;").unwrap();
+
+        let copy_from_query = format!("COPY test FROM '{}' WITH (format parquet);", path);
+        Spi::run(copy_from_query.as_str()).unwrap();
+
+        let select_command = "SELECT b, c FROM test ORDER BY b, c;";
+        let result = Spi::connect(|client| {
+            let mut results = Vec::new();
+            let tup_table = client.select(select_command, None, None).unwrap();
+
+            for row in tup_table {
+                let b = row["b"].value::<i32>();
+                let c = row["c"].value::<String>();
+                results.push((b.unwrap(), c.unwrap()));
+            }
+
+            results
+        });
+
+        for (expected, actual) in expected.into_iter().zip(result.into_iter()) {
+            assert_eq!(expected.0, actual.0);
+            assert_eq!(expected.1, actual.1);
+        }
     }
 }
 

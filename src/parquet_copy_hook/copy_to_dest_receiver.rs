@@ -92,7 +92,8 @@ pub extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tuplede
     unsafe { PARQUET_WRITER_CONTEXT = RefCell::new(Some(parquet_writer_context)) };
 
     // count the number of attributes that are not dropped
-    let attributes = collect_valid_attributes(&tupledesc);
+    let include_generated_columns = true;
+    let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
     let natts = attributes.len() as i32;
 
     parquet_dest.tupledesc = tupledesc.as_ptr();

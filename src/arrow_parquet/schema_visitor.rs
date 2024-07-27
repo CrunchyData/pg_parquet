@@ -26,7 +26,8 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
 
     let mut struct_attribute_fields = vec![];
 
-    let attributes = collect_valid_attributes(&tupledesc);
+    let include_generated_columns = true;
+    let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
     for attribute in attributes {
         let attribute_name = attribute.name();
@@ -134,7 +135,8 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> Arc<F
 
     let mut child_fields: Vec<Arc<Field>> = vec![];
 
-    let attributes = collect_valid_attributes(&tupledesc);
+    let include_generated_columns = true;
+    let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
     for attribute in attributes {
         if attribute.is_dropped() {

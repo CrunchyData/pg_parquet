@@ -53,7 +53,8 @@ impl ParquetReaderContext {
 
             let mut binary_out_funcs = vec![];
 
-            let attributes = collect_valid_attributes(&tupledesc);
+            let include_generated_columns = false;
+            let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
             for att in attributes.iter() {
                 let typoid = att.type_oid();
@@ -116,7 +117,8 @@ impl ParquetReaderContext {
     ) -> Vec<Option<Datum>> {
         let mut datums = vec![];
 
-        let attributes = collect_valid_attributes(&tupledesc);
+        let include_generated_columns = false;
+        let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
         for attribute in attributes {
             let name = attribute.name();
@@ -142,7 +144,8 @@ impl ParquetReaderContext {
         }
 
         let tupledesc = unsafe { PgTupleDesc::from_pg(self.tupledesc) };
-        let attributes = collect_valid_attributes(&tupledesc);
+        let include_generated_columns = false;
+        let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
         let natts = attributes.len() as i16;
 
         for _ in 0..self.batch_size {

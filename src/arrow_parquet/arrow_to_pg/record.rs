@@ -21,7 +21,8 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
 
         let mut datums = vec![];
 
-        let attributes = collect_valid_attributes(&tupledesc);
+        let include_generated_columns = false;
+        let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
         for attribute in attributes {
             let name = attribute.name();
