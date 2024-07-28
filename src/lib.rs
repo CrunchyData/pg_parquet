@@ -22,6 +22,7 @@ mod tests {
     use std::fmt::Debug;
     use std::marker::PhantomData;
 
+    use arrow_parquet::codec::ParquetCodecOption;
     use pgrx::{
         composite_type, Date, Interval, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
     };
@@ -29,11 +30,12 @@ mod tests {
 
     struct TestTable<T: IntoDatum + FromDatum> {
         tmp_file: NamedTempFile,
+        codec: Option<ParquetCodecOption>,
         _data: PhantomData<T>,
     }
 
     impl<T: IntoDatum + FromDatum> TestTable<T> {
-        fn new(typename: String) -> Self {
+        fn new(typename: String, codec: Option<ParquetCodecOption>) -> Self {
             let create_table_command = format!("CREATE TABLE test (a {});", &typename);
             Spi::run(create_table_command.as_str()).unwrap();
 
@@ -41,6 +43,7 @@ mod tests {
 
             Self {
                 tmp_file,
+                codec,
                 _data: PhantomData,
             }
         }
@@ -87,8 +90,11 @@ mod tests {
             let path = self.tmp_file.path().to_str().unwrap();
 
             let copy_to_query = format!(
-                "COPY (SELECT a FROM test) TO '{}' WITH (format parquet);",
-                path
+                "COPY (SELECT a FROM test) TO '{}' WITH (format parquet, codec {});",
+                path,
+                self.codec
+                    .unwrap_or(ParquetCodecOption::Uncompressed)
+                    .to_string()
             );
 
             Spi::run(copy_to_query.as_str()).unwrap();
@@ -165,14 +171,14 @@ mod tests {
 
     #[pg_test]
     fn test_int2() {
-        let test_table = TestTable::<i16>::new("int2".into());
+        let test_table = TestTable::<i16>::new("int2".into(), None);
         let values = (1_i16..=10).into_iter().map(|v| Some(v)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_int2_array() {
-        let test_table = TestTable::<Vec<Option<i16>>>::new("int2[]".into());
+        let test_table = TestTable::<Vec<Option<i16>>>::new("int2[]".into(), None);
         let values = (1_i16..=10)
             .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
@@ -182,14 +188,14 @@ mod tests {
 
     #[pg_test]
     fn test_int4() {
-        let test_table = TestTable::<i32>::new("int4".into());
+        let test_table = TestTable::<i32>::new("int4".into(), None);
         let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_int4_array() {
-        let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into());
+        let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into(), None);
         let values = (1_i32..=10)
             .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
@@ -199,14 +205,14 @@ mod tests {
 
     #[pg_test]
     fn test_int8() {
-        let test_table = TestTable::<i64>::new("int8".into());
+        let test_table = TestTable::<i64>::new("int8".into(), None);
         let values = (1_i64..=10).into_iter().map(|v| Some(v)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_int8_array() {
-        let test_table = TestTable::<Vec<Option<i64>>>::new("int8[]".into());
+        let test_table = TestTable::<Vec<Option<i64>>>::new("int8[]".into(), None);
         let values = (1_i64..=10)
             .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
@@ -216,14 +222,14 @@ mod tests {
 
     #[pg_test]
     fn test_flaot4() {
-        let test_table = TestTable::<f32>::new("float4".into());
+        let test_table = TestTable::<f32>::new("float4".into(), None);
         let values = (1..=10).into_iter().map(|v| Some(v as f32)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_float4_array() {
-        let test_table = TestTable::<Vec<Option<f32>>>::new("float4[]".into());
+        let test_table = TestTable::<Vec<Option<f32>>>::new("float4[]".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -239,14 +245,14 @@ mod tests {
 
     #[pg_test]
     fn test_flaot8() {
-        let test_table = TestTable::<f64>::new("float8".into());
+        let test_table = TestTable::<f64>::new("float8".into(), None);
         let values = (1..=10).into_iter().map(|v| Some(v as f64)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_float8_array() {
-        let test_table = TestTable::<Vec<Option<f64>>>::new("float8[]".into());
+        let test_table = TestTable::<Vec<Option<f64>>>::new("float8[]".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -262,7 +268,7 @@ mod tests {
 
     #[pg_test]
     fn test_bool() {
-        let test_table = TestTable::<bool>::new("bool".into());
+        let test_table = TestTable::<bool>::new("bool".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| Some(if v % 2 == 0 { false } else { true }))
@@ -272,7 +278,7 @@ mod tests {
 
     #[pg_test]
     fn test_bool_array() {
-        let test_table = TestTable::<Vec<Option<bool>>>::new("bool[]".into());
+        let test_table = TestTable::<Vec<Option<bool>>>::new("bool[]".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -288,7 +294,7 @@ mod tests {
 
     #[pg_test]
     fn test_text() {
-        let test_table = TestTable::<String>::new("text".into());
+        let test_table = TestTable::<String>::new("text".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| Some(format!("test_text_{}", v)))
@@ -298,7 +304,7 @@ mod tests {
 
     #[pg_test]
     fn test_text_array() {
-        let test_table = TestTable::<Vec<Option<String>>>::new("text[]".into());
+        let test_table = TestTable::<Vec<Option<String>>>::new("text[]".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -314,7 +320,7 @@ mod tests {
 
     #[pg_test]
     fn test_varchar() {
-        let test_table = TestTable::<String>::new("varchar".into());
+        let test_table = TestTable::<String>::new("varchar".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| Some(format!("test_varchar_{}", v)))
@@ -325,7 +331,7 @@ mod tests {
     #[pg_test]
     #[ignore = "varchar[] is not supported by pgrx"]
     fn test_varchar_array() {
-        let test_table = TestTable::<Vec<Option<String>>>::new("varchar[]".into());
+        let test_table = TestTable::<Vec<Option<String>>>::new("varchar[]".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -341,14 +347,14 @@ mod tests {
 
     #[pg_test]
     fn test_char() {
-        let test_table = TestTable::<i8>::new("\"char\"".into());
+        let test_table = TestTable::<i8>::new("\"char\"".into(), None);
         let values = (1..=10).into_iter().map(|v| Some(v as i8)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_char_array() {
-        let test_table = TestTable::<Vec<Option<i8>>>::new("\"char\"[]".into());
+        let test_table = TestTable::<Vec<Option<i8>>>::new("\"char\"[]".into(), None);
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -364,7 +370,7 @@ mod tests {
 
     #[pg_test]
     fn test_date() {
-        let test_table = TestTable::<Date>::new("date".into());
+        let test_table = TestTable::<Date>::new("date".into(), None);
         let values = (1_u8..=10)
             .into_iter()
             .map(|day| Some(Date::new(2022, 5, day).unwrap()))
@@ -374,7 +380,7 @@ mod tests {
 
     #[pg_test]
     fn test_date_array() {
-        let test_table = TestTable::<Vec<Option<Date>>>::new("date[]".into());
+        let test_table = TestTable::<Vec<Option<Date>>>::new("date[]".into(), None);
         let values = (1_u8..=10)
             .into_iter()
             .map(|day| {
@@ -390,14 +396,14 @@ mod tests {
 
     #[pg_test]
     fn test_time() {
-        let test_table = TestTable::<Time>::new("time".into());
+        let test_table = TestTable::<Time>::new("time".into(), None);
         let values = (1_i64..=10).into_iter().map(|i| Some(i.into())).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_time_array() {
-        let test_table = TestTable::<Vec<Option<Time>>>::new("time[]".into());
+        let test_table = TestTable::<Vec<Option<Time>>>::new("time[]".into(), None);
         let values = (1_i64..=10)
             .into_iter()
             .map(|i| {
@@ -413,7 +419,7 @@ mod tests {
 
     #[pg_test]
     fn test_timetz() {
-        let test_table = TestTable::<TimeWithTimeZone>::new("timetz".into());
+        let test_table = TestTable::<TimeWithTimeZone>::new("timetz".into(), None);
         let values = (1_u8..=10)
             .into_iter()
             .map(|minute| {
@@ -439,7 +445,7 @@ mod tests {
 
     #[pg_test]
     fn test_timetz_array() {
-        let test_table = TestTable::<Vec<Option<TimeWithTimeZone>>>::new("timetz[]".into());
+        let test_table = TestTable::<Vec<Option<TimeWithTimeZone>>>::new("timetz[]".into(), None);
         let values = (1_u8..=10)
             .into_iter()
             .map(|minute| {
@@ -478,14 +484,14 @@ mod tests {
 
     #[pg_test]
     fn test_timestamp() {
-        let test_table = TestTable::<Timestamp>::new("timestamp".into());
+        let test_table = TestTable::<Timestamp>::new("timestamp".into(), None);
         let values = (1_i64..=10).into_iter().map(|i| Some(i.into())).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_timestamp_array() {
-        let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into());
+        let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into(), None);
         let values = (1_i64..=10)
             .into_iter()
             .map(|i| {
@@ -501,7 +507,7 @@ mod tests {
 
     #[pg_test]
     fn test_timestamptz() {
-        let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into());
+        let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into(), None);
         let values = (1_u8..=10)
             .into_iter()
             .map(|minute| {
@@ -525,7 +531,7 @@ mod tests {
     #[pg_test]
     fn test_timestamptz_array() {
         let test_table =
-            TestTable::<Vec<Option<TimestampWithTimeZone>>>::new("timestamptz[]".into());
+            TestTable::<Vec<Option<TimestampWithTimeZone>>>::new("timestamptz[]".into(), None);
         let values = (1_u8..=10)
             .into_iter()
             .map(|minute| {
@@ -575,7 +581,7 @@ mod tests {
     #[pg_test]
     #[ignore = "Interval is not supported by arrow yet"]
     fn test_interval() {
-        let test_table = TestTable::<Interval>::new("interval".into());
+        let test_table = TestTable::<Interval>::new("interval".into(), None);
         let values = (1_i32..=10)
             .into_iter()
             .map(|day| Some(Interval::new(5, day, 120).unwrap()))
@@ -586,7 +592,7 @@ mod tests {
     #[pg_test]
     #[ignore = "Interval is not supported by arrow yet"]
     fn test_interval_array() {
-        let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into());
+        let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into(), None);
         let values = (1_i32..=10)
             .into_iter()
             .map(|day| {
@@ -603,7 +609,7 @@ mod tests {
     #[pg_test]
     #[ignore = "Numeric is only supported for 'copy to' for now"]
     fn test_numeric() {
-        let test_table = TestTable::<AnyNumeric>::new("numeric".into());
+        let test_table = TestTable::<AnyNumeric>::new("numeric".into(), None);
         let values = (1_i32..=10)
             .into_iter()
             .map(|v| Some(AnyNumeric::try_from(v as f32).unwrap()))
@@ -614,7 +620,7 @@ mod tests {
     #[pg_test]
     #[ignore = "Numeric is only supported for 'copy to' for now"]
     fn test_numeric_array() {
-        let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric[]".into());
+        let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric[]".into(), None);
         let values = (1_i32..=10)
             .into_iter()
             .map(|v| {
@@ -630,7 +636,7 @@ mod tests {
 
     #[pg_test]
     fn test_empty_array() {
-        let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into());
+        let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into(), None);
         let values = vec![Some(vec![Some(1), Some(2)]), Some(vec![])];
         test_helper(test_table, values);
     }
@@ -832,6 +838,25 @@ mod tests {
         for (expected, actual) in expected.into_iter().zip(result.into_iter()) {
             assert_eq!(expected.0, actual.0);
             assert_eq!(expected.1, actual.1);
+        }
+    }
+
+    #[pg_test]
+    fn test_codecs() {
+        let codecs = vec![
+            ParquetCodecOption::Uncompressed,
+            ParquetCodecOption::Gzip,
+            ParquetCodecOption::Brotli,
+            ParquetCodecOption::Snappy,
+            ParquetCodecOption::Lz4,
+            ParquetCodecOption::Lz4raw,
+            ParquetCodecOption::Zstd,
+        ];
+
+        for codec in codecs {
+            let test_table = TestTable::<i32>::new("int4".into(), Some(codec));
+            let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+            test_helper(test_table, values);
         }
     }
 }

@@ -15,7 +15,7 @@ use crate::{
     arrow_parquet::parquet_reader::ParquetReaderContext,
     parquet_copy_hook::copy_utils::{
         addNSItemToQuery, addRangeTableEntryForRelation, assign_expr_collations, copy_lock_mode,
-        copy_options, copy_relation_oid, copy_stmt_batch_size_option, copy_stmt_filename,
+        copy_options, copy_relation_oid, copy_stmt_filename, copy_stmt_row_group_size_option,
         is_copy_from_parquet_stmt, transformExpr, BeginCopyFrom, CopyFrom, CopyFromState,
         EndCopyFrom,
     },
@@ -60,7 +60,7 @@ pub(crate) fn execute_copy_from(
     let relation = unsafe { PgRelation::with_lock(rel_oid, lock_mode) };
 
     let filename = copy_stmt_filename(&pstmt);
-    let batch_size = copy_stmt_batch_size_option(&pstmt);
+    let batch_size = copy_stmt_row_group_size_option(&pstmt);
     let pstate = create_parse_state(query_string, &query_env);
 
     let nsitem = copy_ns_item(&pstate, &pstmt, &relation);

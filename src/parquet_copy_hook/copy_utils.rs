@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use pgrx::{
     is_a,
     pg_sys::{
@@ -7,6 +9,8 @@ use pgrx::{
     },
     void_mut_ptr, PgBox, PgList, PgRelation,
 };
+
+use crate::arrow_parquet::codec::{FromPath, ParquetCodecOption};
 
 pub(crate) fn is_parquet_format(copy_stmt: &PgBox<CopyStmt>) -> bool {
     let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
@@ -35,7 +39,7 @@ pub(crate) fn is_parquet_file(copy_stmt: &PgBox<CopyStmt>) -> bool {
             .to_str()
             .unwrap()
     };
-    filename.ends_with(".parquet")
+    <ParquetCodecOption as FromPath>::try_from_path(filename).is_ok()
 }
 
 pub(crate) fn copy_stmt_filename(pstmt: &PgBox<pg_sys::PlannedStmt>) -> *mut i8 {
@@ -45,10 +49,10 @@ pub(crate) fn copy_stmt_filename(pstmt: &PgBox<pg_sys::PlannedStmt>) -> *mut i8 
     copy_stmt.filename
 }
 
-pub(crate) fn copy_stmt_batch_size_option(pstmt: &PgBox<pg_sys::PlannedStmt>) -> i64 {
+pub(crate) fn copy_stmt_row_group_size_option(pstmt: &PgBox<pg_sys::PlannedStmt>) -> i64 {
     assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
 
-    const DEFAULT_BATCH_SIZE: i64 = 100000;
+    const DEFAULT_ROW_GROUP_SIZE: i64 = 100000;
 
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
 
@@ -56,15 +60,49 @@ pub(crate) fn copy_stmt_batch_size_option(pstmt: &PgBox<pg_sys::PlannedStmt>) ->
     for option in copy_options.iter_ptr() {
         let option = unsafe { PgBox::<DefElem>::from_pg(option) };
         let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
-        if key != "batch_size" {
+        if key != "row_group_size" {
             continue;
         }
 
-        let batch_size = unsafe { defGetInt64(option.as_ptr()) };
-        return batch_size;
+        let row_group_size = unsafe { defGetInt64(option.as_ptr()) };
+        return row_group_size;
     }
 
-    DEFAULT_BATCH_SIZE
+    DEFAULT_ROW_GROUP_SIZE
+}
+
+pub(crate) fn copy_stmt_codec_option(
+    pstmt: &PgBox<pg_sys::PlannedStmt>,
+) -> Option<ParquetCodecOption> {
+    assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
+
+    let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
+
+    let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
+    for option in copy_options.iter_ptr() {
+        let option = unsafe { PgBox::<DefElem>::from_pg(option) };
+        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        if key != "codec" {
+            continue;
+        }
+
+        let codec = unsafe { defGetString(option.as_ptr()) };
+        let codec = unsafe { std::ffi::CStr::from_ptr(codec).to_str().unwrap() };
+        let codec = ParquetCodecOption::from_str(codec).unwrap();
+        return Some(codec);
+    }
+
+    None
+}
+
+pub(crate) fn copy_stmt_codec(pstmt: &PgBox<pg_sys::PlannedStmt>) -> ParquetCodecOption {
+    if let Some(codec) = copy_stmt_codec_option(pstmt) {
+        codec
+    } else {
+        let copy_filename = copy_stmt_filename(pstmt);
+        let copy_filename = unsafe { std::ffi::CStr::from_ptr(copy_filename).to_str().unwrap() };
+        FromPath::try_from_path(copy_filename).unwrap_or(ParquetCodecOption::Uncompressed)
+    }
 }
 
 pub(crate) fn copy_options(pstmt: &PgBox<pg_sys::PlannedStmt>) -> PgList<DefElem> {

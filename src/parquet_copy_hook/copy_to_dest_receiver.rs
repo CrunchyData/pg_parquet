@@ -8,7 +8,8 @@ use pgrx::{prelude::*, PgList, PgMemoryContexts, PgTupleDesc};
 
 use crate::{
     arrow_parquet::{
-        parquet_writer::ParquetWriterContext, schema_visitor::parquet_schema_string_from_tupledesc,
+        codec::ParquetCodecOption, parquet_writer::ParquetWriterContext,
+        schema_visitor::parquet_schema_string_from_tupledesc,
     },
     parquet_copy_hook::copy_utils::slot_getallattrs,
     pgrx_utils::collect_valid_attributes,
@@ -22,7 +23,8 @@ struct CopyToParquetDestReceiver {
     natts: i32,
     tuple_count: i64,
     tuples: *mut List,
-    batch_size: i64,
+    row_group_size: i64,
+    codec: ParquetCodecOption,
     per_copy_context: MemoryContext,
 }
 
@@ -87,8 +89,11 @@ pub extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tuplede
         .to_str()
         .unwrap();
 
+    let codec = parquet_dest.codec;
+
     // create parquet writer context
-    let parquet_writer_context = ParquetWriterContext::new(filename, tupledesc.clone().to_owned());
+    let parquet_writer_context =
+        ParquetWriterContext::new(filename, codec, tupledesc.clone().to_owned());
     unsafe { PARQUET_WRITER_CONTEXT = RefCell::new(Some(parquet_writer_context)) };
 
     // count the number of attributes that are not dropped
@@ -133,7 +138,7 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
 
             collect_tuple(&mut parquet_dest, heap_tuple);
 
-            if parquet_dest.tuple_count == parquet_dest.batch_size {
+            if parquet_dest.tuple_count == parquet_dest.row_group_size {
                 copy_buffered_tuples(parquet_dest.tupledesc, parquet_dest.tuples);
                 reset_collected_tuples(&mut parquet_dest);
                 context.reset()
@@ -171,7 +176,8 @@ pub extern "C" fn copy_destroy(_dest: *mut DestReceiver) {
 
 pub(crate) fn create_copy_to_parquet_dest_receiver(
     filename: *mut i8,
-    batch_size: i64,
+    row_group_size: i64,
+    codec: ParquetCodecOption,
 ) -> PgBox<DestReceiver> {
     let per_copy_context = unsafe {
         pg_sys::AllocSetContextCreateExtended(
@@ -194,7 +200,8 @@ pub(crate) fn create_copy_to_parquet_dest_receiver(
     parquet_dest.natts = 0;
     parquet_dest.tuple_count = 0;
     parquet_dest.tuples = std::ptr::null_mut();
-    parquet_dest.batch_size = batch_size;
+    parquet_dest.row_group_size = row_group_size;
+    parquet_dest.codec = codec;
     parquet_dest.per_copy_context = per_copy_context;
 
     // it should be into_pg() (not as_ptr()) to prevent pfree of Rust allocated memory

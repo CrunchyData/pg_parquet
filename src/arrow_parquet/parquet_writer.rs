@@ -6,13 +6,17 @@ use arrow::{
 };
 use parquet::{
     arrow::arrow_writer::{compute_leaves, get_column_writers},
-    file::{properties::WriterProperties, writer::SerializedFileWriter},
+    file::{
+        properties::{EnabledStatistics, WriterProperties},
+        writer::SerializedFileWriter,
+    },
     schema::types::SchemaDescriptor,
 };
 use pgrx::{heap_tuple::PgHeapTuple, pg_sys::RECORDOID, AllocatedByRust, PgTupleDesc};
 
 use crate::{
     arrow_parquet::{
+        codec::ParquetCodecOption,
         pg_to_arrow::record::collect_attribute_array_from_tuples,
         schema_visitor::{parse_arrow_schema_from_tupledesc, parse_parquet_schema_from_tupledesc},
     },
@@ -28,10 +32,18 @@ pub(crate) struct ParquetWriterContext<'a> {
 }
 
 impl<'a> ParquetWriterContext<'a> {
-    pub(crate) fn new(filename: &str, tupledesc: PgTupleDesc<'a>) -> ParquetWriterContext<'a> {
+    pub(crate) fn new(
+        filename: &str,
+        codec: ParquetCodecOption,
+        tupledesc: PgTupleDesc<'a>,
+    ) -> ParquetWriterContext<'a> {
         assert!(tupledesc.oid() == RECORDOID);
 
-        let writer_props = Arc::new(WriterProperties::default());
+        let writer_props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .set_compression(codec.into())
+            .build();
+        let writer_props = Arc::new(writer_props);
 
         let file = std::fs::OpenOptions::new()
             .write(true)
