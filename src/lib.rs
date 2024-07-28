@@ -131,7 +131,7 @@ mod tests {
         test_table.insert(values);
 
         // Insert a NULL value to test NULL handling
-        //test_table.insert(vec![None]);
+        test_table.insert(vec![None]);
 
         let expected_result = test_table.select_all();
 

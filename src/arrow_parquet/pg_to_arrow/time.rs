@@ -9,7 +9,7 @@ use pgrx::{pg_sys::Oid, Time};
 use crate::{
     arrow_parquet::{
         pg_to_arrow::PgTypeToArrowArray,
-        utils::{arrow_array_offsets, create_arrow_list_array, create_arrow_null_list_array},
+        utils::{arrow_array_offsets, create_arrow_list_array},
     },
     type_compat::time_to_i64,
 };
@@ -32,13 +32,9 @@ impl PgTypeToArrowArray<Time> for Vec<Option<Time>> {
 // Time[]
 impl PgTypeToArrowArray<Vec<Option<Time>>> for Vec<Option<Vec<Option<Time>>>> {
     fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
-        let (offsets, all_nulls) = arrow_array_offsets(&self);
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true);
-
-        if all_nulls {
-            return create_arrow_null_list_array(name, &field, self.len());
-        }
 
         let array = self
             .into_iter()
@@ -49,6 +45,6 @@ impl PgTypeToArrowArray<Vec<Option<Time>>> for Vec<Option<Vec<Option<Time>>>> {
         let array = Time64MicrosecondArray::from(array);
         let (field, primitive_array) = (Arc::new(field), Arc::new(array));
 
-        create_arrow_list_array(name, field, primitive_array, offsets)
+        create_arrow_list_array(name, field, primitive_array, offsets, nulls)
     }
 }

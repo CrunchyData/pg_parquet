@@ -22,7 +22,7 @@ use pgrx::{
 use crate::{
     arrow_parquet::{
         pg_to_arrow::PgTypeToArrowArray,
-        utils::{arrow_array_offsets, create_arrow_list_array, create_arrow_null_list_array},
+        utils::{arrow_array_offsets, create_arrow_list_array},
     },
     pgrx_utils::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
@@ -90,18 +90,12 @@ impl PgTypeToArrowArray<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>
     for Vec<Option<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>>
 {
     fn as_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
-        let (offsets, all_nulls) = arrow_array_offsets(&self);
-
-        let len = self.len();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
         let array = self.into_iter().flatten().flatten().collect::<Vec<_>>();
         let (field, primitive_array) = array.as_arrow_array(name, typoid, typmod);
 
-        if all_nulls {
-            return create_arrow_null_list_array(name, &field, len);
-        }
-
-        create_arrow_list_array(name, field, primitive_array, offsets)
+        create_arrow_list_array(name, field, primitive_array, offsets, nulls)
     }
 }
 
