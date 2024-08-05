@@ -1,5 +1,7 @@
 use arrow::array::RecordBatch;
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+use futures::StreamExt;
+
+use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream};
 use pgrx::{
     pg_sys::{
         fmgr_info, getTypeBinaryOutputInfo, varlena, Datum, FmgrInfo, InvalidOid, SendFunctionCall,
@@ -7,39 +9,39 @@ use pgrx::{
     },
     vardata_any, varsize_any_exhdr, void_mut_ptr, AllocatedByPostgres, PgBox, PgTupleDesc,
 };
+use tokio::runtime::Runtime;
 
 use crate::{arrow_parquet::arrow_to_pg::as_pg_datum, pgrx_utils::collect_valid_attributes};
+
+use super::parquet_uri_utils::parquet_reader_from_uri;
 
 pub(crate) struct ParquetReaderContext {
     buffer: Vec<u8>,
     offset: usize,
-    batch_size: i64,
     started: bool,
     finished: bool,
-    parquet_reader: ParquetRecordBatchReader,
+    runtime: Runtime,
+    parquet_reader: ParquetRecordBatchStream<ParquetObjectReader>,
     tupledesc: TupleDesc,
     binary_out_funcs: Vec<PgBox<FmgrInfo>>,
 }
 
 impl ParquetReaderContext {
-    pub(crate) fn new(filename: String, batch_size: i64, tupledesc: TupleDesc) -> Self {
-        let parquet_file = std::fs::OpenOptions::new()
-            .read(true)
-            .open(&filename)
+    pub(crate) fn new(uri: String, tupledesc: TupleDesc) -> Self {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
 
-        let builder = ParquetRecordBatchReaderBuilder::try_new(parquet_file).unwrap();
-        pgrx::debug2!("Converted arrow schema is: {}", builder.schema());
-
-        let parquet_reader = builder.with_batch_size(1).build().unwrap();
+        let parquet_reader = runtime.block_on(parquet_reader_from_uri(&uri));
 
         let binary_out_funcs = Self::collect_binary_out_funcs(tupledesc);
 
         ParquetReaderContext {
             buffer: Vec::new(),
             offset: 0,
-            batch_size,
             tupledesc,
+            runtime,
             parquet_reader,
             binary_out_funcs,
             started: false,
@@ -148,14 +150,17 @@ impl ParquetReaderContext {
         let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
         let natts = attributes.len() as i16;
 
-        for _ in 0..self.batch_size {
-            pgrx::pg_sys::check_for_interrupts!();
+        let record_batch = self.runtime.block_on(self.parquet_reader.next());
 
-            let record_batch = self.parquet_reader.next();
+        if let Some(batch_result) = record_batch {
+            let record_batch = batch_result.unwrap();
 
-            if let Some(batch_result) = record_batch {
-                let record_batch = batch_result.unwrap();
-                // pgrx::warning!("record batch: {:?}", record_batch);
+            let num_rows = record_batch.num_rows();
+
+            for i in 0..num_rows {
+                pgrx::pg_sys::check_for_interrupts!();
+
+                let record_batch = record_batch.slice(i, 1);
 
                 /* 2 bytes: per-tuple header */
                 let attnum_len_bytes = natts.to_be_bytes();
@@ -187,10 +192,9 @@ impl ParquetReaderContext {
                         self.buffer.extend_from_slice(&null_value_bytes);
                     }
                 }
-            } else {
-                self.copy_finish();
-                break;
             }
+        } else {
+            self.copy_finish();
         }
 
         let _ = tupledesc.into_pg();

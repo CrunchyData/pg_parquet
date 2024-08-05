@@ -1,5 +1,5 @@
 # pg_parquet
-`pg_parquet` is a PostgreSQL extension that allows you to read and write Parquet files from PostgreSQL via `COPY TO/FROM` commands. It heavily uses [Apache Arrow](https://arrow.apache.org/rust/arrow/) project to read and write Parquet files and [pgrx](https://github.com/pgcentralfoundation/pgrx) project to extend PostgreSQL's `COPY` command.
+`pg_parquet` is a PostgreSQL extension that allows you to read and write Parquet files, which are located in `S3` or `file system`, from PostgreSQL via `COPY TO/FROM` commands. It heavily uses [Apache Arrow](https://arrow.apache.org/rust/arrow/) project to read and write Parquet files and [pgrx](https://github.com/pgcentralfoundation/pgrx) project to extend PostgreSQL's `COPY` command.
 
 ## Usage
 You can use PostgreSQL's `COPY` command to read and write Parquet files. Below is an example of how to write a PostgreSQL table, with complex types, into a Parquet file and then to read the Parquet file content back into the same table.
@@ -28,17 +28,26 @@ insert into product_example values (
 );
 
 -- copy the table to a parquet file
-COPY product_example TO '/tmp/product_example.parquet' (FORMAT 'parquet', CODEC 'gzip');
+COPY product_example TO 'file:///tmp/product_example.parquet' (FORMAT 'parquet', CODEC 'gzip');
 
 -- show table
 SELECT * FROM product_example;
 
 -- copy the parquet file to the table
-COPY product_example FROM '/tmp/product_example.parquet';
+COPY product_example FROM 'file:///tmp/product_example.parquet';
 
 -- show table
 SELECT * FROM product_example;
 ```
+
+## Object Store Support
+`pg_parquet` supports reading and writing Parquet files from `S3` object store. You can replace `file://` with `s3://` scheme to specify the location of the Parquet file in the `S3` object store. Below is an example of how to read and write Parquet files from `S3` object store.
+
+### Configuration
+You can set the following `AWS S3` environment variables properly to access to the object store:
+- `AWS_ACCESS_KEY_ID`: the access key ID of the AWS account,
+- `AWS_SECRET_ACCESS_KEY`: the secret access key of the AWS account,
+- `AWS_REGION`: the default region of the AWS account.
 
 ## Supported Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:

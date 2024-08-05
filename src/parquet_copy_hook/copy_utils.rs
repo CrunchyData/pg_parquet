@@ -10,7 +10,9 @@ use pgrx::{
     void_mut_ptr, PgBox, PgList, PgRelation,
 };
 
-use crate::arrow_parquet::codec::{FromPath, ParquetCodecOption};
+use crate::arrow_parquet::codec::{all_supported_codecs, FromPath, ParquetCodecOption};
+
+pub(crate) const DEFAULT_ROW_GROUP_SIZE: i64 = 100000;
 
 pub(crate) fn is_parquet_format(copy_stmt: &PgBox<CopyStmt>) -> bool {
     let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
@@ -42,6 +44,78 @@ pub(crate) fn is_parquet_file(copy_stmt: &PgBox<CopyStmt>) -> bool {
     <ParquetCodecOption as FromPath>::try_from_path(filename).is_ok()
 }
 
+pub(crate) fn validate_copy_to_options(pstmt: &PgBox<pg_sys::PlannedStmt>) {
+    let allowed_options = ["format", "row_group_size", "codec"];
+
+    let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
+    let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
+
+    for option in copy_options.iter_ptr() {
+        let option = unsafe { PgBox::<DefElem>::from_pg(option) };
+        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        if !allowed_options.contains(&key) {
+            panic!("{} is not a valid option for COPY TO PARQUET", key);
+        }
+
+        if key == "format" {
+            let format = unsafe { defGetString(option.as_ptr()) };
+            let format = unsafe { std::ffi::CStr::from_ptr(format).to_str().unwrap() };
+            if format != "parquet" {
+                panic!(
+                    "{} is not a valid format. Only parquet format is supported.",
+                    format
+                );
+            }
+        }
+
+        if key == "row_group_size" {
+            let row_group_size = unsafe { defGetInt64(option.as_ptr()) };
+            if row_group_size <= 0 {
+                panic!("row_group_size must be greater than 0");
+            }
+        }
+
+        if key == "codec" {
+            let codec = unsafe { defGetString(option.as_ptr()) };
+            let codec = unsafe { std::ffi::CStr::from_ptr(codec).to_str().unwrap() };
+            if ParquetCodecOption::from_str(codec).is_err() {
+                panic!(
+                    "{} is not a valid codec. Supported codecs are {}",
+                    codec,
+                    all_supported_codecs()
+                        .into_iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn validate_copy_from_options(pstmt: &PgBox<pg_sys::PlannedStmt>) {
+    let allowed_options = ["format"];
+
+    let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
+    let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
+
+    for option in copy_options.iter_ptr() {
+        let option = unsafe { PgBox::<DefElem>::from_pg(option) };
+        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        if !allowed_options.contains(&key) {
+            panic!("{} is not a valid option for COPY FROM PARQUET", key);
+        }
+
+        if key == "format" {
+            let format = unsafe { defGetString(option.as_ptr()) };
+            let format = unsafe { std::ffi::CStr::from_ptr(format).to_str().unwrap() };
+            if format != "parquet" {
+                panic!("{} is not a valid format for COPY FROM PARQUET", format);
+            }
+        }
+    }
+}
+
 pub(crate) fn copy_stmt_filename(pstmt: &PgBox<pg_sys::PlannedStmt>) -> *mut i8 {
     assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
@@ -51,8 +125,6 @@ pub(crate) fn copy_stmt_filename(pstmt: &PgBox<pg_sys::PlannedStmt>) -> *mut i8 
 
 pub(crate) fn copy_stmt_row_group_size_option(pstmt: &PgBox<pg_sys::PlannedStmt>) -> i64 {
     assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
-
-    const DEFAULT_ROW_GROUP_SIZE: i64 = 100000;
 
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
 
@@ -105,10 +177,9 @@ pub(crate) fn copy_stmt_codec(pstmt: &PgBox<pg_sys::PlannedStmt>) -> ParquetCode
     }
 }
 
-pub(crate) fn copy_options(pstmt: &PgBox<pg_sys::PlannedStmt>) -> PgList<DefElem> {
+pub(crate) fn add_binary_format_option(pstmt: &PgBox<pg_sys::PlannedStmt>) -> PgList<DefElem> {
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
 
-    // change (format parquet) to (format binary)
     let binary = std::ffi::CString::new("binary").unwrap();
     let binary = unsafe { pg_sys::makeString(binary.into_raw() as _) };
 

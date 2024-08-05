@@ -17,22 +17,24 @@ pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
 pg_test = []
 
 [dependencies]
-arrow = "52.1.0"
-parquet = { version = "52.0.0", features = [
+arrow = {version = "52", default-features = false}
+bytes = "1"
+futures = "0.3"
+object_store = {version = "0.10", default-features = false, features = ["aws"]}
+parquet = { version = "52", default-features = false, features = [
     "arrow",
     "snap",
     "brotli",
     "flate2",
     "lz4",
     "zstd",
-    "base64"
+    "object_store",
 ]}
 pgrx = "=0.11.4"
-tempfile = "3.10.1"
+tokio = {version = "1", default-features = false, features = ["rt", "time", "macros"]}
 
 [dev-dependencies]
 pgrx-tests = "=0.11.4"
-tempfile = "3.10.1"
 
 [profile.dev]
 panic = "unwind"

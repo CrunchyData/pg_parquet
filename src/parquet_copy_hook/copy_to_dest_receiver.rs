@@ -28,7 +28,8 @@ struct CopyToParquetDestReceiver {
     per_copy_context: MemoryContext,
 }
 
-static mut PARQUET_WRITER_CONTEXT: RefCell<Option<ParquetWriterContext>> = RefCell::new(None);
+pub(crate) static mut PARQUET_WRITER_CONTEXT: RefCell<Option<ParquetWriterContext>> =
+    RefCell::new(None);
 
 fn collect_tuple(
     parquet_dest: &mut PgBox<CopyToParquetDestReceiver>,
@@ -161,7 +162,8 @@ pub extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
     reset_collected_tuples(&mut parquet_dest);
 
     unsafe {
-        PARQUET_WRITER_CONTEXT = RefCell::new(None);
+        let old_writer_ctx = PARQUET_WRITER_CONTEXT.replace(None);
+        old_writer_ctx.unwrap().close();
     };
 
     let mut per_copy_ctx = PgMemoryContexts::For(parquet_dest.per_copy_context);

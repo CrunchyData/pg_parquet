@@ -14,8 +14,8 @@ use pgrx::{
 use crate::{
     arrow_parquet::parquet_reader::ParquetReaderContext,
     parquet_copy_hook::copy_utils::{
-        addNSItemToQuery, addRangeTableEntryForRelation, assign_expr_collations, copy_lock_mode,
-        copy_options, copy_relation_oid, copy_stmt_filename, copy_stmt_row_group_size_option,
+        addNSItemToQuery, addRangeTableEntryForRelation, add_binary_format_option,
+        assign_expr_collations, copy_lock_mode, copy_relation_oid, copy_stmt_filename,
         is_copy_from_parquet_stmt, transformExpr, BeginCopyFrom, CopyFrom, CopyFromState,
         EndCopyFrom,
     },
@@ -60,7 +60,6 @@ pub(crate) fn execute_copy_from(
     let relation = unsafe { PgRelation::with_lock(rel_oid, lock_mode) };
 
     let filename = copy_stmt_filename(&pstmt);
-    let batch_size = copy_stmt_row_group_size_option(&pstmt);
     let pstate = create_parse_state(query_string, &query_env);
 
     let nsitem = copy_ns_item(&pstate, &pstmt, &relation);
@@ -82,11 +81,10 @@ pub(crate) fn execute_copy_from(
             .unwrap()
             .to_string();
 
-        let parquet_reader_context =
-            ParquetReaderContext::new(filename, batch_size, tupledesc.as_ptr());
+        let parquet_reader_context = ParquetReaderContext::new(filename, tupledesc.as_ptr());
         PARQUET_READER_CONTEXT = RefCell::new(Some(parquet_reader_context));
 
-        let copy_options = copy_options(&pstmt);
+        let copy_options = add_binary_format_option(&pstmt);
 
         let copy_from_state: CopyFromState = BeginCopyFrom(
             pstate.as_ptr(),

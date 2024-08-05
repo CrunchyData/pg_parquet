@@ -17,36 +17,108 @@ pub extern "C" fn _PG_init() {
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
-    use super::*;
-
-    use std::fmt::Debug;
     use std::marker::PhantomData;
+    use std::{collections::HashMap, fmt::Debug};
 
-    use arrow_parquet::codec::ParquetCodecOption;
+    use crate::arrow_parquet::codec::ParquetCodecOption;
+    use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
+    use crate::type_compat::i128_to_numeric;
     use pgrx::{
-        composite_type, Date, Interval, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
+        composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Spi, Time,
+        TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
     };
-    use tempfile::{NamedTempFile, TempPath};
-    use type_compat::i128_to_numeric;
+    enum CopyOptionValue {
+        StringOption(String),
+        IntOption(i64),
+    }
+
+    fn comma_separated_copy_options(options: &HashMap<String, CopyOptionValue>) -> String {
+        let mut comma_sepated_options = String::new();
+
+        let mut option_idx = 0;
+        for (key, value) in options.iter() {
+            match value {
+                CopyOptionValue::StringOption(value) => {
+                    comma_sepated_options.push_str(&format!("{} '{}'", key, value));
+                }
+                CopyOptionValue::IntOption(value) => {
+                    comma_sepated_options.push_str(&format!("{} {}", key, value));
+                }
+            }
+
+            if option_idx < options.len() - 1 {
+                comma_sepated_options.push_str(", ");
+            }
+
+            option_idx += 1;
+        }
+
+        comma_sepated_options
+    }
 
     struct TestTable<T: IntoDatum + FromDatum> {
-        tmp_file: NamedTempFile,
-        codec: Option<ParquetCodecOption>,
+        uri: String,
+        copy_to_options: HashMap<String, CopyOptionValue>,
+        copy_from_options: HashMap<String, CopyOptionValue>,
         _data: PhantomData<T>,
     }
 
     impl<T: IntoDatum + FromDatum> TestTable<T> {
-        fn new(typename: String, codec: Option<ParquetCodecOption>) -> Self {
+        fn new(typename: String) -> Self {
+            Spi::run("DROP TABLE IF EXISTS test;").unwrap();
+
             let create_table_command = format!("CREATE TABLE test (a {});", &typename);
             Spi::run(create_table_command.as_str()).unwrap();
 
-            let tmp_file = NamedTempFile::new().unwrap();
+            let mut copy_to_options = HashMap::new();
+            copy_to_options.insert(
+                "format".to_string(),
+                CopyOptionValue::StringOption("parquet".to_string()),
+            );
+            copy_to_options.insert(
+                "codec".to_string(),
+                CopyOptionValue::StringOption(ParquetCodecOption::Uncompressed.to_string()),
+            );
+            copy_to_options.insert(
+                "row_group_size".to_string(),
+                CopyOptionValue::IntOption(DEFAULT_ROW_GROUP_SIZE as i64),
+            );
+
+            let mut copy_from_options = HashMap::new();
+            copy_from_options.insert(
+                "format".to_string(),
+                CopyOptionValue::StringOption("parquet".to_string()),
+            );
+
+            let uri = "file:///tmp/test.parquet".to_string();
 
             Self {
-                tmp_file,
-                codec,
+                uri,
+                copy_to_options,
+                copy_from_options,
                 _data: PhantomData,
             }
+        }
+
+        fn with_copy_to_options(
+            mut self,
+            copy_to_options: HashMap<String, CopyOptionValue>,
+        ) -> Self {
+            self.copy_to_options = copy_to_options;
+            self
+        }
+
+        fn with_copy_from_options(
+            mut self,
+            copy_from_options: HashMap<String, CopyOptionValue>,
+        ) -> Self {
+            self.copy_from_options = copy_from_options;
+            self
+        }
+
+        fn with_uri(mut self, uri: String) -> Self {
+            self.uri = uri;
+            self
         }
 
         fn truncate(&self) {
@@ -88,23 +160,35 @@ mod tests {
         }
 
         fn copy_to_parquet(&self) {
-            let path = self.tmp_file.path().to_str().unwrap();
+            let mut copy_to_query = format!("COPY (SELECT a FROM test) TO '{}'", self.uri);
 
-            let copy_to_query = format!(
-                "COPY (SELECT a FROM test) TO '{}' WITH (format parquet, codec {});",
-                path,
-                self.codec
-                    .unwrap_or(ParquetCodecOption::Uncompressed)
-                    .to_string()
-            );
+            if !self.copy_to_options.is_empty() {
+                copy_to_query.push_str(" WITH (");
+
+                let options_str = comma_separated_copy_options(&self.copy_to_options);
+                copy_to_query.push_str(&options_str);
+
+                copy_to_query.push_str(")");
+            }
+
+            copy_to_query.push_str(";");
 
             Spi::run(copy_to_query.as_str()).unwrap();
         }
 
         fn copy_from_parquet(&self) {
-            let path = self.tmp_file.path().to_str().unwrap();
+            let mut copy_from_query = format!("COPY test FROM '{}'", self.uri);
 
-            let copy_from_query = format!("COPY test FROM '{}' WITH (format parquet);", path);
+            if !self.copy_from_options.is_empty() {
+                copy_from_query.push_str(" WITH (");
+
+                let options_str = comma_separated_copy_options(&self.copy_from_options);
+                copy_from_query.push_str(&options_str);
+
+                copy_from_query.push_str(")");
+            }
+
+            copy_from_query.push_str(";");
 
             Spi::run(copy_from_query.as_str()).unwrap();
         }
@@ -112,7 +196,13 @@ mod tests {
 
     impl<T: IntoDatum + FromDatum> Drop for TestTable<T> {
         fn drop(&mut self) {
-            Spi::run("DROP TABLE test;").unwrap();
+            if self.uri.starts_with("file://") {
+                let path = self.uri.replace("file://", "");
+
+                if std::path::Path::new(&path).exists() {
+                    std::fs::remove_file(path).unwrap();
+                }
+            }
         }
     }
 
@@ -172,14 +262,14 @@ mod tests {
 
     #[pg_test]
     fn test_int2() {
-        let test_table = TestTable::<i16>::new("int2".into(), None);
+        let test_table = TestTable::<i16>::new("int2".into());
         let values = (1_i16..=10).into_iter().map(|v| Some(v)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_int2_array() {
-        let test_table = TestTable::<Vec<Option<i16>>>::new("int2[]".into(), None);
+        let test_table = TestTable::<Vec<Option<i16>>>::new("int2[]".into());
         let values = (1_i16..=10)
             .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
@@ -189,14 +279,14 @@ mod tests {
 
     #[pg_test]
     fn test_int4() {
-        let test_table = TestTable::<i32>::new("int4".into(), None);
+        let test_table = TestTable::<i32>::new("int4".into());
         let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_int4_array() {
-        let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into(), None);
+        let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into());
         let values = (1_i32..=10)
             .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
@@ -206,14 +296,14 @@ mod tests {
 
     #[pg_test]
     fn test_int8() {
-        let test_table = TestTable::<i64>::new("int8".into(), None);
+        let test_table = TestTable::<i64>::new("int8".into());
         let values = (1_i64..=10).into_iter().map(|v| Some(v)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_int8_array() {
-        let test_table = TestTable::<Vec<Option<i64>>>::new("int8[]".into(), None);
+        let test_table = TestTable::<Vec<Option<i64>>>::new("int8[]".into());
         let values = (1_i64..=10)
             .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
@@ -223,14 +313,14 @@ mod tests {
 
     #[pg_test]
     fn test_flaot4() {
-        let test_table = TestTable::<f32>::new("float4".into(), None);
+        let test_table = TestTable::<f32>::new("float4".into());
         let values = (1..=10).into_iter().map(|v| Some(v as f32)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_float4_array() {
-        let test_table = TestTable::<Vec<Option<f32>>>::new("float4[]".into(), None);
+        let test_table = TestTable::<Vec<Option<f32>>>::new("float4[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -246,14 +336,14 @@ mod tests {
 
     #[pg_test]
     fn test_flaot8() {
-        let test_table = TestTable::<f64>::new("float8".into(), None);
+        let test_table = TestTable::<f64>::new("float8".into());
         let values = (1..=10).into_iter().map(|v| Some(v as f64)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_float8_array() {
-        let test_table = TestTable::<Vec<Option<f64>>>::new("float8[]".into(), None);
+        let test_table = TestTable::<Vec<Option<f64>>>::new("float8[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -269,7 +359,7 @@ mod tests {
 
     #[pg_test]
     fn test_bool() {
-        let test_table = TestTable::<bool>::new("bool".into(), None);
+        let test_table = TestTable::<bool>::new("bool".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| Some(if v % 2 == 0 { false } else { true }))
@@ -279,7 +369,7 @@ mod tests {
 
     #[pg_test]
     fn test_bool_array() {
-        let test_table = TestTable::<Vec<Option<bool>>>::new("bool[]".into(), None);
+        let test_table = TestTable::<Vec<Option<bool>>>::new("bool[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -295,7 +385,7 @@ mod tests {
 
     #[pg_test]
     fn test_text() {
-        let test_table = TestTable::<String>::new("text".into(), None);
+        let test_table = TestTable::<String>::new("text".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| Some(format!("test_text_{}", v)))
@@ -305,7 +395,7 @@ mod tests {
 
     #[pg_test]
     fn test_text_array() {
-        let test_table = TestTable::<Vec<Option<String>>>::new("text[]".into(), None);
+        let test_table = TestTable::<Vec<Option<String>>>::new("text[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -321,7 +411,7 @@ mod tests {
 
     #[pg_test]
     fn test_varchar() {
-        let test_table = TestTable::<String>::new("varchar".into(), None);
+        let test_table = TestTable::<String>::new("varchar".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| Some(format!("test_varchar_{}", v)))
@@ -332,7 +422,7 @@ mod tests {
     #[pg_test]
     #[ignore = "varchar[] is not supported by pgrx"]
     fn test_varchar_array() {
-        let test_table = TestTable::<Vec<Option<String>>>::new("varchar[]".into(), None);
+        let test_table = TestTable::<Vec<Option<String>>>::new("varchar[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -348,14 +438,14 @@ mod tests {
 
     #[pg_test]
     fn test_char() {
-        let test_table = TestTable::<i8>::new("\"char\"".into(), None);
+        let test_table = TestTable::<i8>::new("\"char\"".into());
         let values = (1..=10).into_iter().map(|v| Some(v as i8)).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_char_array() {
-        let test_table = TestTable::<Vec<Option<i8>>>::new("\"char\"[]".into(), None);
+        let test_table = TestTable::<Vec<Option<i8>>>::new("\"char\"[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
@@ -371,7 +461,7 @@ mod tests {
 
     #[pg_test]
     fn test_date() {
-        let test_table = TestTable::<Date>::new("date".into(), None);
+        let test_table = TestTable::<Date>::new("date".into());
         let values = (1_u8..=10)
             .into_iter()
             .map(|day| Some(Date::new(2022, 5, day).unwrap()))
@@ -381,7 +471,7 @@ mod tests {
 
     #[pg_test]
     fn test_date_array() {
-        let test_table = TestTable::<Vec<Option<Date>>>::new("date[]".into(), None);
+        let test_table = TestTable::<Vec<Option<Date>>>::new("date[]".into());
         let values = (1_u8..=10)
             .into_iter()
             .map(|day| {
@@ -397,14 +487,14 @@ mod tests {
 
     #[pg_test]
     fn test_time() {
-        let test_table = TestTable::<Time>::new("time".into(), None);
+        let test_table = TestTable::<Time>::new("time".into());
         let values = (1_i64..=10).into_iter().map(|i| Some(i.into())).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_time_array() {
-        let test_table = TestTable::<Vec<Option<Time>>>::new("time[]".into(), None);
+        let test_table = TestTable::<Vec<Option<Time>>>::new("time[]".into());
         let values = (1_i64..=10)
             .into_iter()
             .map(|i| {
@@ -420,7 +510,7 @@ mod tests {
 
     #[pg_test]
     fn test_timetz() {
-        let test_table = TestTable::<TimeWithTimeZone>::new("timetz".into(), None);
+        let test_table = TestTable::<TimeWithTimeZone>::new("timetz".into());
         let values = (1_u8..=10)
             .into_iter()
             .map(|minute| {
@@ -446,7 +536,7 @@ mod tests {
 
     #[pg_test]
     fn test_timetz_array() {
-        let test_table = TestTable::<Vec<Option<TimeWithTimeZone>>>::new("timetz[]".into(), None);
+        let test_table = TestTable::<Vec<Option<TimeWithTimeZone>>>::new("timetz[]".into());
         let values = (1_u8..=10)
             .into_iter()
             .map(|minute| {
@@ -485,14 +575,14 @@ mod tests {
 
     #[pg_test]
     fn test_timestamp() {
-        let test_table = TestTable::<Timestamp>::new("timestamp".into(), None);
+        let test_table = TestTable::<Timestamp>::new("timestamp".into());
         let values = (1_i64..=10).into_iter().map(|i| Some(i.into())).collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_timestamp_array() {
-        let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into(), None);
+        let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into());
         let values = (1_i64..=10)
             .into_iter()
             .map(|i| {
@@ -508,7 +598,7 @@ mod tests {
 
     #[pg_test]
     fn test_timestamptz() {
-        let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into(), None);
+        let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into());
         let values = (1_u8..=10)
             .into_iter()
             .map(|minute| {
@@ -532,7 +622,7 @@ mod tests {
     #[pg_test]
     fn test_timestamptz_array() {
         let test_table =
-            TestTable::<Vec<Option<TimestampWithTimeZone>>>::new("timestamptz[]".into(), None);
+            TestTable::<Vec<Option<TimestampWithTimeZone>>>::new("timestamptz[]".into());
         let values = (1_u8..=10)
             .into_iter()
             .map(|minute| {
@@ -582,7 +672,7 @@ mod tests {
     #[pg_test]
     #[ignore = "Interval is not supported by arrow yet"]
     fn test_interval() {
-        let test_table = TestTable::<Interval>::new("interval".into(), None);
+        let test_table = TestTable::<Interval>::new("interval".into());
         let values = (1_i32..=10)
             .into_iter()
             .map(|day| Some(Interval::new(5, day, 120).unwrap()))
@@ -593,7 +683,7 @@ mod tests {
     #[pg_test]
     #[ignore = "Interval is not supported by arrow yet"]
     fn test_interval_array() {
-        let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into(), None);
+        let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into());
         let values = (1_i32..=10)
             .into_iter()
             .map(|day| {
@@ -609,7 +699,7 @@ mod tests {
 
     #[pg_test]
     fn test_numeric() {
-        let test_table = TestTable::<AnyNumeric>::new("numeric".into(), None);
+        let test_table = TestTable::<AnyNumeric>::new("numeric".into());
         let values = (1_i32..=10)
             .into_iter()
             .map(|v| i128_to_numeric(v as i128))
@@ -619,7 +709,7 @@ mod tests {
 
     #[pg_test]
     fn test_numeric_array() {
-        let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric[]".into(), None);
+        let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric[]".into());
         let values = (1_i32..=10)
             .into_iter()
             .map(|v| {
@@ -635,7 +725,7 @@ mod tests {
 
     #[pg_test]
     fn test_empty_array() {
-        let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into(), None);
+        let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into());
         let values = vec![Some(vec![Some(1), Some(2)]), Some(vec![])];
         test_helper(test_table, values);
     }
@@ -666,17 +756,17 @@ mod tests {
 
         Spi::run("TRUNCATE dog_owners;").unwrap();
 
-        let tmp_file = NamedTempFile::new().unwrap();
-        let path = tmp_file.path().to_str().unwrap();
+        let uri = "file:///tmp/test.parquet";
+
         let copy_to_query = format!(
             "COPY (SELECT owner FROM dog_owners) TO '{}' WITH (format parquet);",
-            path
+            uri
         );
         Spi::run(copy_to_query.as_str()).unwrap();
 
         Spi::run("TRUNCATE dog_owners;").unwrap();
 
-        let copy_from_query = format!("COPY dog_owners FROM '{}' WITH (format parquet);", path);
+        let copy_from_query = format!("COPY dog_owners FROM '{}' WITH (format parquet);", uri);
         Spi::run(copy_from_query.as_str()).unwrap();
 
         let result = Spi::connect(|client| {
@@ -762,42 +852,18 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_copy_without_format() {
-        Spi::run("CREATE TABLE test (a int);").unwrap();
-
-        Spi::run("INSERT INTO test VALUES (1);").unwrap();
-
-        let file = std::fs::File::create("/tmp/test.parquet").unwrap();
-        let tmp_file = NamedTempFile::from_parts(file, TempPath::from_path("/tmp/test.parquet"));
-        let path = tmp_file.path().to_str().unwrap();
-        let copy_to_query = format!("COPY (SELECT a FROM test) TO '{}';", path);
-        Spi::run(copy_to_query.as_str()).unwrap();
-
-        let expected = vec![(Some(1),)];
-
-        Spi::run("TRUNCATE test;").unwrap();
-
-        let copy_from_query = format!("COPY test FROM '{}';", path);
-        Spi::run(copy_from_query.as_str()).unwrap();
-
-        let select_command = "SELECT a FROM test ORDER BY a;";
-        let result = Spi::connect(|client| {
-            let mut results = Vec::new();
-            let tup_table = client.select(select_command, None, None).unwrap();
-
-            for row in tup_table {
-                let val = row["a"].value::<i32>();
-                results.push((val.unwrap(),));
-            }
-
-            results
-        });
-
-        assert_eq!(expected, result);
+    fn test_copy_with_empty_options() {
+        let test_table = TestTable::<i32>::new("int4".into())
+            .with_copy_to_options(HashMap::new())
+            .with_copy_from_options(HashMap::new());
+        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_with_generated_and_dropped_columns() {
+        Spi::run("DROP TABLE IF EXISTS test;").unwrap();
+
         Spi::run("CREATE TABLE test (a int, b int generated always as (10) stored, c text);")
             .unwrap();
 
@@ -805,11 +871,11 @@ mod tests {
 
         Spi::run("INSERT INTO test (c) VALUES ('test');").unwrap();
 
-        let tmp_file = NamedTempFile::new().unwrap();
-        let path = tmp_file.path().to_str().unwrap();
+        let uri = "file:///tmp/test.parquet";
+
         let copy_to_query = format!(
             "COPY (SELECT * FROM test) TO '{}' WITH (format parquet);",
-            path
+            uri
         );
         Spi::run(copy_to_query.as_str()).unwrap();
 
@@ -817,7 +883,7 @@ mod tests {
 
         Spi::run("TRUNCATE test;").unwrap();
 
-        let copy_from_query = format!("COPY test FROM '{}' WITH (format parquet);", path);
+        let copy_from_query = format!("COPY test FROM '{}' WITH (format parquet);", uri);
         Spi::run(copy_from_query.as_str()).unwrap();
 
         let select_command = "SELECT b, c FROM test ORDER BY b, c;";
@@ -853,10 +919,112 @@ mod tests {
         ];
 
         for codec in codecs {
-            let test_table = TestTable::<i32>::new("int4".into(), Some(codec));
+            let mut copy_options = HashMap::new();
+            copy_options.insert(
+                "codec".to_string(),
+                CopyOptionValue::StringOption(codec.to_string()),
+            );
+
+            let test_table =
+                TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
             let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
             test_helper(test_table, values);
         }
+    }
+
+    #[pg_test]
+    #[ignore = "not yet implemented"]
+    fn test_s3_object_store() {
+        todo!("Implement tests for S3 object store");
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "unsupported uri invalid_uri")]
+    fn test_invalid_uri() {
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri("invalid_uri".to_string());
+        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "invalid_format is not a valid format")]
+    fn test_invalid_format_copy_from() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "format".to_string(),
+            CopyOptionValue::StringOption("invalid_format".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
+        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "nonexisted is not a valid option for COPY FROM PARQUET")]
+    fn test_nonexistent_copy_from_option() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "nonexisted".to_string(),
+            CopyOptionValue::StringOption("nonexisted".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
+        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "nonexisted is not a valid option for COPY TO PARQUET")]
+    fn test_nonexistent_copy_to_option() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "nonexisted".to_string(),
+            CopyOptionValue::StringOption("nonexisted".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "invalid_format is not a valid format")]
+    fn test_invalid_format_copy_to() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "format".to_string(),
+            CopyOptionValue::StringOption("invalid_format".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "invalid_codec is not a valid codec")]
+    fn test_invalid_codec() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "codec".to_string(),
+            CopyOptionValue::StringOption("invalid_codec".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "row_group_size must be greater than 0")]
+    fn test_invalid_row_group_size() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert("row_group_size".to_string(), CopyOptionValue::IntOption(-1));
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
     }
 }
 

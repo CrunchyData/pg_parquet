@@ -14,6 +14,18 @@ pub(crate) enum ParquetCodecOption {
     Zstd,
 }
 
+pub(crate) fn all_supported_codecs() -> Vec<ParquetCodecOption> {
+    vec![
+        ParquetCodecOption::Uncompressed,
+        ParquetCodecOption::Snappy,
+        ParquetCodecOption::Gzip,
+        ParquetCodecOption::Lz4,
+        ParquetCodecOption::Lz4raw,
+        ParquetCodecOption::Brotli,
+        ParquetCodecOption::Zstd,
+    ]
+}
+
 impl From<ParquetCodecOption> for Compression {
     fn from(value: ParquetCodecOption) -> Self {
         match value {

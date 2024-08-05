@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{Field, Fields, Schema};
-use parquet::{arrow::arrow_to_parquet_schema, schema::types::SchemaDescriptor};
+use parquet::arrow::arrow_to_parquet_schema;
 use pg_sys::{
     Oid, BOOLOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID,
     NUMERICOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
@@ -59,11 +59,6 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
     }
 
     Schema::new(Fields::from(struct_attribute_fields))
-}
-
-pub(crate) fn parse_parquet_schema_from_tupledesc(tupledesc: PgTupleDesc) -> SchemaDescriptor {
-    let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc);
-    arrow_to_parquet_schema(&arrow_schema).unwrap()
 }
 
 fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<Field> {

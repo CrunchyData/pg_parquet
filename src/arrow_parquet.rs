@@ -1,6 +1,8 @@
 pub(crate) mod arrow_to_pg;
 pub(crate) mod codec;
+pub(crate) mod parquet_object_writer;
 pub(crate) mod parquet_reader;
+pub(crate) mod parquet_uri_utils;
 pub(crate) mod parquet_writer;
 pub(crate) mod pg_to_arrow;
 pub(crate) mod schema_visitor;
