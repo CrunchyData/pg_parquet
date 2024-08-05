@@ -8,6 +8,9 @@ use pgrx::{
     TimestampWithTimeZone,
 };
 
+pub(crate) const DECIMAL_PRECISION: u8 = 38;
+pub(crate) const DECIMAL_SCALE: i8 = 8;
+
 pub(crate) fn date_to_i32(date: Date) -> Option<i32> {
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
     let adjusted_date: Date = unsafe {
@@ -187,7 +190,7 @@ pub(crate) fn nano_to_interval(nano: IntervalMonthDayNano) -> Option<Interval> {
     Some(Interval::new(months, days, microseconds).unwrap())
 }
 
-pub(crate) fn numeric_to_fixed(numeric: AnyNumeric) -> Option<i128> {
+pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
     let numeric_str: &CStr =
         unsafe { direct_function_call(pg_sys::numeric_out, &[numeric.into_datum()]).unwrap() };
     let numeric_str = numeric_str.to_str().unwrap();
@@ -204,7 +207,11 @@ pub(crate) fn numeric_to_fixed(numeric: AnyNumeric) -> Option<i128> {
     };
     let fraction_len = fraction.len();
     let mut fraction = i128::from_str_radix(fraction, 10).unwrap();
-    let zeros_needed = if fraction == 0 { 8 } else { 8 - fraction_len };
+    let zeros_needed = if fraction == 0 {
+        DECIMAL_SCALE as usize
+    } else {
+        DECIMAL_SCALE as usize - fraction_len
+    };
 
     let mut integral_digits = vec![];
     while integral > 0 {
@@ -254,15 +261,15 @@ pub(crate) fn i128_to_numeric(i128_decimal: i128) -> Option<AnyNumeric> {
 
     let mut integral = vec![];
     let mut fraction = vec![];
-    let mut is_integral = true;
+    let mut is_integral = false;
     for digit in decimal_digits.into_iter().rev() {
         if is_integral {
             integral.push(digit);
         } else {
             fraction.push(digit);
         }
-        if integral.len() == 8 {
-            is_integral = false;
+        if fraction.len() == DECIMAL_SCALE as usize {
+            is_integral = true;
         }
     }
 
@@ -279,8 +286,13 @@ pub(crate) fn i128_to_numeric(i128_decimal: i128) -> Option<AnyNumeric> {
     let numeric_str = format!("{}{}.{}", sign, integral, fraction);
     let numeric_str = std::ffi::CString::new(numeric_str).unwrap();
 
-    let numeric: AnyNumeric =
-        unsafe { direct_function_call(pg_sys::numeric_in, &[numeric_str.into_datum()]).unwrap() };
+    let numeric: AnyNumeric = unsafe {
+        direct_function_call(
+            pg_sys::numeric_in,
+            &[numeric_str.into_datum(), 0.into_datum(), 0.into_datum()],
+        )
+        .unwrap()
+    };
 
     Some(numeric)
 }

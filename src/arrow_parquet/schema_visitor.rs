@@ -8,8 +8,12 @@ use pg_sys::{
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
-use crate::pgrx_utils::{
-    array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type, tuple_desc,
+use crate::{
+    pgrx_utils::{
+        array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
+        tuple_desc,
+    },
+    type_compat::{DECIMAL_PRECISION, DECIMAL_SCALE},
 };
 
 pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> String {
@@ -72,7 +76,7 @@ fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<
         INT8OID => Field::new(array_name, arrow::datatypes::DataType::Int64, true),
         NUMERICOID => Field::new(
             array_name,
-            arrow::datatypes::DataType::Decimal128(30, 8),
+            arrow::datatypes::DataType::Decimal128(DECIMAL_PRECISION, DECIMAL_SCALE),
             true,
         ),
         DATEOID => Field::new(array_name, arrow::datatypes::DataType::Date32, true),
@@ -206,7 +210,7 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
         INT8OID => Field::new(elem_name, arrow::datatypes::DataType::Int64, true).into(),
         NUMERICOID => Field::new(
             elem_name,
-            arrow::datatypes::DataType::Decimal128(30, 8),
+            arrow::datatypes::DataType::Decimal128(DECIMAL_PRECISION, DECIMAL_SCALE),
             true,
         )
         .into(),

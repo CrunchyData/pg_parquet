@@ -49,38 +49,38 @@ SELECT * FROM product_example;
 ## Supported Types
 `pg_parquet` has rich type support, including PostgreSQL's primitive, array, and composite types. Below is the table of the supported types in PostgreSQL and their corresponding Parquet types.
 
-| PostgreSQL Type | Parquet Physical Type | Logical Type     |
-|-----------------|-----------------------|------------------|
-| `bool`          | BOOLEAN               |                  |
-| `smallint`      | INT16                 |                  |
-| `integer`       | INT32                 |                  |
-| `bigint`        | INT64                 |                  |
-| `real`          | FLOAT                 |                  |
-| `double`        | DOUBLE                |                  |
-| `numeric`       | FIXED_LEN_BYTE_ARRAY  | DECIMAL(128)     |
-| `"char"`        | BYTE_ARRAY            | STRING           |
-| `varchar`       | BYTE_ARRAY            | STRING           |
-| `text`          | BYTE_ARRAY            | STRING           |
-| `date`          | INT32                 | DATE             |
-| `timestamp`     | INT64                 | TIMESTAMP_MICROS |
-| `timestamptz`   | INT64                 | TIMESTAMP_MICROS |
-| `time`          | INT64                 | TIME_MICROS      |
-| `timetz`        | INT64                 | TIME_MICROS      |
-| `interval`      | FIXED_LEN_BYTE_ARRAY  | INTERVAL(128)    |
-| `bool[]`        | BOOLEAN               | LIST             |
-| `smallint[]`    | INT16                 | LIST             |
-| `integer[]`     | INT32                 | LIST             |
-| `bigint[]`      | INT64                 | LIST             |
-| `real[]`        | FLOAT                 | LIST             |
-| `double[]`      | DOUBLE                | LIST             |
-| `numeric[]`     | FIXED_LEN_BYTE_ARRAY  | LIST             |
-| `"char"[]`      | BYTE_ARRAY            | LIST             |
-| `varchar[]`     | BYTE_ARRAY            | LIST             |
-| `text[]`        | BYTE_ARRAY            | LIST             |
-| `date[]`        | INT32                 | LIST             |
-| `timestamp[]`   | INT64                 | LIST             |
-| `timestamptz[]` | INT64                 | LIST             |
-| `time[]`        | INT64                 | LIST             |
-| `timetz[]`      | INT64                 | LIST             |
-| `interval[]`    | FIXED_LEN_BYTE_ARRAY  | LIST             |
-| `composite`     | STRUCT                |                  |
+| PostgreSQL Type   | Parquet Physical Type | Logical Type     |
+|-------------------|-----------------------|------------------|
+| `bool`            | BOOLEAN               |                  |
+| `smallint`        | INT16                 |                  |
+| `integer`         | INT32                 |                  |
+| `bigint`          | INT64                 |                  |
+| `real`            | FLOAT                 |                  |
+| `double`          | DOUBLE                |                  |
+| `numeric(38,8)`   | FIXED_LEN_BYTE_ARRAY  | DECIMAL(128)     |
+| `"char"`          | BYTE_ARRAY            | STRING           |
+| `varchar`         | BYTE_ARRAY            | STRING           |
+| `text`            | BYTE_ARRAY            | STRING           |
+| `date`            | INT32                 | DATE             |
+| `timestamp`       | INT64                 | TIMESTAMP_MICROS |
+| `timestamptz`     | INT64                 | TIMESTAMP_MICROS |
+| `time`            | INT64                 | TIME_MICROS      |
+| `timetz`          | INT64                 | TIME_MICROS      |
+| `interval`        | FIXED_LEN_BYTE_ARRAY  | INTERVAL(128)    |
+| `bool[]`          | BOOLEAN               | LIST             |
+| `smallint[]`      | INT16                 | LIST             |
+| `integer[]`       | INT32                 | LIST             |
+| `bigint[]`        | INT64                 | LIST             |
+| `real[]`          | FLOAT                 | LIST             |
+| `double[]`        | DOUBLE                | LIST             |
+| `numeric(38,8)[]` | FIXED_LEN_BYTE_ARRAY  | LIST             |
+| `"char"[]`        | BYTE_ARRAY            | LIST             |
+| `varchar[]`       | BYTE_ARRAY            | LIST             |
+| `text[]`          | BYTE_ARRAY            | LIST             |
+| `date[]`          | INT32                 | LIST             |
+| `timestamp[]`     | INT64                 | LIST             |
+| `timestamptz[]`   | INT64                 | LIST             |
+| `time[]`          | INT64                 | LIST             |
+| `timetz[]`        | INT64                 | LIST             |
+| `interval[]`      | FIXED_LEN_BYTE_ARRAY  | LIST             |
+| `composite`       | STRUCT                |                  |

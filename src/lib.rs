@@ -27,6 +27,7 @@ mod tests {
         composite_type, Date, Interval, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
     };
     use tempfile::{NamedTempFile, TempPath};
+    use type_compat::i128_to_numeric;
 
     struct TestTable<T: IntoDatum + FromDatum> {
         tmp_file: NamedTempFile,
@@ -607,27 +608,25 @@ mod tests {
     }
 
     #[pg_test]
-    #[ignore = "Numeric is only supported for 'copy to' for now"]
     fn test_numeric() {
         let test_table = TestTable::<AnyNumeric>::new("numeric".into(), None);
         let values = (1_i32..=10)
             .into_iter()
-            .map(|v| Some(AnyNumeric::try_from(v as f32).unwrap()))
+            .map(|v| i128_to_numeric(v as i128))
             .collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
-    #[ignore = "Numeric is only supported for 'copy to' for now"]
     fn test_numeric_array() {
         let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric[]".into(), None);
         let values = (1_i32..=10)
             .into_iter()
             .map(|v| {
                 Some(vec![
-                    Some(AnyNumeric::try_from(v as f32).unwrap()),
-                    Some(AnyNumeric::try_from((v + 1) as f32).unwrap()),
-                    Some(AnyNumeric::try_from((v + 2) as f32).unwrap()),
+                    i128_to_numeric(v as i128),
+                    i128_to_numeric((v + 1) as i128),
+                    i128_to_numeric((v + 2) as i128),
                 ])
             })
             .collect();
