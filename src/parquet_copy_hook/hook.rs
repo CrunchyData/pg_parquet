@@ -55,6 +55,8 @@ impl PgHooks for ParquetCopyHook {
                 let parquet_dest =
                     create_copy_to_parquet_dest_receiver(filename, row_group_size, codec);
 
+                let parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
+
                 let nprocessed = execute_copy_to_with_dest_receiver(
                     &pstmt,
                     query_string,

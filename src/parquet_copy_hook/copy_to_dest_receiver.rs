@@ -176,11 +176,12 @@ pub extern "C" fn copy_destroy(_dest: *mut DestReceiver) {
     ()
 }
 
-pub(crate) fn create_copy_to_parquet_dest_receiver(
+#[pg_guard]
+pub extern "C" fn create_copy_to_parquet_dest_receiver(
     filename: *mut i8,
     row_group_size: i64,
     codec: ParquetCodecOption,
-) -> PgBox<DestReceiver> {
+) -> *mut DestReceiver {
     let per_copy_context = unsafe {
         pg_sys::AllocSetContextCreateExtended(
             CurrentMemoryContext as _,
@@ -208,5 +209,5 @@ pub(crate) fn create_copy_to_parquet_dest_receiver(
 
     // it should be into_pg() (not as_ptr()) to prevent pfree of Rust allocated memory
     let dest: *mut DestReceiver = unsafe { std::mem::transmute(parquet_dest.into_pg()) };
-    unsafe { PgBox::from_pg(dest) }
+    dest
 }
