@@ -70,6 +70,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `"char"`          | BYTE_ARRAY            | STRING           |
 | `varchar`         | BYTE_ARRAY            | STRING           |
 | `text`            | BYTE_ARRAY            | STRING           |
+| `bytea`           | BYTE_ARRAY            |                  |
 | `date`            | INT32                 | DATE             |
 | `timestamp`       | INT64                 | TIMESTAMP_MICROS |
 | `timestamptz`     | INT64                 | TIMESTAMP_MICROS |
@@ -86,6 +87,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `"char"[]`        | BYTE_ARRAY            | LIST             |
 | `varchar[]`       | BYTE_ARRAY            | LIST             |
 | `text[]`          | BYTE_ARRAY            | LIST             |
+| `bytea[]`         | BYTE_ARRAY            | LIST             |
 | `date[]`          | INT32                 | LIST             |
 | `timestamp[]`     | INT64                 | LIST             |
 | `timestamptz[]`   | INT64                 | LIST             |

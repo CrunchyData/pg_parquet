@@ -3,8 +3,9 @@ use std::sync::Arc;
 use arrow::datatypes::{Field, Fields, Schema};
 use parquet::arrow::arrow_to_parquet_schema;
 use pg_sys::{
-    Oid, BOOLOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID,
-    NUMERICOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
+    Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
+    INTERVALOID, NUMERICOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID,
+    VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -43,16 +44,12 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
 
         let field = if is_composite {
             let attribute_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
-            visit_struct_schema(attribute_tupledesc, attribute_name.to_string().leak())
+            visit_struct_schema(attribute_tupledesc, attribute_name)
         } else if is_array {
             let attribute_element_typoid = array_element_typoid(attribute_typoid);
-            visit_list_schema(
-                attribute_element_typoid,
-                attribute_typmod,
-                attribute_name.to_string().leak(),
-            )
+            visit_list_schema(attribute_element_typoid, attribute_typmod, attribute_name)
         } else {
-            visit_primitive_schema(attribute_typoid, attribute_name.to_string().leak())
+            visit_primitive_schema(attribute_typoid, attribute_name)
         };
 
         struct_attribute_fields.push(field);
@@ -62,54 +59,7 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
 }
 
 fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<Field> {
-    let field = match typoid {
-        FLOAT4OID => Field::new(array_name, arrow::datatypes::DataType::Float32, true),
-        FLOAT8OID => Field::new(array_name, arrow::datatypes::DataType::Float64, true),
-        BOOLOID => Field::new(array_name, arrow::datatypes::DataType::Boolean, true),
-        INT2OID => Field::new(array_name, arrow::datatypes::DataType::Int16, true),
-        INT4OID => Field::new(array_name, arrow::datatypes::DataType::Int32, true),
-        INT8OID => Field::new(array_name, arrow::datatypes::DataType::Int64, true),
-        NUMERICOID => Field::new(
-            array_name,
-            arrow::datatypes::DataType::Decimal128(DECIMAL_PRECISION, DECIMAL_SCALE),
-            true,
-        ),
-        DATEOID => Field::new(array_name, arrow::datatypes::DataType::Date32, true),
-        TIMESTAMPOID => Field::new(
-            array_name,
-            arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
-            true,
-        ),
-        TIMESTAMPTZOID => Field::new(
-            array_name,
-            arrow::datatypes::DataType::Timestamp(
-                arrow::datatypes::TimeUnit::Microsecond,
-                Some("+00:00".into()),
-            ),
-            true,
-        ),
-        TIMEOID => Field::new(
-            array_name,
-            arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
-            true,
-        ),
-        TIMETZOID => Field::new(
-            array_name,
-            arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
-            true,
-        ),
-        INTERVALOID => Field::new(
-            array_name,
-            arrow::datatypes::DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
-            true,
-        ),
-        CHAROID => Field::new(array_name, arrow::datatypes::DataType::Utf8, true),
-        TEXTOID | VARCHAROID => Field::new(array_name, arrow::datatypes::DataType::Utf8, true),
-        _ => {
-            panic!("unsupported array type {}", typoid);
-        }
-    };
-
+    let field = visit_primitive_schema(typoid, array_name);
     let list_field = Field::new(
         array_name,
         arrow::datatypes::DataType::List(field.into()),
@@ -129,7 +79,7 @@ fn create_list_field_from_struct_field(array_name: &str, struct_field: Arc<Field
     list_field.into()
 }
 
-fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> Arc<Field> {
+fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
     let mut child_fields: Vec<Arc<Field>> = vec![];
@@ -148,25 +98,12 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> Arc<F
 
         let child_field = if is_composite_type(attribute_oid) {
             let attribute_tupledesc = tuple_desc(attribute_oid, attribute_typmod);
-            visit_struct_schema(
-                attribute_tupledesc,
-                // todo: do not leak
-                attribute_name.to_string().leak(),
-            )
+            visit_struct_schema(attribute_tupledesc, attribute_name)
         } else if is_array_type(attribute_oid) {
             let attribute_element_typoid = array_element_typoid(attribute_oid);
-            visit_list_schema(
-                attribute_element_typoid,
-                attribute_typmod,
-                // todo: do not leak
-                attribute_name.to_string().leak(),
-            )
+            visit_list_schema(attribute_element_typoid, attribute_typmod, attribute_name)
         } else {
-            visit_primitive_schema(
-                attribute_oid,
-                // todo: do not leak
-                attribute_name.to_string().leak(),
-            )
+            visit_primitive_schema(attribute_oid, attribute_name)
         };
 
         child_fields.push(child_field);
@@ -181,7 +118,7 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &'static str) -> Arc<F
     field.into()
 }
 
-fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &'static str) -> Arc<Field> {
+fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
     if is_composite_type(typoid) {
@@ -193,7 +130,7 @@ fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &'static str) -> Arc<
     }
 }
 
-fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
+fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
     match typoid {
@@ -247,6 +184,7 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &'static str) -> Arc<Field> {
         TEXTOID | VARCHAROID => {
             Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
         }
+        BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into(),
         _ => {
             panic!("unsupported primitive type {}", typoid)
         }

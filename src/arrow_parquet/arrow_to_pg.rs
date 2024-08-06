@@ -1,16 +1,16 @@
 use arrow::array::{
-    Array, ArrayData, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int16Array, Int32Array, Int64Array, IntervalMonthDayNanoArray, ListArray, StringArray,
-    StructArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+    Array, ArrayData, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, IntervalMonthDayNanoArray, ListArray,
+    StringArray, StructArray, Time64MicrosecondArray, TimestampMicrosecondArray,
 };
 use pgrx::{
     pg_sys::{
-        Datum, Oid, BOOLARRAYOID, BOOLOID, CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID,
-        FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID,
-        INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID, NUMERICARRAYOID, NUMERICOID,
-        TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
-        TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID,
-        VARCHAROID,
+        Datum, Oid, BOOLARRAYOID, BOOLOID, BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID,
+        DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID,
+        INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID,
+        NUMERICARRAYOID, NUMERICOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID,
+        TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID,
+        TIMETZOID, VARCHARARRAYOID, VARCHAROID,
     },
     prelude::PgHeapTuple,
     AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, PgTupleDesc, Time, TimeWithTimeZone,
@@ -20,6 +20,7 @@ use pgrx::{
 use crate::pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc};
 
 pub(crate) mod bool;
+pub(crate) mod bytea;
 pub(crate) mod char;
 pub(crate) mod date;
 pub(crate) mod float4;
@@ -89,6 +90,13 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
         }
         TEXTOID | VARCHAROID => {
             let val = <String as ArrowArrayToPgType<StringArray, String>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
+        }
+        BYTEAOID => {
+            let val = <Vec<u8> as ArrowArrayToPgType<BinaryArray, Vec<u8>>>::as_pg(
                 primitive_array.into(),
                 None,
             );
@@ -227,6 +235,13 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
             let val = <Vec<Option<String>> as ArrowArrayToPgType<
                 StringArray,
                 Vec<Option<String>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        BYTEAARRAYOID => {
+            let val = <Vec<Option<Vec<u8>>> as ArrowArrayToPgType<
+                BinaryArray,
+                Vec<Option<Vec<u8>>>,
             >>::as_pg(list_array.into(), None);
             val.into_datum()
         }

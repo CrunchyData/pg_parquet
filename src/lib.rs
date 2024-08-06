@@ -460,6 +460,32 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_bytea() {
+        let test_table = TestTable::<Vec<u8>>::new("bytea".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| Some(vec![v as u8, (v + 1) as u8, (v + 2) as u8]))
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_bytea_array() {
+        let test_table = TestTable::<Vec<Option<Vec<u8>>>>::new("bytea[]".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| {
+                Some(vec![
+                    Some(vec![v as u8, (v + 1) as u8, (v + 2) as u8]),
+                    Some(vec![(v + 3) as u8, (v + 4) as u8, (v + 5) as u8]),
+                    Some(vec![(v + 6) as u8, (v + 7) as u8, (v + 8) as u8]),
+                ])
+            })
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
     fn test_date() {
         let test_table = TestTable::<Date>::new("date".into());
         let values = (1_u8..=10)

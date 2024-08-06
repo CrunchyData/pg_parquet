@@ -9,11 +9,12 @@ use pgrx::{
     heap_tuple::PgHeapTuple,
     pg_sys::{
         self, deconstruct_array, heap_getattr, Datum, InvalidOid, Oid, BOOLARRAYOID, BOOLOID,
-        CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID,
-        FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID,
-        INTERVALARRAYOID, INTERVALOID, NUMERICARRAYOID, NUMERICOID, TEXTARRAYOID, TEXTOID,
-        TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID,
-        TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID, VARCHAROID,
+        BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID,
+        FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID,
+        INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID, NUMERICARRAYOID, NUMERICOID,
+        TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
+        TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID,
+        VARCHAROID,
     },
     AllocatedByRust, AnyNumeric, Date, FromDatum, Interval, IntoDatum, PgBox, PgTupleDesc, Time,
     TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
@@ -303,6 +304,18 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
                 attribute_typmod,
             )
         }
+        BYTEAOID => collect_attribute_array_from_tuples_helper::<&[u8]>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        BYTEAARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<&[u8]>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
         _ => {
             if is_composite_type(attribute_typoid) {
                 collect_tuple_attribute_array_from_tuples_helper(
