@@ -70,6 +70,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `numeric(38,8)`   | FIXED_LEN_BYTE_ARRAY  | DECIMAL(128)     |
 | `"char"`          | BYTE_ARRAY            | STRING           |
 | `varchar`         | BYTE_ARRAY            | STRING           |
+| `bpchar`          | BYTE_ARRAY            | STRING           |
 | `text`            | BYTE_ARRAY            | STRING           |
 | `bytea`           | BYTE_ARRAY            |                  |
 | `date`            | INT32                 | DATE             |
@@ -87,6 +88,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `numeric(38,8)[]` | FIXED_LEN_BYTE_ARRAY  | LIST             |
 | `"char"[]`        | BYTE_ARRAY            | LIST             |
 | `varchar[]`       | BYTE_ARRAY            | LIST             |
+| `bpchar[]`        | BYTE_ARRAY            | LIST             |
 | `text[]`          | BYTE_ARRAY            | LIST             |
 | `bytea[]`         | BYTE_ARRAY            | LIST             |
 | `date[]`          | INT32                 | LIST             |

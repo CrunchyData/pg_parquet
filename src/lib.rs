@@ -22,7 +22,7 @@ mod tests {
 
     use crate::arrow_parquet::codec::ParquetCodecOption;
     use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
-    use crate::type_compat::{i128_to_numeric, Varchar};
+    use crate::type_compat::{i128_to_numeric, Bpchar, Varchar};
     use pgrx::pg_sys::Oid;
     use pgrx::{
         composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Spi, Time,
@@ -430,6 +430,32 @@ mod tests {
                     Some(Varchar(format!("test_varchar_{}", v))),
                     Some(Varchar(format!("test_varchar_{}", v + 1))),
                     Some(Varchar(format!("test_varchar_{}", v + 2))),
+                ])
+            })
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_bpchar() {
+        let test_table = TestTable::<Bpchar>::new("bpchar".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| Some(Bpchar(format!("test_bpchar_{}", v))))
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_bpchar_array() {
+        let test_table = TestTable::<Vec<Option<Bpchar>>>::new("bpchar[]".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| {
+                Some(vec![
+                    Some(Bpchar(format!("test_bpchar_{}", v))),
+                    Some(Bpchar(format!("test_bpchar_{}", v + 1))),
+                    Some(Bpchar(format!("test_bpchar_{}", v + 2))),
                 ])
             })
             .collect();

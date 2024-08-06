@@ -2,6 +2,7 @@ use arrow::{array::ArrayRef, datatypes::FieldRef};
 use pgrx::{pg_sys::Oid, FromDatum, IntoDatum};
 
 pub(crate) mod bool;
+pub(crate) mod bpchar;
 pub(crate) mod bytea;
 pub(crate) mod char;
 pub(crate) mod date;
