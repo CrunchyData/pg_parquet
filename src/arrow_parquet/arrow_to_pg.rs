@@ -17,7 +17,10 @@ use pgrx::{
     Timestamp, TimestampWithTimeZone,
 };
 
-use crate::pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc};
+use crate::{
+    pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc},
+    type_compat::Varchar,
+};
 
 pub(crate) mod bool;
 pub(crate) mod bytea;
@@ -37,6 +40,7 @@ pub(crate) mod time;
 pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
+pub(crate) mod varchar;
 
 pub(crate) trait ArrowArrayToPgType<'a, A: From<ArrayData>, T: 'a + IntoDatum> {
     fn as_pg(array: A, tupledesc: Option<PgTupleDesc<'a>>) -> Option<T>;
@@ -89,8 +93,15 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
                 <i8 as ArrowArrayToPgType<StringArray, i8>>::as_pg(primitive_array.into(), None);
             val.into_datum()
         }
-        TEXTOID | VARCHAROID => {
+        TEXTOID => {
             let val = <String as ArrowArrayToPgType<StringArray, String>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
+        }
+        VARCHAROID => {
+            let val = <Varchar as ArrowArrayToPgType<StringArray, Varchar>>::as_pg(
                 primitive_array.into(),
                 None,
             );
@@ -237,10 +248,17 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
             );
             val.into_datum()
         }
-        TEXTARRAYOID | VARCHARARRAYOID => {
+        TEXTARRAYOID => {
             let val = <Vec<Option<String>> as ArrowArrayToPgType<
                 StringArray,
                 Vec<Option<String>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        VARCHARARRAYOID => {
+            let val = <Vec<Option<Varchar>> as ArrowArrayToPgType<
+                StringArray,
+                Vec<Option<Varchar>>,
             >>::as_pg(list_array.into(), None);
             val.into_datum()
         }

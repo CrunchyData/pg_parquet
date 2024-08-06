@@ -19,6 +19,7 @@ pub(crate) mod time;
 pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
+pub(crate) mod varchar;
 
 pub(crate) trait PgTypeToArrowArray<T: IntoDatum + FromDatum> {
     fn as_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef);

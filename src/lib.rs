@@ -22,7 +22,7 @@ mod tests {
 
     use crate::arrow_parquet::codec::ParquetCodecOption;
     use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
-    use crate::type_compat::i128_to_numeric;
+    use crate::type_compat::{i128_to_numeric, Varchar};
     use pgrx::pg_sys::Oid;
     use pgrx::{
         composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Spi, Time,
@@ -412,25 +412,24 @@ mod tests {
 
     #[pg_test]
     fn test_varchar() {
-        let test_table = TestTable::<String>::new("varchar".into());
+        let test_table = TestTable::<Varchar>::new("varchar".into());
         let values = (1..=10)
             .into_iter()
-            .map(|v| Some(format!("test_varchar_{}", v)))
+            .map(|v| Some(Varchar(format!("test_varchar_{}", v))))
             .collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
-    #[ignore = "varchar[] is not supported by pgrx"]
     fn test_varchar_array() {
-        let test_table = TestTable::<Vec<Option<String>>>::new("varchar[]".into());
+        let test_table = TestTable::<Vec<Option<Varchar>>>::new("varchar[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
                 Some(vec![
-                    Some(format!("test_varchar_{}", v)),
-                    Some(format!("test_varchar_{}", v + 1)),
-                    Some(format!("test_varchar_{}", v + 2)),
+                    Some(Varchar(format!("test_varchar_{}", v))),
+                    Some(Varchar(format!("test_varchar_{}", v + 1))),
+                    Some(Varchar(format!("test_varchar_{}", v + 2))),
                 ])
             })
             .collect();

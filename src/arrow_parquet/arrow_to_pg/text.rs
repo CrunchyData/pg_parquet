@@ -3,7 +3,7 @@ use pgrx::PgTupleDesc;
 
 use super::ArrowArrayToPgType;
 
-// Text, Varchar
+// Text
 impl<'a> ArrowArrayToPgType<'_, StringArray, String> for String {
     fn as_pg(arr: StringArray, _tupledesc: Option<PgTupleDesc>) -> Option<String> {
         if arr.is_null(0) {
@@ -15,7 +15,7 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, String> for String {
     }
 }
 
-// Text[], Varchar[]
+// Text[]
 impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<String>>> for Vec<Option<String>> {
     fn as_pg(arr: StringArray, _tupledesc: Option<PgTupleDesc>) -> Option<Vec<Option<String>>> {
         let mut vals = vec![];

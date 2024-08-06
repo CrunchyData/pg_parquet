@@ -29,6 +29,7 @@ use crate::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
         tuple_desc,
     },
+    type_compat::Varchar,
 };
 
 // PgHeapTuple
@@ -290,20 +291,30 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_element_typoid,
             attribute_typmod,
         ),
-        TEXTOID | VARCHAROID => collect_attribute_array_from_tuples_helper::<String>(
+        TEXTOID => collect_attribute_array_from_tuples_helper::<String>(
             tuples,
             attribute_name,
             attribute_typoid,
             attribute_typmod,
         ),
-        TEXTARRAYOID | VARCHARARRAYOID => {
-            collect_attribute_array_from_tuples_helper::<Vec<Option<String>>>(
-                tuples,
-                attribute_name,
-                attribute_element_typoid,
-                attribute_typmod,
-            )
-        }
+        VARCHAROID => collect_attribute_array_from_tuples_helper::<Varchar>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        TEXTARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<String>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        VARCHARARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Varchar>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
         BYTEAOID => collect_attribute_array_from_tuples_helper::<&[u8]>(
             tuples,
             attribute_name,
