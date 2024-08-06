@@ -41,7 +41,7 @@ SELECT * FROM product_example;
 ```
 
 ## Object Store Support
-`pg_parquet` supports reading and writing Parquet files from `S3` object store. You can replace `file://` with `s3://` scheme to specify the location of the Parquet file in the `S3` object store. Below is an example of how to read and write Parquet files from `S3` object store.
+`pg_parquet` supports reading and writing Parquet files from/to `S3` object store. You can replace `file://`, as shown in above example, with `s3://` scheme to specify the location of the Parquet file in the `S3` object store.
 
 ### Configuration
 You can set the following `AWS S3` environment variables properly to access to the object store:
