@@ -23,6 +23,7 @@ mod tests {
     use crate::arrow_parquet::codec::ParquetCodecOption;
     use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
     use crate::type_compat::i128_to_numeric;
+    use pgrx::pg_sys::Oid;
     use pgrx::{
         composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Spi, Time,
         TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
@@ -479,6 +480,29 @@ mod tests {
                     Some(vec![v as u8, (v + 1) as u8, (v + 2) as u8]),
                     Some(vec![(v + 3) as u8, (v + 4) as u8, (v + 5) as u8]),
                     Some(vec![(v + 6) as u8, (v + 7) as u8, (v + 8) as u8]),
+                ])
+            })
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_oid() {
+        let test_table = TestTable::<Oid>::new("oid".into());
+        let values = (1_u32..=10).into_iter().map(|v| Some(v.into())).collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_oid_array() {
+        let test_table = TestTable::<Vec<Option<Oid>>>::new("oid[]".into());
+        let values = (1_u32..=10)
+            .into_iter()
+            .map(|v| {
+                Some(vec![
+                    Some(v.into()),
+                    Some((v + 1).into()),
+                    Some((v + 2).into()),
                 ])
             })
             .collect();

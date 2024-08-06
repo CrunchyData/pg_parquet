@@ -4,8 +4,8 @@ use arrow::datatypes::{Field, Fields, Schema};
 use parquet::arrow::arrow_to_parquet_schema;
 use pg_sys::{
     Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
-    INTERVALOID, NUMERICOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID,
-    VARCHAROID,
+    INTERVALOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID,
+    TIMETZOID, VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -185,6 +185,7 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
             Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
         }
         BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into(),
+        OIDOID => Field::new(elem_name, arrow::datatypes::DataType::UInt32, true).into(),
         _ => {
             panic!("unsupported primitive type {}", typoid)
         }

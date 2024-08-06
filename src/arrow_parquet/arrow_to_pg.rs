@@ -1,16 +1,16 @@
 use arrow::array::{
     Array, ArrayData, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
     Float64Array, Int16Array, Int32Array, Int64Array, IntervalMonthDayNanoArray, ListArray,
-    StringArray, StructArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+    StringArray, StructArray, Time64MicrosecondArray, TimestampMicrosecondArray, UInt32Array,
 };
 use pgrx::{
     pg_sys::{
         Datum, Oid, BOOLARRAYOID, BOOLOID, BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID,
         DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID,
         INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID,
-        NUMERICARRAYOID, NUMERICOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID,
-        TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID,
-        TIMETZOID, VARCHARARRAYOID, VARCHAROID,
+        NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID,
+        TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID,
+        TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID, VARCHAROID,
     },
     prelude::PgHeapTuple,
     AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, PgTupleDesc, Time, TimeWithTimeZone,
@@ -30,6 +30,7 @@ pub(crate) mod int4;
 pub(crate) mod int8;
 pub(crate) mod interval;
 pub(crate) mod numeric;
+pub(crate) mod oid;
 pub(crate) mod record;
 pub(crate) mod text;
 pub(crate) mod time;
@@ -100,6 +101,11 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
                 primitive_array.into(),
                 None,
             );
+            val.into_datum()
+        }
+        OIDOID => {
+            let val =
+                <Oid as ArrowArrayToPgType<UInt32Array, Oid>>::as_pg(primitive_array.into(), None);
             val.into_datum()
         }
         NUMERICOID => {
@@ -243,6 +249,14 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
                 BinaryArray,
                 Vec<Option<Vec<u8>>>,
             >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        OIDARRAYOID => {
+            let val =
+                <Vec<Option<Oid>> as ArrowArrayToPgType<UInt32Array, Vec<Option<Oid>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
             val.into_datum()
         }
         NUMERICARRAYOID => {

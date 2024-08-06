@@ -12,6 +12,7 @@ pub(crate) mod int4;
 pub(crate) mod int8;
 pub(crate) mod interval;
 pub(crate) mod numeric;
+pub(crate) mod oid;
 pub(crate) mod record;
 pub(crate) mod text;
 pub(crate) mod time;

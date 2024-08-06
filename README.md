@@ -65,6 +65,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `integer`         | INT32                 |                  |
 | `bigint`          | INT64                 |                  |
 | `real`            | FLOAT                 |                  |
+| `oid`             | INT32                 |                  |
 | `double`          | DOUBLE                |                  |
 | `numeric(38,8)`   | FIXED_LEN_BYTE_ARRAY  | DECIMAL(128)     |
 | `"char"`          | BYTE_ARRAY            | STRING           |
