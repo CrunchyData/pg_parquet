@@ -14,6 +14,7 @@ pub(crate) mod int8;
 pub(crate) mod interval;
 pub(crate) mod json;
 pub(crate) mod jsonb;
+pub(crate) mod name;
 pub(crate) mod numeric;
 pub(crate) mod oid;
 pub(crate) mod record;

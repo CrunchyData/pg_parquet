@@ -3,7 +3,7 @@ use std::ffi::CStr;
 use arrow::datatypes::IntervalMonthDayNano;
 use pgrx::{
     direct_function_call,
-    pg_sys::{self, TimeTzADT, BPCHAROID, TIME_UTC, VARCHAROID},
+    pg_sys::{self, TimeTzADT, BPCHAROID, NAMEOID, TIME_UTC, VARCHAROID},
     AnyNumeric, Date, FromDatum, Interval, IntoDatum, Time, TimeWithTimeZone, Timestamp,
     TimestampWithTimeZone,
 };
@@ -342,5 +342,39 @@ impl FromDatum for Bpchar {
     {
         let val = String::from_polymorphic_datum(datum, is_null, typoid);
         val.and_then(|val| Some(Self(val)))
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Name(pub(crate) String);
+
+impl IntoDatum for Name {
+    fn into_datum(self) -> Option<pg_sys::Datum> {
+        let val = std::ffi::CString::new(self.0).unwrap();
+        let val = val.as_c_str();
+        val.into_datum()
+    }
+
+    fn type_oid() -> pg_sys::Oid {
+        NAMEOID
+    }
+}
+
+impl FromDatum for Name {
+    unsafe fn from_polymorphic_datum(
+        datum: pg_sys::Datum,
+        is_null: bool,
+        typoid: pg_sys::Oid,
+    ) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        let val: Option<&core::ffi::CStr> =
+            FromDatum::from_polymorphic_datum(datum, is_null, typoid);
+
+        val.and_then(|val| {
+            let val = val.to_str().unwrap();
+            Some(Self(val.to_string()))
+        })
     }
 }

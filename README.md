@@ -69,6 +69,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `double`          | DOUBLE                    |                  |
 | `numeric(38,8)`   | FIXED_LEN_BYTE_ARRAY(16)  | DECIMAL(128)     |
 | `"char"`          | BYTE_ARRAY                | STRING           |
+| `name`            | BYTE_ARRAY                | STRING           |
 | `varchar`         | BYTE_ARRAY                | STRING           |
 | `bpchar`          | BYTE_ARRAY                | STRING           |
 | `text`            | BYTE_ARRAY                | STRING           |
@@ -90,6 +91,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `double[]`        | DOUBLE                    | LIST             |
 | `numeric(38,8)[]` | FIXED_LEN_BYTE_ARRAY(16)  | LIST             |
 | `"char"[]`        | BYTE_ARRAY                | LIST             |
+| `name[]`          | BYTE_ARRAY                | LIST             |
 | `varchar[]`       | BYTE_ARRAY                | LIST             |
 | `bpchar[]`        | BYTE_ARRAY                | LIST             |
 | `text[]`          | BYTE_ARRAY                | LIST             |

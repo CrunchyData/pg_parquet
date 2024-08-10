@@ -12,10 +12,10 @@ use pgrx::{
         BPCHARARRAYOID, BPCHAROID, BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID, DATEARRAYOID,
         DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID,
         INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID, JSONARRAYOID,
-        JSONBARRAYOID, JSONBOID, JSONOID, NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID,
-        TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
-        TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID,
-        VARCHARARRAYOID, VARCHAROID,
+        JSONBARRAYOID, JSONBOID, JSONOID, NAMEARRAYOID, NAMEOID, NUMERICARRAYOID, NUMERICOID,
+        OIDARRAYOID, OIDOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID,
+        TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID,
+        UUIDOID, VARCHARARRAYOID, VARCHAROID,
     },
     AllocatedByRust, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB, PgBox,
     PgTupleDesc, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
@@ -30,7 +30,7 @@ use crate::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
         tuple_desc,
     },
-    type_compat::{Bpchar, Varchar},
+    type_compat::{Bpchar, Name, Varchar},
 };
 
 // PgHeapTuple
@@ -340,6 +340,12 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_typoid,
             attribute_typmod,
         ),
+        NAMEOID => collect_attribute_array_from_tuples_helper::<Name>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
         BPCHAROID => collect_attribute_array_from_tuples_helper::<Bpchar>(
             tuples,
             attribute_name,
@@ -353,6 +359,12 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_typmod,
         ),
         VARCHARARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Varchar>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        NAMEARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Name>>>(
             tuples,
             attribute_name,
             attribute_element_typoid,

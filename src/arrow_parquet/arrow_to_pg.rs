@@ -10,9 +10,10 @@ use pgrx::{
         CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID,
         FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID,
         INTERVALARRAYOID, INTERVALOID, JSONARRAYOID, JSONBARRAYOID, JSONBOID, JSONOID,
-        NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID,
-        TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID,
-        TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID, VARCHARARRAYOID, VARCHAROID,
+        NAMEARRAYOID, NAMEOID, NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID, TEXTARRAYOID,
+        TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID,
+        TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID, VARCHARARRAYOID,
+        VARCHAROID,
     },
     prelude::PgHeapTuple,
     AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, Json, JsonB, PgTupleDesc, Time,
@@ -21,7 +22,7 @@ use pgrx::{
 
 use crate::{
     pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc},
-    type_compat::{Bpchar, Varchar},
+    type_compat::{Bpchar, Name, Varchar},
 };
 
 pub(crate) mod bool;
@@ -37,6 +38,7 @@ pub(crate) mod int8;
 pub(crate) mod interval;
 pub(crate) mod json;
 pub(crate) mod jsonb;
+pub(crate) mod name;
 pub(crate) mod numeric;
 pub(crate) mod oid;
 pub(crate) mod record;
@@ -107,6 +109,13 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
         }
         VARCHAROID => {
             let val = <Varchar as ArrowArrayToPgType<StringArray, Varchar>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
+        }
+        NAMEOID => {
+            let val = <Name as ArrowArrayToPgType<StringArray, Name>>::as_pg(
                 primitive_array.into(),
                 None,
             );
@@ -293,6 +302,14 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
                 StringArray,
                 Vec<Option<Varchar>>,
             >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        NAMEARRAYOID => {
+            let val =
+                <Vec<Option<Name>> as ArrowArrayToPgType<StringArray, Vec<Option<Name>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
             val.into_datum()
         }
         BPCHARARRAYOID => {
