@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use arrow::datatypes::{Field, Fields, Schema};
+use arrow_schema::ExtensionType;
 use parquet::arrow::arrow_to_parquet_schema;
 use pg_sys::{
     Oid, BOOLOID, BPCHAROID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID,
-    INT8OID, INTERVALOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID,
-    TIMESTAMPTZOID, TIMETZOID, VARCHAROID,
+    INT8OID, INTERVALOID, JSONBOID, JSONOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID,
+    TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, UUIDOID, VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -180,6 +181,16 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
             true,
         )
         .into(),
+        UUIDOID => Field::new(
+            elem_name,
+            arrow::datatypes::DataType::FixedSizeBinary(16),
+            true,
+        )
+        .with_extension_type(ExtensionType::Uuid)
+        .into(),
+        JSONOID | JSONBOID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true)
+            .with_extension_type(ExtensionType::Json)
+            .into(),
         CHAROID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into(),
         TEXTOID | VARCHAROID | BPCHAROID => {
             Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()

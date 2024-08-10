@@ -25,8 +25,8 @@ mod tests {
     use crate::type_compat::{i128_to_numeric, Bpchar, Varchar};
     use pgrx::pg_sys::Oid;
     use pgrx::{
-        composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Spi, Time,
-        TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
+        composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB,
+        Spi, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
     };
     enum CopyOptionValue {
         StringOption(String),
@@ -59,6 +59,7 @@ mod tests {
 
     struct TestTable<T: IntoDatum + FromDatum> {
         uri: String,
+        order_by_col: String,
         copy_to_options: HashMap<String, CopyOptionValue>,
         copy_from_options: HashMap<String, CopyOptionValue>,
         _data: PhantomData<T>,
@@ -93,12 +94,20 @@ mod tests {
 
             let uri = "file:///tmp/test.parquet".to_string();
 
+            let order_by_col = "a".to_string();
+
             Self {
                 uri,
+                order_by_col,
                 copy_to_options,
                 copy_from_options,
                 _data: PhantomData,
             }
+        }
+
+        fn with_order_by_col(mut self, order_by_col: String) -> Self {
+            self.order_by_col = order_by_col;
+            self
         }
 
         fn with_copy_to_options(
@@ -145,11 +154,11 @@ mod tests {
         }
 
         fn select_all(&self) -> Vec<(Option<T>,)> {
-            let select_command = "SELECT a FROM test ORDER BY a;";
+            let select_command = format!("SELECT a FROM test ORDER BY {};", self.order_by_col);
 
             Spi::connect(|client| {
                 let mut results = Vec::new();
-                let tup_table = client.select(select_command, None, None).unwrap();
+                let tup_table = client.select(&select_command, None, None).unwrap();
 
                 for row in tup_table {
                     let val = row["a"].value::<T>();
@@ -745,7 +754,6 @@ mod tests {
     }
 
     #[pg_test]
-    #[ignore = "Interval is not supported by arrow yet"]
     fn test_interval() {
         let test_table = TestTable::<Interval>::new("interval".into());
         let values = (1_i32..=10)
@@ -756,7 +764,6 @@ mod tests {
     }
 
     #[pg_test]
-    #[ignore = "Interval is not supported by arrow yet"]
     fn test_interval_array() {
         let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into());
         let values = (1_i32..=10)
@@ -770,6 +777,227 @@ mod tests {
             })
             .collect();
         test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_uuid() {
+        let uuids = vec![
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000003",
+        ];
+
+        let uuids = uuids
+            .into_iter()
+            .map(|uuid| {
+                let uuid = uuid.replace("-", "");
+                let bytes = u128::from_str_radix(&uuid, 16).unwrap();
+                let bytes = bytes.to_be_bytes().to_vec();
+                Uuid::from_slice(bytes.as_slice()).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let test_table = TestTable::<Uuid>::new("uuid".into());
+        let values = uuids.into_iter().map(|v| Some(v)).collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_uuid_array() {
+        let uuids = vec![
+            "00000000-0000-0000-0000-000000000001",
+            "00000000-0000-0000-0000-000000000002",
+            "00000000-0000-0000-0000-000000000003",
+        ];
+
+        let uuids = uuids
+            .into_iter()
+            .map(|uuid| {
+                let uuid = uuid.replace("-", "");
+                let bytes = u128::from_str_radix(&uuid, 16).unwrap();
+                let bytes = bytes.to_be_bytes().to_vec();
+                Uuid::from_slice(bytes.as_slice()).unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        let test_table = TestTable::<Vec<Option<Uuid>>>::new("uuid[]".into());
+        let values = uuids
+            .into_iter()
+            .map(|v| Some(vec![Some(v), Some(v), Some(v)]))
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_json() {
+        let test_table = TestTable::<Json>::new("json".into()).with_order_by_col("a->>'a'".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| {
+                Some(Json(
+                    serde_json::from_str(format!("{{\"a\":\"test_json_{}\"}}", v).as_str())
+                        .unwrap(),
+                ))
+            })
+            .collect();
+        let (expected_result, result) = test_common(test_table, values);
+
+        for ((expected,), (actual,)) in expected_result.into_iter().zip(result.into_iter()) {
+            if expected.is_none() {
+                assert!(actual.is_none());
+            }
+
+            if expected.is_some() {
+                assert!(actual.is_some());
+
+                let expected = expected.unwrap();
+                let actual = actual.unwrap();
+
+                assert_eq!(expected.0, actual.0);
+            }
+        }
+    }
+
+    #[pg_test]
+    fn test_json_array() {
+        let test_table = TestTable::<Vec<Option<Json>>>::new("json[]".into())
+            .with_order_by_col("a::text[]".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| {
+                Some(vec![
+                    Some(Json(
+                        serde_json::from_str(format!("{{\"a\":\"test_json_{}\"}}", v).as_str())
+                            .unwrap(),
+                    )),
+                    Some(Json(
+                        serde_json::from_str(format!("{{\"a\":\"test_json_{}\"}}", v + 1).as_str())
+                            .unwrap(),
+                    )),
+                    Some(Json(
+                        serde_json::from_str(format!("{{\"a\":\"test_json_{}\"}}", v + 2).as_str())
+                            .unwrap(),
+                    )),
+                ])
+            })
+            .collect();
+        let (expected_result, result) = test_common(test_table, values);
+
+        for ((expected,), (actual,)) in expected_result.into_iter().zip(result.into_iter()) {
+            if expected.is_none() {
+                assert!(actual.is_none());
+            }
+
+            if expected.is_some() {
+                assert!(actual.is_some());
+
+                let expected = expected.unwrap();
+                let actual = actual.unwrap();
+
+                for (expected, actual) in expected.into_iter().zip(actual.into_iter()) {
+                    if expected.is_none() {
+                        assert!(actual.is_none());
+                    }
+
+                    if expected.is_some() {
+                        assert!(actual.is_some());
+
+                        let expected = expected.unwrap();
+                        let actual = actual.unwrap();
+
+                        assert_eq!(expected.0, actual.0);
+                    }
+                }
+            }
+        }
+    }
+
+    #[pg_test]
+    fn test_jsonb() {
+        let test_table =
+            TestTable::<JsonB>::new("jsonb".into()).with_order_by_col("a->>'a'".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| {
+                Some(JsonB(
+                    serde_json::from_str(format!("{{\"a\":\"test_jsonb_{}\"}}", v).as_str())
+                        .unwrap(),
+                ))
+            })
+            .collect();
+        let (expected_result, result) = test_common(test_table, values);
+
+        for ((expected,), (actual,)) in expected_result.into_iter().zip(result.into_iter()) {
+            if expected.is_none() {
+                assert!(actual.is_none());
+            }
+
+            if expected.is_some() {
+                assert!(actual.is_some());
+
+                let expected = expected.unwrap();
+                let actual = actual.unwrap();
+
+                assert_eq!(expected.0, actual.0);
+            }
+        }
+    }
+
+    #[pg_test]
+    fn test_jsonb_array() {
+        let test_table = TestTable::<Vec<Option<JsonB>>>::new("jsonb[]".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| {
+                Some(vec![
+                    Some(JsonB(
+                        serde_json::from_str(format!("{{\"a\":\"test_jsonb_{}\"}}", v).as_str())
+                            .unwrap(),
+                    )),
+                    Some(JsonB(
+                        serde_json::from_str(
+                            format!("{{\"a\":\"test_jsonb_{}\"}}", v + 1).as_str(),
+                        )
+                        .unwrap(),
+                    )),
+                    Some(JsonB(
+                        serde_json::from_str(
+                            format!("{{\"a\":\"test_jsonb_{}\"}}", v + 2).as_str(),
+                        )
+                        .unwrap(),
+                    )),
+                ])
+            })
+            .collect();
+        let (expected_result, result) = test_common(test_table, values);
+
+        for ((expected,), (actual,)) in expected_result.into_iter().zip(result.into_iter()) {
+            if expected.is_none() {
+                assert!(actual.is_none());
+            }
+
+            if expected.is_some() {
+                assert!(actual.is_some());
+
+                let expected = expected.unwrap();
+                let actual = actual.unwrap();
+
+                for (expected, actual) in expected.into_iter().zip(actual.into_iter()) {
+                    if expected.is_none() {
+                        assert!(actual.is_none());
+                    }
+
+                    if expected.is_some() {
+                        assert!(actual.is_some());
+
+                        let expected = expected.unwrap();
+                        let actual = actual.unwrap();
+
+                        assert_eq!(expected.0, actual.0);
+                    }
+                }
+            }
+        }
     }
 
     #[pg_test]

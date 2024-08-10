@@ -1,21 +1,22 @@
 use arrow::array::{
-    Array, ArrayData, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, IntervalMonthDayNanoArray, ListArray,
-    StringArray, StructArray, Time64MicrosecondArray, TimestampMicrosecondArray, UInt32Array,
+    Array, ArrayData, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    IntervalMonthDayNanoArray, ListArray, StringArray, StructArray, Time64MicrosecondArray,
+    TimestampMicrosecondArray, UInt32Array,
 };
 use pgrx::{
     pg_sys::{
         Datum, Oid, BOOLARRAYOID, BOOLOID, BPCHARARRAYOID, BPCHAROID, BYTEAARRAYOID, BYTEAOID,
         CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID,
         FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID,
-        INTERVALARRAYOID, INTERVALOID, NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID,
-        TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
-        TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, VARCHARARRAYOID,
-        VARCHAROID,
+        INTERVALARRAYOID, INTERVALOID, JSONARRAYOID, JSONBARRAYOID, JSONBOID, JSONOID,
+        NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID,
+        TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID,
+        TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID, VARCHARARRAYOID, VARCHAROID,
     },
     prelude::PgHeapTuple,
-    AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, PgTupleDesc, Time, TimeWithTimeZone,
-    Timestamp, TimestampWithTimeZone,
+    AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, Json, JsonB, PgTupleDesc, Time,
+    TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
 };
 
 use crate::{
@@ -34,6 +35,8 @@ pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
 pub(crate) mod interval;
+pub(crate) mod json;
+pub(crate) mod jsonb;
 pub(crate) mod numeric;
 pub(crate) mod oid;
 pub(crate) mod record;
@@ -42,6 +45,7 @@ pub(crate) mod time;
 pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
+pub(crate) mod uuid;
 pub(crate) mod varchar;
 pub(crate) trait ArrowArrayToPgType<'a, A: From<ArrayData>, T: 'a + IntoDatum> {
     fn as_pg(array: A, tupledesc: Option<PgTupleDesc<'a>>) -> Option<T>;
@@ -172,6 +176,27 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
         }
         INTERVALOID => {
             let val = <Interval as ArrowArrayToPgType<IntervalMonthDayNanoArray, Interval>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
+        }
+        UUIDOID => {
+            let val = <Uuid as ArrowArrayToPgType<FixedSizeBinaryArray, Uuid>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
+        }
+        JSONOID => {
+            let val = <Json as ArrowArrayToPgType<StringArray, Json>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
+        }
+        JSONBOID => {
+            let val = <JsonB as ArrowArrayToPgType<StringArray, JsonB>>::as_pg(
                 primitive_array.into(),
                 None,
             );
@@ -340,6 +365,29 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
                 IntervalMonthDayNanoArray,
                 Vec<Option<Interval>>,
             >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        UUIDARRAYOID => {
+            let val = <Vec<Option<Uuid>> as ArrowArrayToPgType<
+                FixedSizeBinaryArray,
+                Vec<Option<Uuid>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        JSONARRAYOID => {
+            let val =
+                <Vec<Option<Json>> as ArrowArrayToPgType<StringArray, Vec<Option<Json>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
+            val.into_datum()
+        }
+        JSONBARRAYOID => {
+            let val =
+                <Vec<Option<JsonB>> as ArrowArrayToPgType<StringArray, Vec<Option<JsonB>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
             val.into_datum()
         }
         _ => {

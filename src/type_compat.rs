@@ -174,19 +174,13 @@ pub(crate) fn interval_to_nano(interval: Interval) -> Option<IntervalMonthDayNan
     let months = interval.months();
     let days = interval.days();
     let microseconds = interval.micros();
-
-    let months = months as i32;
-    let days = days as i32;
-    let microseconds = microseconds;
-
     Some(IntervalMonthDayNano::new(months, days, microseconds))
 }
 
 pub(crate) fn nano_to_interval(nano: IntervalMonthDayNano) -> Option<Interval> {
     let months = nano.months;
     let days = nano.days;
-    let microseconds = nano.nanoseconds / 1000;
-
+    let microseconds = nano.nanoseconds;
     Some(Interval::new(months, days, microseconds).unwrap())
 }
 

@@ -12,6 +12,8 @@ pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
 pub(crate) mod interval;
+pub(crate) mod json;
+pub(crate) mod jsonb;
 pub(crate) mod numeric;
 pub(crate) mod oid;
 pub(crate) mod record;
@@ -20,6 +22,7 @@ pub(crate) mod time;
 pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
+pub(crate) mod uuid;
 pub(crate) mod varchar;
 
 pub(crate) trait PgTypeToArrowArray<T: IntoDatum + FromDatum> {
