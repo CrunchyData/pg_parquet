@@ -1,3 +1,4 @@
+use core::panic;
 use std::ffi::CStr;
 
 use arrow::datatypes::IntervalMonthDayNano;
@@ -350,7 +351,24 @@ impl FromDatum for Bpchar {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct Bit(pub(crate) String);
+pub(crate) struct Bit(String);
+
+impl From<Bit> for String {
+    fn from(bit: Bit) -> Self {
+        bit.0
+    }
+}
+
+impl Bit {
+    pub(crate) fn new(bits: String) -> Self {
+        for c in bits.chars() {
+            if c != '0' && c != '1' {
+                panic!("\"{}\" is not a valid binary digit", c);
+            }
+        }
+        Self(bits)
+    }
+}
 
 impl IntoDatum for Bit {
     fn into_datum(self) -> Option<pg_sys::Datum> {
@@ -462,7 +480,24 @@ impl FromDatum for Bit {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct VarBit(pub(crate) String);
+pub(crate) struct VarBit(String);
+
+impl From<VarBit> for String {
+    fn from(varbit: VarBit) -> Self {
+        varbit.0
+    }
+}
+
+impl VarBit {
+    pub(crate) fn new(bits: String) -> Self {
+        for c in bits.chars() {
+            if c != '0' && c != '1' {
+                panic!("\"{}\" is not a valid binary digit", c);
+            }
+        }
+        Self(bits)
+    }
+}
 
 impl IntoDatum for VarBit {
     fn into_datum(self) -> Option<pg_sys::Datum> {

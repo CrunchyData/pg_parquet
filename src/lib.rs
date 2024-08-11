@@ -572,7 +572,7 @@ mod tests {
     #[pg_test]
     fn test_bit() {
         let test_table = TestTable::<Bit>::new("bit".into());
-        let values = vec![Bit("0".into()), Bit("1".into())]
+        let values = vec![Bit::new("0".into()), Bit::new("1".into())]
             .into_iter()
             .map(|v| Some(v))
             .collect();
@@ -583,9 +583,9 @@ mod tests {
     fn test_bit_array() {
         let test_table = TestTable::<Vec<Option<Bit>>>::new("bit[]".into());
         let values = vec![
-            vec![Some(Bit("0".into())), Some(Bit("1".into()))],
-            vec![Some(Bit("1".into()))],
-            vec![Some(Bit("0".into()))],
+            vec![Some(Bit::new("0".into())), Some(Bit::new("1".into()))],
+            vec![Some(Bit::new("1".into()))],
+            vec![Some(Bit::new("0".into()))],
         ]
         .into_iter()
         .map(|v| Some(v))
@@ -594,10 +594,21 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "\"a\" is not a valid binary digit")]
+    fn test_invalid_bit_value() {
+        let test_table = TestTable::<Bit>::new("bit".into());
+        let values = vec![Bit::new("a".into())]
+            .into_iter()
+            .map(|v| Some(v))
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
     #[should_panic(expected = "bit string length 2 does not match type bit(1)")]
     fn test_invalid_bit_length() {
         let test_table = TestTable::<Bit>::new("bit".into());
-        let values = vec![Bit("01".into())]
+        let values = vec![Bit::new("01".into())]
             .into_iter()
             .map(|v| Some(v))
             .collect();
@@ -609,7 +620,7 @@ mod tests {
         let test_table = TestTable::<VarBit>::new("varbit".into());
         let values = (1..=10)
             .into_iter()
-            .map(|v| Some(VarBit(format!("0101").repeat(v))))
+            .map(|v| Some(VarBit::new(format!("0101").repeat(v))))
             .collect();
         test_helper(test_table, values);
     }
@@ -621,9 +632,9 @@ mod tests {
             .into_iter()
             .map(|v| {
                 Some(vec![
-                    Some(VarBit(format!("0101").repeat(v))),
-                    Some(VarBit(format!("0101").repeat(v + 1))),
-                    Some(VarBit(format!("0101").repeat(v + 2))),
+                    Some(VarBit::new(format!("0101").repeat(v))),
+                    Some(VarBit::new(format!("0101").repeat(v + 1))),
+                    Some(VarBit::new(format!("0101").repeat(v + 2))),
                 ])
             })
             .collect();

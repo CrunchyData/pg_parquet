@@ -17,7 +17,7 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, VarBit> for VarBit {
             None
         } else {
             let val = arr.value(0);
-            Some(VarBit(val.to_string()))
+            Some(VarBit::new(val.to_string()))
         }
     }
 }
@@ -32,7 +32,7 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<VarBit>>> for Vec<Option
     ) -> Option<Vec<Option<VarBit>>> {
         let mut vals = vec![];
         for val in arr.iter() {
-            let val = val.map(|val| VarBit(val.to_string()));
+            let val = val.map(|val| VarBit::new(val.to_string()));
             vals.push(val);
         }
         Some(vals)

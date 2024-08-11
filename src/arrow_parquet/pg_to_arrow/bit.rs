@@ -18,7 +18,10 @@ use crate::{
 impl PgTypeToArrowArray<Bit> for Vec<Option<Bit>> {
     fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let field = Field::new(name, DataType::Utf8, true);
-        let array = self.into_iter().map(|x| x.map(|x| x.0)).collect::<Vec<_>>();
+        let array = self
+            .into_iter()
+            .map(|x| x.map(|x| String::from(x)))
+            .collect::<Vec<_>>();
         let array = StringArray::from(array);
         (Arc::new(field), Arc::new(array))
     }
@@ -35,7 +38,7 @@ impl PgTypeToArrowArray<Vec<Option<Bit>>> for Vec<Option<Vec<Option<Bit>>>> {
             .into_iter()
             .flatten()
             .flatten()
-            .map(|x| x.and_then(|x| Some(x.0)))
+            .map(|x| x.and_then(|x| Some(String::from(x))))
             .collect::<Vec<_>>();
         let array = StringArray::from(array);
         let (field, primitive_array) = (Arc::new(field), Arc::new(array));
