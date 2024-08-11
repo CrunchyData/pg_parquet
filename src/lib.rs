@@ -554,9 +554,9 @@ mod tests {
     #[pg_test]
     fn test_bit() {
         let test_table = TestTable::<Bit>::new("bit".into());
-        let values = (1..=10)
+        let values = vec![Bit("0".into()), Bit("1".into())]
             .into_iter()
-            .map(|v| Some(Bit(format!("0101").repeat(v))))
+            .map(|v| Some(v))
             .collect();
         test_helper(test_table, values);
     }
@@ -564,16 +564,14 @@ mod tests {
     #[pg_test]
     fn test_bit_array() {
         let test_table = TestTable::<Vec<Option<Bit>>>::new("bit[]".into());
-        let values = (1..=10)
-            .into_iter()
-            .map(|v| {
-                Some(vec![
-                    Some(Bit(format!("0101").repeat(v))),
-                    Some(Bit(format!("0101").repeat(v + 1))),
-                    Some(Bit(format!("0101").repeat(v + 2))),
-                ])
-            })
-            .collect();
+        let values = vec![
+            vec![Some(Bit("0".into())), Some(Bit("1".into()))],
+            vec![Some(Bit("1".into()))],
+            vec![Some(Bit("0".into()))],
+        ]
+        .into_iter()
+        .map(|v| Some(v))
+        .collect();
         test_helper(test_table, values);
     }
 
