@@ -1,5 +1,5 @@
 use arrow::array::{Array, Time64MicrosecondArray};
-use pgrx::{PgTupleDesc, TimeWithTimeZone};
+use pgrx::{pg_sys::Oid, PgTupleDesc, TimeWithTimeZone};
 
 use crate::type_compat::i64_to_timetz;
 
@@ -9,7 +9,9 @@ use super::ArrowArrayToPgType;
 impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, TimeWithTimeZone> for TimeWithTimeZone {
     fn as_pg(
         arr: Time64MicrosecondArray,
-        _tupledesc: Option<PgTupleDesc>,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
     ) -> Option<TimeWithTimeZone> {
         if arr.is_null(0) {
             None
@@ -26,7 +28,9 @@ impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, Vec<Option<TimeWithTimeZ
 {
     fn as_pg(
         arr: Time64MicrosecondArray,
-        _tupledesc: Option<PgTupleDesc>,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
     ) -> Option<Vec<Option<TimeWithTimeZone>>> {
         let mut vals = vec![];
         for val in arr.iter() {

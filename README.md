@@ -73,6 +73,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `varchar`         | BYTE_ARRAY                | STRING           |
 | `bpchar`          | BYTE_ARRAY                | STRING           |
 | `text`            | BYTE_ARRAY                | STRING           |
+| `enum`            | BYTE_ARRAY                | STRING           |
 | `bit`             | BYTE_ARRAY                | STRING           |
 | `varbit`          | BYTE_ARRAY                | STRING           |
 | `json`            | BYTE_ARRAY                | JSON             |
@@ -97,6 +98,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `varchar[]`       | BYTE_ARRAY                | LIST             |
 | `bpchar[]`        | BYTE_ARRAY                | LIST             |
 | `text[]`          | BYTE_ARRAY                | LIST             |
+| `enum[]`          | BYTE_ARRAY                | LIST             |
 | `bit[]`           | BYTE_ARRAY                | LIST             |
 | `varbit[]`        | BYTE_ARRAY                | LIST             |
 | `json[]`          | BYTE_ARRAY                | LIST             |

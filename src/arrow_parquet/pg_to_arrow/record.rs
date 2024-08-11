@@ -29,9 +29,9 @@ use crate::{
     },
     pgrx_utils::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
-        tuple_desc,
+        is_enum_typoid, tuple_desc,
     },
-    type_compat::{Bit, Bpchar, Name, VarBit, Varchar},
+    type_compat::{Bit, Bpchar, Enum, Name, VarBit, Varchar},
 };
 
 // PgHeapTuple
@@ -438,6 +438,20 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
                 collect_array_of_tuple_attribute_array_from_tuples_helper(
                     tuples,
                     tupledesc,
+                    attribute_name,
+                    attribute_element_typoid,
+                    attribute_typmod,
+                )
+            } else if is_enum_typoid(attribute_typoid) {
+                collect_attribute_array_from_tuples_helper::<Enum>(
+                    tuples,
+                    attribute_name,
+                    attribute_typoid,
+                    attribute_typmod,
+                )
+            } else if is_enum_typoid(attribute_element_typoid) {
+                collect_attribute_array_from_tuples_helper::<Vec<Option<Enum>>>(
+                    tuples,
                     attribute_name,
                     attribute_element_typoid,
                     attribute_typmod,

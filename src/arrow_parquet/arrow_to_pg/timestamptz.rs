@@ -1,5 +1,5 @@
 use arrow::array::{Array, TimestampMicrosecondArray};
-use pgrx::{PgTupleDesc, TimestampWithTimeZone};
+use pgrx::{pg_sys::Oid, PgTupleDesc, TimestampWithTimeZone};
 
 use crate::type_compat::i64_to_timestamptz;
 
@@ -11,7 +11,9 @@ impl<'a> ArrowArrayToPgType<'_, TimestampMicrosecondArray, TimestampWithTimeZone
 {
     fn as_pg(
         arr: TimestampMicrosecondArray,
-        _tupledesc: Option<PgTupleDesc>,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
     ) -> Option<TimestampWithTimeZone> {
         if arr.is_null(0) {
             None
@@ -28,7 +30,9 @@ impl<'a> ArrowArrayToPgType<'_, TimestampMicrosecondArray, Vec<Option<TimestampW
 {
     fn as_pg(
         arr: TimestampMicrosecondArray,
-        _tupledesc: Option<PgTupleDesc>,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
     ) -> Option<Vec<Option<TimestampWithTimeZone>>> {
         let mut vals = vec![];
         for val in arr.iter() {

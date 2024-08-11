@@ -1,5 +1,5 @@
 use arrow::array::{Array, StringArray};
-use pgrx::PgTupleDesc;
+use pgrx::{pg_sys::Oid, PgTupleDesc};
 
 use crate::type_compat::VarBit;
 
@@ -7,7 +7,12 @@ use super::ArrowArrayToPgType;
 
 // VarBit
 impl<'a> ArrowArrayToPgType<'_, StringArray, VarBit> for VarBit {
-    fn as_pg(arr: StringArray, _tupledesc: Option<PgTupleDesc>) -> Option<VarBit> {
+    fn as_pg(
+        arr: StringArray,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<VarBit> {
         if arr.is_null(0) {
             None
         } else {
@@ -19,7 +24,12 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, VarBit> for VarBit {
 
 // VarBit[]
 impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<VarBit>>> for Vec<Option<VarBit>> {
-    fn as_pg(arr: StringArray, _tupledesc: Option<PgTupleDesc>) -> Option<Vec<Option<VarBit>>> {
+    fn as_pg(
+        arr: StringArray,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<Vec<Option<VarBit>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.map(|val| VarBit(val.to_string()));

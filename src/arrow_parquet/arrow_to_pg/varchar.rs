@@ -1,5 +1,5 @@
 use arrow::array::{Array, StringArray};
-use pgrx::PgTupleDesc;
+use pgrx::{pg_sys::Oid, PgTupleDesc};
 
 use crate::type_compat::Varchar;
 
@@ -7,7 +7,12 @@ use super::ArrowArrayToPgType;
 
 // Varchar
 impl<'a> ArrowArrayToPgType<'_, StringArray, Varchar> for Varchar {
-    fn as_pg(arr: StringArray, _tupledesc: Option<PgTupleDesc>) -> Option<Varchar> {
+    fn as_pg(
+        arr: StringArray,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<Varchar> {
         if arr.is_null(0) {
             None
         } else {
@@ -19,7 +24,12 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, Varchar> for Varchar {
 
 // Varchar[]
 impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<Varchar>>> for Vec<Option<Varchar>> {
-    fn as_pg(arr: StringArray, _tupledesc: Option<PgTupleDesc>) -> Option<Vec<Option<Varchar>>> {
+    fn as_pg(
+        arr: StringArray,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<Vec<Option<Varchar>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.map(|val| Varchar(val.to_string()));

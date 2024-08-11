@@ -1,11 +1,16 @@
 use arrow::array::{Array, BooleanArray};
-use pgrx::PgTupleDesc;
+use pgrx::{pg_sys::Oid, PgTupleDesc};
 
 use super::ArrowArrayToPgType;
 
 // Bool
 impl<'a> ArrowArrayToPgType<'_, BooleanArray, bool> for bool {
-    fn as_pg(arr: BooleanArray, _tupledesc: Option<PgTupleDesc>) -> Option<bool> {
+    fn as_pg(
+        arr: BooleanArray,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<bool> {
         if arr.is_null(0) {
             None
         } else {
@@ -17,7 +22,12 @@ impl<'a> ArrowArrayToPgType<'_, BooleanArray, bool> for bool {
 
 // Bool[]
 impl<'a> ArrowArrayToPgType<'_, BooleanArray, Vec<Option<bool>>> for Vec<Option<bool>> {
-    fn as_pg(arr: BooleanArray, _tupledesc: Option<PgTupleDesc>) -> Option<Vec<Option<bool>>> {
+    fn as_pg(
+        arr: BooleanArray,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<Vec<Option<bool>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             vals.push(val);

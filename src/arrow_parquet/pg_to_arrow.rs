@@ -7,6 +7,7 @@ pub(crate) mod bpchar;
 pub(crate) mod bytea;
 pub(crate) mod char;
 pub(crate) mod date;
+pub(crate) mod enumeration;
 pub(crate) mod float4;
 pub(crate) mod float8;
 pub(crate) mod int2;

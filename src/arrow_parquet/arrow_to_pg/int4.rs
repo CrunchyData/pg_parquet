@@ -1,11 +1,16 @@
 use arrow::array::{Array, Int32Array};
-use pgrx::PgTupleDesc;
+use pgrx::{pg_sys::Oid, PgTupleDesc};
 
 use super::ArrowArrayToPgType;
 
 // Int4
 impl<'a> ArrowArrayToPgType<'_, Int32Array, i32> for i32 {
-    fn as_pg(arr: Int32Array, _tupledesc: Option<PgTupleDesc>) -> Option<i32> {
+    fn as_pg(
+        arr: Int32Array,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<i32> {
         if arr.is_null(0) {
             None
         } else {
@@ -17,7 +22,12 @@ impl<'a> ArrowArrayToPgType<'_, Int32Array, i32> for i32 {
 
 // Int4[]
 impl<'a> ArrowArrayToPgType<'_, Int32Array, Vec<Option<i32>>> for Vec<Option<i32>> {
-    fn as_pg(arr: Int32Array, _tupledesc: Option<PgTupleDesc>) -> Option<Vec<Option<i32>>> {
+    fn as_pg(
+        arr: Int32Array,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<Vec<Option<i32>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             vals.push(val);

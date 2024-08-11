@@ -13,7 +13,7 @@ use pgrx::{prelude::*, PgTupleDesc};
 use crate::{
     pgrx_utils::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
-        tuple_desc,
+        is_enum_typoid, tuple_desc,
     },
     type_compat::{DECIMAL_PRECISION, DECIMAL_SCALE},
 };
@@ -198,7 +198,11 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
         BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into(),
         OIDOID => Field::new(elem_name, arrow::datatypes::DataType::UInt32, true).into(),
         _ => {
-            panic!("unsupported primitive type {}", typoid)
+            if is_enum_typoid(typoid) {
+                Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
+            } else {
+                panic!("unsupported primitive type {}", typoid)
+            }
         }
     }
 }

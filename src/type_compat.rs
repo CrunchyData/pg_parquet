@@ -3,10 +3,14 @@ use std::ffi::CStr;
 use arrow::datatypes::IntervalMonthDayNano;
 use pgrx::{
     direct_function_call,
-    pg_sys::{self, TimeTzADT, BITOID, BPCHAROID, NAMEOID, TIME_UTC, VARBITOID, VARCHAROID},
+    pg_sys::{
+        self, InvalidOid, TimeTzADT, BITOID, BPCHAROID, NAMEOID, TIME_UTC, VARBITOID, VARCHAROID,
+    },
     AnyNumeric, Date, FromDatum, Interval, IntoDatum, Time, TimeWithTimeZone, Timestamp,
     TimestampWithTimeZone,
 };
+
+use crate::pgrx_utils::lookup_type_name;
 
 pub(crate) const DECIMAL_PRECISION: u8 = 38;
 pub(crate) const DECIMAL_SCALE: i8 = 8;
@@ -600,5 +604,55 @@ impl FromDatum for Name {
             let val = val.to_str().unwrap();
             Some(Self(val.to_string()))
         })
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Enum(String);
+
+// we need to store the enum type oid in a static variable since
+// pgrx IntoDatum's associated function type_oid() is a static function
+static mut ENUM_TYPE_OID: pg_sys::Oid = InvalidOid;
+
+impl Enum {
+    pub(crate) fn new(label: String, enum_oid: pg_sys::Oid) -> Self {
+        unsafe { ENUM_TYPE_OID = enum_oid };
+        Self(label)
+    }
+
+    pub(crate) fn label(&self) -> &str {
+        &self.0
+    }
+}
+
+impl IntoDatum for Enum {
+    fn into_datum(self) -> Option<pg_sys::Datum> {
+        let label = self.0;
+        let enum_name = lookup_type_name(unsafe { ENUM_TYPE_OID }, -1);
+        let enum_datum = ::pgrx::enum_helper::lookup_enum_by_label(&enum_name, &label);
+        Some(enum_datum)
+    }
+
+    fn type_oid() -> pg_sys::Oid {
+        unsafe { ENUM_TYPE_OID }
+    }
+}
+
+impl FromDatum for Enum {
+    unsafe fn from_polymorphic_datum(
+        datum: pg_sys::Datum,
+        is_null: bool,
+        _typoid: pg_sys::Oid,
+    ) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        if is_null {
+            None
+        } else {
+            let label_oid = ::pgrx::pg_sys::Oid::from_datum(datum, is_null).unwrap();
+            let (label, _, _) = ::pgrx::enum_helper::lookup_enum_by_oid(label_oid);
+            Some(Self(label))
+        }
     }
 }

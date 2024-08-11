@@ -1,5 +1,5 @@
 use arrow::array::{Array, Decimal128Array};
-use pgrx::{AnyNumeric, PgTupleDesc};
+use pgrx::{pg_sys::Oid, AnyNumeric, PgTupleDesc};
 
 use crate::type_compat::i128_to_numeric;
 
@@ -7,7 +7,12 @@ use super::ArrowArrayToPgType;
 
 // Numeric
 impl<'a> ArrowArrayToPgType<'_, Decimal128Array, AnyNumeric> for AnyNumeric {
-    fn as_pg(arr: Decimal128Array, _tupledesc: Option<PgTupleDesc>) -> Option<AnyNumeric> {
+    fn as_pg(
+        arr: Decimal128Array,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<AnyNumeric> {
         if arr.is_null(0) {
             None
         } else {
@@ -24,7 +29,9 @@ impl<'a> ArrowArrayToPgType<'_, Decimal128Array, Vec<Option<AnyNumeric>>>
 {
     fn as_pg(
         arr: Decimal128Array,
-        _tupledesc: Option<PgTupleDesc>,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
     ) -> Option<Vec<Option<AnyNumeric>>> {
         let mut vals = vec![];
         for val in arr.iter() {

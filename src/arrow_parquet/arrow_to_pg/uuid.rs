@@ -1,11 +1,16 @@
 use arrow::array::{Array, FixedSizeBinaryArray};
-use pgrx::{PgTupleDesc, Uuid};
+use pgrx::{pg_sys::Oid, PgTupleDesc, Uuid};
 
 use super::ArrowArrayToPgType;
 
 // Uuid
 impl<'a> ArrowArrayToPgType<'_, FixedSizeBinaryArray, Uuid> for Uuid {
-    fn as_pg(arr: FixedSizeBinaryArray, _tupledesc: Option<PgTupleDesc>) -> Option<Uuid> {
+    fn as_pg(
+        arr: FixedSizeBinaryArray,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<Uuid> {
         if arr.is_null(0) {
             None
         } else {
@@ -20,7 +25,9 @@ impl<'a> ArrowArrayToPgType<'_, FixedSizeBinaryArray, Uuid> for Uuid {
 impl<'a> ArrowArrayToPgType<'_, FixedSizeBinaryArray, Vec<Option<Uuid>>> for Vec<Option<Uuid>> {
     fn as_pg(
         arr: FixedSizeBinaryArray,
-        _tupledesc: Option<PgTupleDesc>,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
     ) -> Option<Vec<Option<Uuid>>> {
         let mut vals = vec![];
         for val in arr.iter() {

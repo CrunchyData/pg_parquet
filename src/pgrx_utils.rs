@@ -43,6 +43,16 @@ pub(crate) fn tuple_desc(typoid: Oid, typmod: i32) -> PgTupleDesc<'static> {
     unsafe { PgTupleDesc::from_pg(tupledesc) }
 }
 
+pub(crate) fn lookup_type_name(oid: pg_sys::Oid, typmod: i32) -> String {
+    unsafe {
+        let cstr_name = pg_sys::format_type_extended(oid, typmod, 0);
+        let cstr = std::ffi::CStr::from_ptr(cstr_name);
+        let typname = cstr.to_string_lossy().to_string();
+        pg_sys::pfree(cstr_name as _); // don't leak the palloc'd cstr_name
+        typname
+    }
+}
+
 pub(crate) fn is_composite_type(typoid: Oid) -> bool {
     unsafe { pg_sys::type_is_rowtype(typoid) }
 }
@@ -54,4 +64,8 @@ pub(crate) fn is_array_type(typoid: Oid) -> bool {
 pub(crate) fn array_element_typoid(array_typoid: Oid) -> Oid {
     assert!(is_array_type(array_typoid));
     unsafe { pg_sys::get_element_type(array_typoid) }
+}
+
+pub(crate) fn is_enum_typoid(typoid: Oid) -> bool {
+    unsafe { pg_sys::type_is_enum(typoid) }
 }

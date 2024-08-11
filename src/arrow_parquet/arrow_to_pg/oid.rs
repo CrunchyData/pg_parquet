@@ -5,7 +5,12 @@ use super::ArrowArrayToPgType;
 
 // Oid
 impl<'a> ArrowArrayToPgType<'_, UInt32Array, Oid> for Oid {
-    fn as_pg(arr: UInt32Array, _tupledesc: Option<PgTupleDesc>) -> Option<Oid> {
+    fn as_pg(
+        arr: UInt32Array,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<Oid> {
         if arr.is_null(0) {
             None
         } else {
@@ -17,7 +22,12 @@ impl<'a> ArrowArrayToPgType<'_, UInt32Array, Oid> for Oid {
 
 // Oid[]
 impl<'a> ArrowArrayToPgType<'_, UInt32Array, Vec<Option<Oid>>> for Vec<Option<Oid>> {
-    fn as_pg(arr: UInt32Array, _tupledesc: Option<PgTupleDesc>) -> Option<Vec<Option<Oid>>> {
+    fn as_pg(
+        arr: UInt32Array,
+        _typoid: Oid,
+        _typmod: i32,
+        _tupledesc: Option<PgTupleDesc<'_>>,
+    ) -> Option<Vec<Option<Oid>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.map(|val| val.into());

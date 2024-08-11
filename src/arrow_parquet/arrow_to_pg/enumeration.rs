@@ -1,38 +1,38 @@
 use arrow::array::{Array, StringArray};
 use pgrx::{pg_sys::Oid, PgTupleDesc};
 
-use crate::type_compat::Bpchar;
+use crate::type_compat::Enum;
 
 use super::ArrowArrayToPgType;
 
-// Bpchar
-impl<'a> ArrowArrayToPgType<'_, StringArray, Bpchar> for Bpchar {
+// Enum
+impl<'a> ArrowArrayToPgType<'_, StringArray, Enum> for Enum {
     fn as_pg(
         arr: StringArray,
-        _typoid: Oid,
+        typoid: Oid,
         _typmod: i32,
         _tupledesc: Option<PgTupleDesc<'_>>,
-    ) -> Option<Bpchar> {
+    ) -> Option<Enum> {
         if arr.is_null(0) {
             None
         } else {
             let val = arr.value(0);
-            Some(Bpchar(val.to_string()))
+            Some(Enum::new(val.to_string(), typoid))
         }
     }
 }
 
-// Bpchar[]
-impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<Bpchar>>> for Vec<Option<Bpchar>> {
+// Enum[]
+impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<Enum>>> for Vec<Option<Enum>> {
     fn as_pg(
         arr: StringArray,
-        _typoid: Oid,
+        typoid: Oid,
         _typmod: i32,
         _tupledesc: Option<PgTupleDesc<'_>>,
-    ) -> Option<Vec<Option<Bpchar>>> {
+    ) -> Option<Vec<Option<Enum>>> {
         let mut vals = vec![];
         for val in arr.iter() {
-            let val = val.map(|val| Bpchar(val.to_string()));
+            let val = val.map(|val| Enum::new(val.to_string(), typoid));
             vals.push(val);
         }
         Some(vals)

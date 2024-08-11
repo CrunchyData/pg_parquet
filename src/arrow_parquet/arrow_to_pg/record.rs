@@ -1,5 +1,5 @@
 use arrow::array::{Array, StructArray};
-use pgrx::{prelude::PgHeapTuple, AllocatedByRust, PgTupleDesc};
+use pgrx::{pg_sys::Oid, prelude::PgHeapTuple, AllocatedByRust, PgTupleDesc};
 
 use crate::pgrx_utils::collect_valid_attributes;
 
@@ -11,6 +11,8 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
 {
     fn as_pg(
         arr: StructArray,
+        _typoid: Oid,
+        _typmod: i32,
         tupledesc: Option<PgTupleDesc<'a>>,
     ) -> Option<PgHeapTuple<'a, AllocatedByRust>> {
         if arr.is_null(0) {
@@ -45,12 +47,12 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, Vec<Option<PgHeapTuple<'a, Allocate
 {
     fn as_pg(
         arr: StructArray,
+        _typoid: Oid,
+        _typmod: i32,
         tupledesc: Option<PgTupleDesc<'a>>,
     ) -> Option<Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>> {
         let len = arr.len();
         let mut values = Vec::with_capacity(len);
-
-        let tupledesc = tupledesc.unwrap();
 
         for i in 0..len {
             let tuple = arr.slice(i, 1);
@@ -58,7 +60,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, Vec<Option<PgHeapTuple<'a, Allocate
             let tuple = <PgHeapTuple<AllocatedByRust> as ArrowArrayToPgType<
                 StructArray,
                 PgHeapTuple<AllocatedByRust>,
-            >>::as_pg(tuple, Some(tupledesc.clone()));
+            >>::as_pg(tuple, _typoid, _typmod, tupledesc.clone());
 
             values.push(tuple);
         }

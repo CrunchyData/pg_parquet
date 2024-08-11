@@ -22,7 +22,7 @@ mod tests {
 
     use crate::arrow_parquet::codec::ParquetCodecOption;
     use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
-    use crate::type_compat::{i128_to_numeric, Bit, Bpchar, Name, VarBit, Varchar};
+    use crate::type_compat::{i128_to_numeric, Bit, Bpchar, Enum, Name, VarBit, Varchar};
     use pgrx::pg_sys::Oid;
     use pgrx::{
         composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB,
@@ -495,6 +495,60 @@ mod tests {
             })
             .collect();
         test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_enum() {
+        let create_enum_query = "CREATE TYPE color AS ENUM ('red', 'green', 'blue');";
+        Spi::run(create_enum_query).unwrap();
+
+        let enum_oid = Spi::get_one::<Oid>("SELECT 'color'::regtype::oid;")
+            .unwrap()
+            .unwrap();
+
+        let test_table = TestTable::<Enum>::new("color".into());
+        let values = vec![
+            Some(Enum::new("red".into(), enum_oid)),
+            Some(Enum::new("green".into(), enum_oid)),
+            Some(Enum::new("blue".into(), enum_oid)),
+        ];
+        test_helper(test_table, values);
+
+        let drop_enum_query = "DROP TYPE color CASCADE;";
+        Spi::run(drop_enum_query).unwrap();
+    }
+
+    #[pg_test]
+    fn test_enum_array() {
+        let create_enum_query = "CREATE TYPE color AS ENUM ('red', 'green', 'blue');";
+        Spi::run(create_enum_query).unwrap();
+
+        let enum_oid = Spi::get_one::<Oid>("SELECT 'color'::regtype::oid;")
+            .unwrap()
+            .unwrap();
+
+        let test_table = TestTable::<Vec<Option<Enum>>>::new("color[]".into());
+        let values = vec![
+            Some(vec![
+                Some(Enum::new("red".into(), enum_oid)),
+                Some(Enum::new("green".into(), enum_oid)),
+                Some(Enum::new("blue".into(), enum_oid)),
+            ]),
+            Some(vec![
+                Some(Enum::new("red".into(), enum_oid)),
+                Some(Enum::new("green".into(), enum_oid)),
+                Some(Enum::new("blue".into(), enum_oid)),
+            ]),
+            Some(vec![
+                Some(Enum::new("red".into(), enum_oid)),
+                Some(Enum::new("green".into(), enum_oid)),
+                Some(Enum::new("blue".into(), enum_oid)),
+            ]),
+        ];
+        test_helper(test_table, values);
+
+        let drop_enum_query = "DROP TYPE color CASCADE;";
+        Spi::run(drop_enum_query).unwrap();
     }
 
     #[pg_test]
