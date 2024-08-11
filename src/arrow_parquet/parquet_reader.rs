@@ -51,11 +51,10 @@ impl ParquetReaderContext {
 
     fn collect_binary_out_funcs(tupledesc: TupleDesc) -> Vec<PgBox<FmgrInfo, AllocatedByPostgres>> {
         unsafe {
-            let tupledesc = PgTupleDesc::from_pg(tupledesc);
-
             let mut binary_out_funcs = vec![];
 
             let include_generated_columns = false;
+            let tupledesc = PgTupleDesc::from_pg_copy(tupledesc);
             let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
             for att in attributes.iter() {
@@ -70,8 +69,6 @@ impl ParquetReaderContext {
 
                 binary_out_funcs.push(arg_fninfo);
             }
-
-            let _ = tupledesc.into_pg();
 
             binary_out_funcs
         }
@@ -145,8 +142,8 @@ impl ParquetReaderContext {
             self.copy_start();
         }
 
-        let tupledesc = unsafe { PgTupleDesc::from_pg(self.tupledesc) };
         let include_generated_columns = false;
+        let tupledesc = unsafe { PgTupleDesc::from_pg_copy(self.tupledesc) };
         let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
         let natts = attributes.len() as i16;
 
@@ -196,8 +193,6 @@ impl ParquetReaderContext {
         } else {
             self.copy_finish();
         }
-
-        let _ = tupledesc.into_pg();
 
         true
     }

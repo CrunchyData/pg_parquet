@@ -552,6 +552,24 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "could not find heap tuple for enum: color.red")]
+    fn test_invalid_enum() {
+        let create_enum_query = "CREATE TYPE color AS ENUM ('green', 'blue');";
+        Spi::run(create_enum_query).unwrap();
+
+        let enum_oid = Spi::get_one::<Oid>("SELECT 'color'::regtype::oid;")
+            .unwrap()
+            .unwrap();
+
+        let test_table = TestTable::<Enum>::new("color".into());
+        let values = vec![Some(Enum::new("red".into(), enum_oid))];
+        test_helper(test_table, values);
+
+        let drop_enum_query = "DROP TYPE color CASCADE;";
+        Spi::run(drop_enum_query).unwrap();
+    }
+
+    #[pg_test]
     fn test_bit() {
         let test_table = TestTable::<Bit>::new("bit".into());
         let values = vec![Bit("0".into()), Bit("1".into())]
@@ -572,6 +590,17 @@ mod tests {
         .into_iter()
         .map(|v| Some(v))
         .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "bit string length 2 does not match type bit(1)")]
+    fn test_invalid_bit_length() {
+        let test_table = TestTable::<Bit>::new("bit".into());
+        let values = vec![Bit("01".into())]
+            .into_iter()
+            .map(|v| Some(v))
+            .collect();
         test_helper(test_table, values);
     }
 

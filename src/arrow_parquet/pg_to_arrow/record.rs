@@ -443,6 +443,7 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
                     attribute_typmod,
                 )
             } else if is_enum_typoid(attribute_typoid) {
+                Enum::set_type_oid(attribute_typoid);
                 collect_attribute_array_from_tuples_helper::<Enum>(
                     tuples,
                     attribute_name,
@@ -450,6 +451,7 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
                     attribute_typmod,
                 )
             } else if is_enum_typoid(attribute_element_typoid) {
+                Enum::set_type_oid(attribute_element_typoid);
                 collect_attribute_array_from_tuples_helper::<Vec<Option<Enum>>>(
                     tuples,
                     attribute_name,

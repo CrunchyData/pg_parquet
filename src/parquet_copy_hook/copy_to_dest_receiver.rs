@@ -177,6 +177,7 @@ pub extern "C" fn copy_destroy(_dest: *mut DestReceiver) {
 }
 
 #[pg_guard]
+#[no_mangle]
 pub extern "C" fn create_copy_to_parquet_dest_receiver(
     filename: *mut i8,
     row_group_size: i64,

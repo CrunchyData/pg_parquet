@@ -620,6 +620,12 @@ impl Enum {
         Self(label)
     }
 
+    // required to be called before "let enum = tuple.get_by_name"
+    // in order to properly deparse the enum datum
+    pub(crate) fn set_type_oid(enum_oid: pg_sys::Oid) {
+        unsafe { ENUM_TYPE_OID = enum_oid };
+    }
+
     pub(crate) fn label(&self) -> &str {
         &self.0
     }

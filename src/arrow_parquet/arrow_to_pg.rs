@@ -304,6 +304,7 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
 
                 val.into_datum()
             } else if is_enum_typoid(typoid) {
+                Enum::set_type_oid(typoid);
                 let val = <Enum as ArrowArrayToPgType<StringArray, Enum>>::as_pg(
                     primitive_array.into(),
                     typoid,
@@ -553,6 +554,7 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
 
                 val.into_datum()
             } else if is_enum_typoid(element_typoid) {
+                Enum::set_type_oid(element_typoid);
                 let val = <Vec<Option<Enum>> as ArrowArrayToPgType<
                     StringArray,
                     Vec<Option<Enum>>,
