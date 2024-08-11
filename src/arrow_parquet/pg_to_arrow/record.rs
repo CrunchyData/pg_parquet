@@ -8,14 +8,15 @@ use arrow::{
 use pgrx::{
     heap_tuple::PgHeapTuple,
     pg_sys::{
-        self, deconstruct_array, heap_getattr, Datum, InvalidOid, Oid, BOOLARRAYOID, BOOLOID,
-        BPCHARARRAYOID, BPCHAROID, BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID, DATEARRAYOID,
-        DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID,
-        INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID, JSONARRAYOID,
-        JSONBARRAYOID, JSONBOID, JSONOID, NAMEARRAYOID, NAMEOID, NUMERICARRAYOID, NUMERICOID,
-        OIDARRAYOID, OIDOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID,
-        TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID,
-        UUIDOID, VARCHARARRAYOID, VARCHAROID,
+        self, deconstruct_array, heap_getattr, Datum, InvalidOid, Oid, BITARRAYOID, BITOID,
+        BOOLARRAYOID, BOOLOID, BPCHARARRAYOID, BPCHAROID, BYTEAARRAYOID, BYTEAOID, CHARARRAYOID,
+        CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID,
+        INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID,
+        INTERVALOID, JSONARRAYOID, JSONBARRAYOID, JSONBOID, JSONOID, NAMEARRAYOID, NAMEOID,
+        NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID,
+        TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID,
+        TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID, VARBITARRAYOID, VARBITOID,
+        VARCHARARRAYOID, VARCHAROID,
     },
     AllocatedByRust, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB, PgBox,
     PgTupleDesc, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
@@ -30,7 +31,7 @@ use crate::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
         tuple_desc,
     },
-    type_compat::{Bpchar, Name, Varchar},
+    type_compat::{Bit, Bpchar, Name, VarBit, Varchar},
 };
 
 // PgHeapTuple
@@ -248,16 +249,16 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_typoid,
             attribute_typmod,
         ),
-        UUIDOID => collect_attribute_array_from_tuples_helper::<Uuid>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
         INTERVALARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Interval>>>(
             tuples,
             attribute_name,
             attribute_element_typoid,
+            attribute_typmod,
+        ),
+        UUIDOID => collect_attribute_array_from_tuples_helper::<Uuid>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
             attribute_typmod,
         ),
         UUIDARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Uuid>>>(
@@ -334,28 +335,16 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_typoid,
             attribute_typmod,
         ),
-        VARCHAROID => collect_attribute_array_from_tuples_helper::<Varchar>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        NAMEOID => collect_attribute_array_from_tuples_helper::<Name>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        BPCHAROID => collect_attribute_array_from_tuples_helper::<Bpchar>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
         TEXTARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<String>>>(
             tuples,
             attribute_name,
             attribute_element_typoid,
+            attribute_typmod,
+        ),
+        VARCHAROID => collect_attribute_array_from_tuples_helper::<Varchar>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
             attribute_typmod,
         ),
         VARCHARARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Varchar>>>(
@@ -364,13 +353,49 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_element_typoid,
             attribute_typmod,
         ),
+        NAMEOID => collect_attribute_array_from_tuples_helper::<Name>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
         NAMEARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Name>>>(
             tuples,
             attribute_name,
             attribute_element_typoid,
             attribute_typmod,
         ),
+        BPCHAROID => collect_attribute_array_from_tuples_helper::<Bpchar>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
         BPCHARARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Bpchar>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        BITOID => collect_attribute_array_from_tuples_helper::<Bit>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        BITARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Bit>>>(
+            tuples,
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+        ),
+        VARBITOID => collect_attribute_array_from_tuples_helper::<VarBit>(
+            tuples,
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+        ),
+        VARBITARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<VarBit>>>(
             tuples,
             attribute_name,
             attribute_element_typoid,

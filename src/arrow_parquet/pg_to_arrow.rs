@@ -1,6 +1,7 @@
 use arrow::{array::ArrayRef, datatypes::FieldRef};
 use pgrx::{pg_sys::Oid, FromDatum, IntoDatum};
 
+pub(crate) mod bit;
 pub(crate) mod bool;
 pub(crate) mod bpchar;
 pub(crate) mod bytea;
@@ -24,6 +25,7 @@ pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
 pub(crate) mod uuid;
+pub(crate) mod varbit;
 pub(crate) mod varchar;
 
 pub(crate) trait PgTypeToArrowArray<T: IntoDatum + FromDatum> {

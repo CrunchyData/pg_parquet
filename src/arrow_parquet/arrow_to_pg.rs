@@ -6,14 +6,14 @@ use arrow::array::{
 };
 use pgrx::{
     pg_sys::{
-        Datum, Oid, BOOLARRAYOID, BOOLOID, BPCHARARRAYOID, BPCHAROID, BYTEAARRAYOID, BYTEAOID,
-        CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID,
-        FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID,
-        INTERVALARRAYOID, INTERVALOID, JSONARRAYOID, JSONBARRAYOID, JSONBOID, JSONOID,
-        NAMEARRAYOID, NAMEOID, NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID, TEXTARRAYOID,
-        TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID,
-        TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID, VARCHARARRAYOID,
-        VARCHAROID,
+        Datum, Oid, BITARRAYOID, BITOID, BOOLARRAYOID, BOOLOID, BPCHARARRAYOID, BPCHAROID,
+        BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID,
+        FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID,
+        INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID, JSONARRAYOID, JSONBARRAYOID,
+        JSONBOID, JSONOID, NAMEARRAYOID, NAMEOID, NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID,
+        TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
+        TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID,
+        VARBITARRAYOID, VARBITOID, VARCHARARRAYOID, VARCHAROID,
     },
     prelude::PgHeapTuple,
     AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, Json, JsonB, PgTupleDesc, Time,
@@ -22,9 +22,10 @@ use pgrx::{
 
 use crate::{
     pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc},
-    type_compat::{Bpchar, Name, Varchar},
+    type_compat::{Bit, Bpchar, Name, VarBit, Varchar},
 };
 
+pub(crate) mod bit;
 pub(crate) mod bool;
 pub(crate) mod bpchar;
 pub(crate) mod bytea;
@@ -48,7 +49,9 @@ pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
 pub(crate) mod uuid;
+pub(crate) mod varbit;
 pub(crate) mod varchar;
+
 pub(crate) trait ArrowArrayToPgType<'a, A: From<ArrayData>, T: 'a + IntoDatum> {
     fn as_pg(array: A, tupledesc: Option<PgTupleDesc<'a>>) -> Option<T>;
 }
@@ -123,6 +126,18 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
         }
         BPCHAROID => {
             let val = <Bpchar as ArrowArrayToPgType<StringArray, Bpchar>>::as_pg(
+                primitive_array.into(),
+                None,
+            );
+            val.into_datum()
+        }
+        BITOID => {
+            let val =
+                <Bit as ArrowArrayToPgType<StringArray, Bit>>::as_pg(primitive_array.into(), None);
+            val.into_datum()
+        }
+        VARBITOID => {
+            let val = <VarBit as ArrowArrayToPgType<StringArray, VarBit>>::as_pg(
                 primitive_array.into(),
                 None,
             );
@@ -316,6 +331,21 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
             let val = <Vec<Option<Bpchar>> as ArrowArrayToPgType<
                 StringArray,
                 Vec<Option<Bpchar>>,
+            >>::as_pg(list_array.into(), None);
+            val.into_datum()
+        }
+        BITARRAYOID => {
+            let val =
+                <Vec<Option<Bit>> as ArrowArrayToPgType<StringArray, Vec<Option<Bit>>>>::as_pg(
+                    list_array.into(),
+                    None,
+                );
+            val.into_datum()
+        }
+        VARBITARRAYOID => {
+            let val = <Vec<Option<VarBit>> as ArrowArrayToPgType<
+                StringArray,
+                Vec<Option<VarBit>>,
             >>::as_pg(list_array.into(), None);
             val.into_datum()
         }

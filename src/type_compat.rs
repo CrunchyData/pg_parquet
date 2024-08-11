@@ -3,7 +3,7 @@ use std::ffi::CStr;
 use arrow::datatypes::IntervalMonthDayNano;
 use pgrx::{
     direct_function_call,
-    pg_sys::{self, TimeTzADT, BPCHAROID, NAMEOID, TIME_UTC, VARCHAROID},
+    pg_sys::{self, TimeTzADT, BITOID, BPCHAROID, NAMEOID, TIME_UTC, VARBITOID, VARCHAROID},
     AnyNumeric, Date, FromDatum, Interval, IntoDatum, Time, TimeWithTimeZone, Timestamp,
     TimestampWithTimeZone,
 };
@@ -342,6 +342,230 @@ impl FromDatum for Bpchar {
     {
         let val = String::from_polymorphic_datum(datum, is_null, typoid);
         val.and_then(|val| Some(Self(val)))
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct Bit(pub(crate) String);
+
+impl IntoDatum for Bit {
+    fn into_datum(self) -> Option<pg_sys::Datum> {
+        let bits_len = self.0.len();
+        let bytes_len = (bits_len + 7) / 8;
+
+        let mut bit_bytes = Vec::with_capacity(4 + bytes_len);
+
+        bit_bytes.extend_from_slice(&(bits_len as i32).to_le_bytes());
+
+        let mut byte = 0;
+        let mut bit = 0;
+        for c in self.0.chars() {
+            if c == '1' {
+                byte |= 1 << (7 - bit);
+            }
+            bit += 1;
+
+            if bit == 8 {
+                bit_bytes.push(byte);
+                byte = 0;
+                bit = 0;
+            }
+        }
+
+        // handle last byte
+        if bit > 0 {
+            bit_bytes.push(byte);
+        }
+
+        let varlena_len: usize = pg_sys::VARHDRSZ + 4 + bytes_len;
+
+        unsafe {
+            let varlena = pg_sys::palloc(varlena_len) as *mut pg_sys::varlena;
+
+            let varattrib_4b = varlena
+                .cast::<pg_sys::varattrib_4b>()
+                .as_mut()
+                .unwrap_unchecked()
+                .va_4byte
+                .as_mut();
+
+            varattrib_4b.va_header = <usize as TryInto<u32>>::try_into(varlena_len)
+                .expect("Rust string too large for a Postgres varlena datum")
+                << 2u32;
+
+            std::ptr::copy_nonoverlapping(
+                bit_bytes.as_ptr().cast(),
+                varattrib_4b.va_data.as_mut_ptr(),
+                bit_bytes.len(),
+            );
+
+            Some(pgrx::pg_sys::Datum::from(varlena))
+        }
+    }
+
+    fn type_oid() -> pg_sys::Oid {
+        BITOID
+    }
+}
+
+impl FromDatum for Bit {
+    unsafe fn from_polymorphic_datum(
+        datum: pg_sys::Datum,
+        is_null: bool,
+        _typoid: pg_sys::Oid,
+    ) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        if is_null || datum.is_null() {
+            None
+        } else {
+            let varlena = pg_sys::pg_detoast_datum_packed(datum.cast_mut_ptr());
+
+            let varlena_len = pgrx::varsize_any_exhdr(varlena);
+            let varlena_data = pgrx::vardata_any(varlena);
+            let varlena_data = std::slice::from_raw_parts(varlena_data.cast::<u8>(), varlena_len);
+
+            let bits_len = i32::from_le_bytes(varlena_data[0..4].try_into().unwrap()) as usize;
+            let bytes_len = (bits_len + 7) / 8;
+
+            let mut bit_string = String::new();
+
+            for i in 0..bytes_len - 1 {
+                let byte = varlena_data[4 + i];
+                for j in 0..8 {
+                    let bit = (byte >> (7 - j)) & 1;
+                    bit_string.push_str(&bit.to_string());
+                }
+            }
+
+            // handle last byte separately
+            let last_byte = varlena_data[4 + bytes_len - 1];
+            let last_byte_bits = bits_len % 8;
+            let last_byte_bits = if last_byte_bits == 0 {
+                8
+            } else {
+                last_byte_bits
+            };
+            for j in 0..last_byte_bits {
+                let bit = (last_byte >> (7 - j)) & 1;
+                bit_string.push_str(&bit.to_string());
+            }
+
+            Some(Self(bit_string))
+        }
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct VarBit(pub(crate) String);
+
+impl IntoDatum for VarBit {
+    fn into_datum(self) -> Option<pg_sys::Datum> {
+        let bits_len = self.0.len();
+        let bytes_len = (bits_len + 7) / 8;
+
+        let mut varbit_bytes = Vec::with_capacity(4 + bytes_len);
+
+        varbit_bytes.extend_from_slice(&(bits_len as i32).to_le_bytes());
+
+        let mut byte = 0;
+        let mut bit = 0;
+        for c in self.0.chars() {
+            if c == '1' {
+                byte |= 1 << (7 - bit);
+            }
+            bit += 1;
+
+            if bit == 8 {
+                varbit_bytes.push(byte);
+                byte = 0;
+                bit = 0;
+            }
+        }
+
+        // handle last byte
+        if bit > 0 {
+            varbit_bytes.push(byte);
+        }
+
+        let varlena_len: usize = pg_sys::VARHDRSZ + 4 + bytes_len;
+
+        unsafe {
+            let varlena = pg_sys::palloc(varlena_len) as *mut pg_sys::varlena;
+
+            let varattrib_4b = varlena
+                .cast::<pg_sys::varattrib_4b>()
+                .as_mut()
+                .unwrap_unchecked()
+                .va_4byte
+                .as_mut();
+
+            varattrib_4b.va_header = <usize as TryInto<u32>>::try_into(varlena_len)
+                .expect("Rust string too large for a Postgres varlena datum")
+                << 2u32;
+
+            std::ptr::copy_nonoverlapping(
+                varbit_bytes.as_ptr().cast(),
+                varattrib_4b.va_data.as_mut_ptr(),
+                varbit_bytes.len(),
+            );
+
+            Some(pgrx::pg_sys::Datum::from(varlena))
+        }
+    }
+
+    fn type_oid() -> pg_sys::Oid {
+        VARBITOID
+    }
+}
+
+impl FromDatum for VarBit {
+    unsafe fn from_polymorphic_datum(
+        datum: pg_sys::Datum,
+        is_null: bool,
+        _typoid: pg_sys::Oid,
+    ) -> Option<Self>
+    where
+        Self: Sized,
+    {
+        if is_null || datum.is_null() {
+            None
+        } else {
+            let varlena = pg_sys::pg_detoast_datum_packed(datum.cast_mut_ptr());
+
+            let varlena_len = pgrx::varsize_any_exhdr(varlena);
+            let varlena_data = pgrx::vardata_any(varlena);
+            let varlena_data = std::slice::from_raw_parts(varlena_data.cast::<u8>(), varlena_len);
+
+            let bits_len = i32::from_le_bytes(varlena_data[0..4].try_into().unwrap()) as usize;
+            let bytes_len = (bits_len + 7) / 8;
+
+            let mut varbit_string = String::new();
+
+            for i in 0..bytes_len - 1 {
+                let byte = varlena_data[4 + i];
+                for j in 0..8 {
+                    let bit = (byte >> (7 - j)) & 1;
+                    varbit_string.push_str(&bit.to_string());
+                }
+            }
+
+            // handle last byte separately
+            let last_byte = varlena_data[4 + bytes_len - 1];
+            let last_byte_bits = bits_len % 8;
+            let last_byte_bits = if last_byte_bits == 0 {
+                8
+            } else {
+                last_byte_bits
+            };
+            for j in 0..last_byte_bits {
+                let bit = (last_byte >> (7 - j)) & 1;
+                varbit_string.push_str(&bit.to_string());
+            }
+
+            Some(Self(varbit_string))
+        }
     }
 }
 

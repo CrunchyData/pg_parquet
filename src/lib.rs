@@ -22,7 +22,7 @@ mod tests {
 
     use crate::arrow_parquet::codec::ParquetCodecOption;
     use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
-    use crate::type_compat::{i128_to_numeric, Bpchar, Name, Varchar};
+    use crate::type_compat::{i128_to_numeric, Bit, Bpchar, Name, VarBit, Varchar};
     use pgrx::pg_sys::Oid;
     use pgrx::{
         composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB,
@@ -491,6 +491,58 @@ mod tests {
                     Some(Name(format!("test_name_{}", v))),
                     Some(Name(format!("test_name_{}", v + 1))),
                     Some(Name(format!("test_name_{}", v + 2))),
+                ])
+            })
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_bit() {
+        let test_table = TestTable::<Bit>::new("bit".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| Some(Bit(format!("0101").repeat(v))))
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_bit_array() {
+        let test_table = TestTable::<Vec<Option<Bit>>>::new("bit[]".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| {
+                Some(vec![
+                    Some(Bit(format!("0101").repeat(v))),
+                    Some(Bit(format!("0101").repeat(v + 1))),
+                    Some(Bit(format!("0101").repeat(v + 2))),
+                ])
+            })
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_varbit() {
+        let test_table = TestTable::<VarBit>::new("varbit".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| Some(VarBit(format!("0101").repeat(v))))
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_varbit_array() {
+        let test_table = TestTable::<Vec<Option<VarBit>>>::new("varbit[]".into());
+        let values = (1..=10)
+            .into_iter()
+            .map(|v| {
+                Some(vec![
+                    Some(VarBit(format!("0101").repeat(v))),
+                    Some(VarBit(format!("0101").repeat(v + 1))),
+                    Some(VarBit(format!("0101").repeat(v + 2))),
                 ])
             })
             .collect();

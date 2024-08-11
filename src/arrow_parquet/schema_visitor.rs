@@ -4,9 +4,9 @@ use arrow::datatypes::{Field, Fields, Schema};
 use arrow_schema::ExtensionType;
 use parquet::arrow::arrow_to_parquet_schema;
 use pg_sys::{
-    Oid, BOOLOID, BPCHAROID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID,
-    INT8OID, INTERVALOID, JSONBOID, JSONOID, NAMEOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID,
-    TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, UUIDOID, VARCHAROID,
+    Oid, BITOID, BOOLOID, BPCHAROID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID,
+    INT4OID, INT8OID, INTERVALOID, JSONBOID, JSONOID, NAMEOID, NUMERICOID, OIDOID, RECORDOID,
+    TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, UUIDOID, VARBITOID, VARCHAROID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -192,7 +192,7 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
             .with_extension_type(ExtensionType::Json)
             .into(),
         CHAROID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into(),
-        TEXTOID | VARCHAROID | BPCHAROID | NAMEOID => {
+        TEXTOID | VARCHAROID | BPCHAROID | NAMEOID | BITOID | VARBITOID => {
             Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
         }
         BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into(),
