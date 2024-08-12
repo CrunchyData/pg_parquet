@@ -1,6 +1,30 @@
 # pg_parquet
 `pg_parquet` is a PostgreSQL extension that allows you to read and write Parquet files, which are located in `S3` or `file system`, from PostgreSQL via `COPY TO/FROM` commands. It heavily uses [Apache Arrow](https://arrow.apache.org/rust/arrow/) project to read and write Parquet files and [pgrx](https://github.com/pgcentralfoundation/pgrx) project to extend PostgreSQL's `COPY` command.
 
+## Quick Reference
+- [Installation From Source](#installation-from-source)
+- [Usage](#usage)
+- [Object Store Support](#object-store-support)
+- [Copy Options](#copy-options)
+- [Supported Types](#supported-types)
+
+## Installation From Source
+After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build the extension.
+
+```bash
+# install rustup
+> curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# install cargo-pgrx
+> cargo install cargo-pgrx
+
+# configure pgrx
+> cargo pgrx init --pg16 $(which pg_config)
+
+# run cargo-pgrx to build and install the extension
+> cargo pgrx run
+```
+
 ## Usage
 You can use PostgreSQL's `COPY` command to read and write Parquet files. Below is an example of how to write a PostgreSQL table, with complex types, into a Parquet file and then to read the Parquet file content back into the same table.
 
@@ -43,13 +67,12 @@ SELECT * FROM product_example;
 ## Object Store Support
 `pg_parquet` supports reading and writing Parquet files from/to `S3` object store. You can replace `file://`, as shown in above example, with `s3://` scheme to specify the location of the Parquet file in the `S3` object store.
 
-### Configuration
 You can set the following `AWS S3` environment variables properly to access to the object store:
 - `AWS_ACCESS_KEY_ID`: the access key ID of the AWS account,
 - `AWS_SECRET_ACCESS_KEY`: the secret access key of the AWS account,
 - `AWS_REGION`: the default region of the AWS account.
 
-## Supported Copy Options
+## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<codec>]` extension. (This is the only option that `COPY FROM` command supports.),
 - `row_group_size <size>`: the number of rows in each row group while writing Parquet files. The default row group size is `100000`,
