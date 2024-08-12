@@ -1,17 +1,15 @@
-use core::panic;
 use std::ffi::CStr;
 
 use arrow::datatypes::IntervalMonthDayNano;
 use pgrx::{
     direct_function_call,
     pg_sys::{
-        self, InvalidOid, TimeTzADT, BITOID, BPCHAROID, NAMEOID, TIME_UTC, VARBITOID, VARCHAROID,
+        self, fmgr_info, getTypeInputInfo, getTypeOutputInfo, AsPgCStr, FmgrInfo,
+        InputFunctionCall, InvalidOid, Oid, OutputFunctionCall, TimeTzADT, TIME_UTC,
     },
-    AnyNumeric, Date, FromDatum, Interval, IntoDatum, Time, TimeWithTimeZone, Timestamp,
+    AnyNumeric, Date, FromDatum, Interval, IntoDatum, PgBox, Time, TimeWithTimeZone, Timestamp,
     TimestampWithTimeZone,
 };
-
-use crate::pgrx_utils::lookup_type_name;
 
 pub(crate) const DECIMAL_PRECISION: u8 = 38;
 pub(crate) const DECIMAL_SCALE: i8 = 8;
@@ -296,404 +294,105 @@ pub(crate) fn i128_to_numeric(i128_decimal: i128) -> Option<AnyNumeric> {
     Some(numeric)
 }
 
-#[derive(Debug, PartialEq)]
-pub(crate) struct Varchar(pub(crate) String);
-
-impl IntoDatum for Varchar {
-    fn into_datum(self) -> Option<pg_sys::Datum> {
-        self.0.into_datum()
-    }
-
-    fn type_oid() -> pg_sys::Oid {
-        VARCHAROID
+// we need to set this just before converting FallbackToText to Datum
+// and vice versa since IntoDatum's type_oid() is a static method and
+// we cannot pass it the typoid of the current FallbackToText instance.
+static mut CURRENT_FALLBACK_TYPOID: pg_sys::Oid = pg_sys::InvalidOid;
+pub(crate) fn set_fallback_typoid(typoid: pg_sys::Oid) {
+    unsafe {
+        CURRENT_FALLBACK_TYPOID = typoid;
     }
 }
 
-impl FromDatum for Varchar {
+fn get_input_function_for_typoid(typoid: Oid) -> (PgBox<FmgrInfo>, Oid) {
+    let mut input_func_oid = InvalidOid;
+    let mut typio_param = InvalidOid;
+
+    unsafe { getTypeInputInfo(typoid, &mut input_func_oid, &mut typio_param) };
+
+    let input_func = unsafe { PgBox::<FmgrInfo>::alloc0().into_pg_boxed() };
+    unsafe { fmgr_info(input_func_oid, input_func.as_ptr()) };
+
+    (input_func, typio_param)
+}
+
+fn get_output_function_for_typoid(typoid: Oid) -> PgBox<FmgrInfo> {
+    let mut out_func_oid = InvalidOid;
+    let mut is_varlena = false;
+
+    unsafe { getTypeOutputInfo(typoid, &mut out_func_oid, &mut is_varlena) };
+
+    let out_func = unsafe { PgBox::<FmgrInfo>::alloc0().into_pg_boxed() };
+    unsafe { fmgr_info(out_func_oid, out_func.as_ptr()) };
+
+    out_func
+}
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct FallbackToText {
+    text_repr: String,
+    _typoid: Oid,
+    typmod: i32,
+}
+
+impl From<FallbackToText> for String {
+    fn from(fallback: FallbackToText) -> String {
+        fallback.text_repr
+    }
+}
+
+impl FallbackToText {
+    pub(crate) fn new(text_repr: String, _typoid: Oid, typmod: i32) -> Self {
+        Self {
+            text_repr,
+            _typoid,
+            typmod,
+        }
+    }
+}
+
+impl IntoDatum for FallbackToText {
+    fn into_datum(self) -> Option<pg_sys::Datum> {
+        let (input_func, typio_param) = get_input_function_for_typoid(Self::type_oid());
+
+        let datum = unsafe {
+            InputFunctionCall(
+                input_func.as_ptr(),
+                self.text_repr.as_pg_cstr(),
+                typio_param,
+                self.typmod,
+            )
+        };
+
+        Some(datum)
+    }
+
+    fn type_oid() -> pg_sys::Oid {
+        unsafe { CURRENT_FALLBACK_TYPOID }
+    }
+}
+
+impl FromDatum for FallbackToText {
     unsafe fn from_polymorphic_datum(
         datum: pg_sys::Datum,
         is_null: bool,
         typoid: pg_sys::Oid,
-    ) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let val = String::from_polymorphic_datum(datum, is_null, typoid);
-        val.and_then(|val| Some(Self(val)))
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct Bpchar(pub(crate) String);
-
-impl IntoDatum for Bpchar {
-    fn into_datum(self) -> Option<pg_sys::Datum> {
-        self.0.into_datum()
-    }
-
-    fn type_oid() -> pg_sys::Oid {
-        BPCHAROID
-    }
-}
-
-impl FromDatum for Bpchar {
-    unsafe fn from_polymorphic_datum(
-        datum: pg_sys::Datum,
-        is_null: bool,
-        typoid: pg_sys::Oid,
-    ) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let val = String::from_polymorphic_datum(datum, is_null, typoid);
-        val.and_then(|val| Some(Self(val)))
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct Bit(String);
-
-impl From<Bit> for String {
-    fn from(bit: Bit) -> Self {
-        bit.0
-    }
-}
-
-impl Bit {
-    pub(crate) fn new(bits: String) -> Self {
-        for c in bits.chars() {
-            if c != '0' && c != '1' {
-                panic!("\"{}\" is not a valid binary digit", c);
-            }
-        }
-        Self(bits)
-    }
-}
-
-impl IntoDatum for Bit {
-    fn into_datum(self) -> Option<pg_sys::Datum> {
-        let bits_len = self.0.len();
-        let bytes_len = (bits_len + 7) / 8;
-
-        let mut bit_bytes = Vec::with_capacity(4 + bytes_len);
-
-        bit_bytes.extend_from_slice(&(bits_len as i32).to_le_bytes());
-
-        let mut byte = 0;
-        let mut bit = 0;
-        for c in self.0.chars() {
-            if c == '1' {
-                byte |= 1 << (7 - bit);
-            }
-            bit += 1;
-
-            if bit == 8 {
-                bit_bytes.push(byte);
-                byte = 0;
-                bit = 0;
-            }
-        }
-
-        // handle last byte
-        if bit > 0 {
-            bit_bytes.push(byte);
-        }
-
-        let varlena_len: usize = pg_sys::VARHDRSZ + 4 + bytes_len;
-
-        unsafe {
-            let varlena = pg_sys::palloc(varlena_len) as *mut pg_sys::varlena;
-
-            let varattrib_4b = varlena
-                .cast::<pg_sys::varattrib_4b>()
-                .as_mut()
-                .unwrap_unchecked()
-                .va_4byte
-                .as_mut();
-
-            varattrib_4b.va_header = <usize as TryInto<u32>>::try_into(varlena_len)
-                .expect("Rust string too large for a Postgres varlena datum")
-                << 2u32;
-
-            std::ptr::copy_nonoverlapping(
-                bit_bytes.as_ptr().cast(),
-                varattrib_4b.va_data.as_mut_ptr(),
-                bit_bytes.len(),
-            );
-
-            Some(pgrx::pg_sys::Datum::from(varlena))
-        }
-    }
-
-    fn type_oid() -> pg_sys::Oid {
-        BITOID
-    }
-}
-
-impl FromDatum for Bit {
-    unsafe fn from_polymorphic_datum(
-        datum: pg_sys::Datum,
-        is_null: bool,
-        _typoid: pg_sys::Oid,
-    ) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        if is_null || datum.is_null() {
-            None
-        } else {
-            let varlena = pg_sys::pg_detoast_datum_packed(datum.cast_mut_ptr());
-
-            let varlena_len = pgrx::varsize_any_exhdr(varlena);
-            let varlena_data = pgrx::vardata_any(varlena);
-            let varlena_data = std::slice::from_raw_parts(varlena_data.cast::<u8>(), varlena_len);
-
-            let bits_len = i32::from_le_bytes(varlena_data[0..4].try_into().unwrap()) as usize;
-            let bytes_len = (bits_len + 7) / 8;
-
-            let mut bit_string = String::new();
-
-            for i in 0..bytes_len - 1 {
-                let byte = varlena_data[4 + i];
-                for j in 0..8 {
-                    let bit = (byte >> (7 - j)) & 1;
-                    bit_string.push_str(&bit.to_string());
-                }
-            }
-
-            // handle last byte separately
-            let last_byte = varlena_data[4 + bytes_len - 1];
-            let last_byte_bits = bits_len % 8;
-            let last_byte_bits = if last_byte_bits == 0 {
-                8
-            } else {
-                last_byte_bits
-            };
-            for j in 0..last_byte_bits {
-                let bit = (last_byte >> (7 - j)) & 1;
-                bit_string.push_str(&bit.to_string());
-            }
-
-            Some(Self(bit_string))
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct VarBit(String);
-
-impl From<VarBit> for String {
-    fn from(varbit: VarBit) -> Self {
-        varbit.0
-    }
-}
-
-impl VarBit {
-    pub(crate) fn new(bits: String) -> Self {
-        for c in bits.chars() {
-            if c != '0' && c != '1' {
-                panic!("\"{}\" is not a valid binary digit", c);
-            }
-        }
-        Self(bits)
-    }
-}
-
-impl IntoDatum for VarBit {
-    fn into_datum(self) -> Option<pg_sys::Datum> {
-        let bits_len = self.0.len();
-        let bytes_len = (bits_len + 7) / 8;
-
-        let mut varbit_bytes = Vec::with_capacity(4 + bytes_len);
-
-        varbit_bytes.extend_from_slice(&(bits_len as i32).to_le_bytes());
-
-        let mut byte = 0;
-        let mut bit = 0;
-        for c in self.0.chars() {
-            if c == '1' {
-                byte |= 1 << (7 - bit);
-            }
-            bit += 1;
-
-            if bit == 8 {
-                varbit_bytes.push(byte);
-                byte = 0;
-                bit = 0;
-            }
-        }
-
-        // handle last byte
-        if bit > 0 {
-            varbit_bytes.push(byte);
-        }
-
-        let varlena_len: usize = pg_sys::VARHDRSZ + 4 + bytes_len;
-
-        unsafe {
-            let varlena = pg_sys::palloc(varlena_len) as *mut pg_sys::varlena;
-
-            let varattrib_4b = varlena
-                .cast::<pg_sys::varattrib_4b>()
-                .as_mut()
-                .unwrap_unchecked()
-                .va_4byte
-                .as_mut();
-
-            varattrib_4b.va_header = <usize as TryInto<u32>>::try_into(varlena_len)
-                .expect("Rust string too large for a Postgres varlena datum")
-                << 2u32;
-
-            std::ptr::copy_nonoverlapping(
-                varbit_bytes.as_ptr().cast(),
-                varattrib_4b.va_data.as_mut_ptr(),
-                varbit_bytes.len(),
-            );
-
-            Some(pgrx::pg_sys::Datum::from(varlena))
-        }
-    }
-
-    fn type_oid() -> pg_sys::Oid {
-        VARBITOID
-    }
-}
-
-impl FromDatum for VarBit {
-    unsafe fn from_polymorphic_datum(
-        datum: pg_sys::Datum,
-        is_null: bool,
-        _typoid: pg_sys::Oid,
-    ) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        if is_null || datum.is_null() {
-            None
-        } else {
-            let varlena = pg_sys::pg_detoast_datum_packed(datum.cast_mut_ptr());
-
-            let varlena_len = pgrx::varsize_any_exhdr(varlena);
-            let varlena_data = pgrx::vardata_any(varlena);
-            let varlena_data = std::slice::from_raw_parts(varlena_data.cast::<u8>(), varlena_len);
-
-            let bits_len = i32::from_le_bytes(varlena_data[0..4].try_into().unwrap()) as usize;
-            let bytes_len = (bits_len + 7) / 8;
-
-            let mut varbit_string = String::new();
-
-            for i in 0..bytes_len - 1 {
-                let byte = varlena_data[4 + i];
-                for j in 0..8 {
-                    let bit = (byte >> (7 - j)) & 1;
-                    varbit_string.push_str(&bit.to_string());
-                }
-            }
-
-            // handle last byte separately
-            let last_byte = varlena_data[4 + bytes_len - 1];
-            let last_byte_bits = bits_len % 8;
-            let last_byte_bits = if last_byte_bits == 0 {
-                8
-            } else {
-                last_byte_bits
-            };
-            for j in 0..last_byte_bits {
-                let bit = (last_byte >> (7 - j)) & 1;
-                varbit_string.push_str(&bit.to_string());
-            }
-
-            Some(Self(varbit_string))
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct Name(pub(crate) String);
-
-impl IntoDatum for Name {
-    fn into_datum(self) -> Option<pg_sys::Datum> {
-        let val = std::ffi::CString::new(self.0).unwrap();
-        let val = val.as_c_str();
-        val.into_datum()
-    }
-
-    fn type_oid() -> pg_sys::Oid {
-        NAMEOID
-    }
-}
-
-impl FromDatum for Name {
-    unsafe fn from_polymorphic_datum(
-        datum: pg_sys::Datum,
-        is_null: bool,
-        typoid: pg_sys::Oid,
-    ) -> Option<Self>
-    where
-        Self: Sized,
-    {
-        let val: Option<&core::ffi::CStr> =
-            FromDatum::from_polymorphic_datum(datum, is_null, typoid);
-
-        val.and_then(|val| {
-            let val = val.to_str().unwrap();
-            Some(Self(val.to_string()))
-        })
-    }
-}
-
-#[derive(Debug, PartialEq)]
-pub(crate) struct Enum(String);
-
-// we need to store the enum type oid in a static variable since
-// pgrx IntoDatum's associated function type_oid() is a static function
-static mut ENUM_TYPE_OID: pg_sys::Oid = InvalidOid;
-
-impl Enum {
-    pub(crate) fn new(label: String, enum_oid: pg_sys::Oid) -> Self {
-        unsafe { ENUM_TYPE_OID = enum_oid };
-        Self(label)
-    }
-
-    // required to be called before "let enum = tuple.get_by_name"
-    // in order to properly deparse the enum datum
-    pub(crate) fn set_type_oid(enum_oid: pg_sys::Oid) {
-        unsafe { ENUM_TYPE_OID = enum_oid };
-    }
-
-    pub(crate) fn label(&self) -> &str {
-        &self.0
-    }
-}
-
-impl IntoDatum for Enum {
-    fn into_datum(self) -> Option<pg_sys::Datum> {
-        let label = self.0;
-        let enum_name = lookup_type_name(unsafe { ENUM_TYPE_OID }, -1);
-        let enum_datum = ::pgrx::enum_helper::lookup_enum_by_label(&enum_name, &label);
-        Some(enum_datum)
-    }
-
-    fn type_oid() -> pg_sys::Oid {
-        unsafe { ENUM_TYPE_OID }
-    }
-}
-
-impl FromDatum for Enum {
-    unsafe fn from_polymorphic_datum(
-        datum: pg_sys::Datum,
-        is_null: bool,
-        _typoid: pg_sys::Oid,
     ) -> Option<Self>
     where
         Self: Sized,
     {
         if is_null {
-            None
+            return None;
         } else {
-            let label_oid = ::pgrx::pg_sys::Oid::from_datum(datum, is_null).unwrap();
-            let (label, _, _) = ::pgrx::enum_helper::lookup_enum_by_oid(label_oid);
-            Some(Self(label))
+            let output_func = get_output_function_for_typoid(typoid);
+
+            let att_cstr = OutputFunctionCall(output_func.as_ptr(), datum);
+            let att_val = std::ffi::CStr::from_ptr(att_cstr)
+                .to_str()
+                .unwrap()
+                .to_owned();
+
+            Some(Self::new(att_val, typoid, -1))
         }
     }
 }

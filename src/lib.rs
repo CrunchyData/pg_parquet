@@ -22,8 +22,8 @@ mod tests {
 
     use crate::arrow_parquet::codec::ParquetCodecOption;
     use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
-    use crate::type_compat::{i128_to_numeric, Bit, Bpchar, Enum, Name, VarBit, Varchar};
-    use pgrx::pg_sys::Oid;
+    use crate::type_compat::{i128_to_numeric, set_fallback_typoid, FallbackToText};
+    use pgrx::pg_sys::{Oid, BITOID, BPCHAROID, NAMEOID, VARBITOID, VARCHAROID};
     use pgrx::{
         composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB,
         Spi, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
@@ -421,24 +421,46 @@ mod tests {
 
     #[pg_test]
     fn test_varchar() {
-        let test_table = TestTable::<Varchar>::new("varchar".into());
+        set_fallback_typoid(VARCHAROID);
+
+        let test_table = TestTable::<FallbackToText>::new("varchar".into());
         let values = (1..=10)
             .into_iter()
-            .map(|v| Some(Varchar(format!("test_varchar_{}", v))))
+            .map(|v| {
+                Some(FallbackToText::new(
+                    format!("test_varchar_{}", v),
+                    VARCHAROID,
+                    -1,
+                ))
+            })
             .collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_varchar_array() {
-        let test_table = TestTable::<Vec<Option<Varchar>>>::new("varchar[]".into());
+        set_fallback_typoid(VARCHAROID);
+
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("varchar[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
                 Some(vec![
-                    Some(Varchar(format!("test_varchar_{}", v))),
-                    Some(Varchar(format!("test_varchar_{}", v + 1))),
-                    Some(Varchar(format!("test_varchar_{}", v + 2))),
+                    Some(FallbackToText::new(
+                        format!("test_varchar_{}", v),
+                        VARCHAROID,
+                        -1,
+                    )),
+                    Some(FallbackToText::new(
+                        format!("test_varchar_{}", v + 1),
+                        VARCHAROID,
+                        -1,
+                    )),
+                    Some(FallbackToText::new(
+                        format!("test_varchar_{}", v + 2),
+                        VARCHAROID,
+                        -1,
+                    )),
                 ])
             })
             .collect();
@@ -447,24 +469,46 @@ mod tests {
 
     #[pg_test]
     fn test_bpchar() {
-        let test_table = TestTable::<Bpchar>::new("bpchar".into());
+        set_fallback_typoid(BPCHAROID);
+
+        let test_table = TestTable::<FallbackToText>::new("bpchar".into());
         let values = (1..=10)
             .into_iter()
-            .map(|v| Some(Bpchar(format!("test_bpchar_{}", v))))
+            .map(|v| {
+                Some(FallbackToText::new(
+                    format!("test_bpchar_{}", v),
+                    BPCHAROID,
+                    -1,
+                ))
+            })
             .collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_bpchar_array() {
-        let test_table = TestTable::<Vec<Option<Bpchar>>>::new("bpchar[]".into());
+        set_fallback_typoid(BPCHAROID);
+
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("bpchar[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
                 Some(vec![
-                    Some(Bpchar(format!("test_bpchar_{}", v))),
-                    Some(Bpchar(format!("test_bpchar_{}", v + 1))),
-                    Some(Bpchar(format!("test_bpchar_{}", v + 2))),
+                    Some(FallbackToText::new(
+                        format!("test_bpchar_{}", v),
+                        BPCHAROID,
+                        -1,
+                    )),
+                    Some(FallbackToText::new(
+                        format!("test_bpchar_{}", v + 1),
+                        BPCHAROID,
+                        -1,
+                    )),
+                    Some(FallbackToText::new(
+                        format!("test_bpchar_{}", v + 2),
+                        BPCHAROID,
+                        -1,
+                    )),
                 ])
             })
             .collect();
@@ -473,24 +517,36 @@ mod tests {
 
     #[pg_test]
     fn test_name() {
-        let test_table = TestTable::<Name>::new("name".into());
+        set_fallback_typoid(NAMEOID);
+
+        let test_table = TestTable::<FallbackToText>::new("name".into());
         let values = (1..=10)
             .into_iter()
-            .map(|v| Some(Name(format!("test_name_{}", v))))
+            .map(|v| Some(FallbackToText::new(format!("test_name_{}", v), NAMEOID, -1)))
             .collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_name_array() {
-        let test_table = TestTable::<Vec<Option<Name>>>::new("name[]".into());
+        set_fallback_typoid(NAMEOID);
+
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("name[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
                 Some(vec![
-                    Some(Name(format!("test_name_{}", v))),
-                    Some(Name(format!("test_name_{}", v + 1))),
-                    Some(Name(format!("test_name_{}", v + 2))),
+                    Some(FallbackToText::new(format!("test_name_{}", v), NAMEOID, -1)),
+                    Some(FallbackToText::new(
+                        format!("test_name_{}", v + 1),
+                        NAMEOID,
+                        -1,
+                    )),
+                    Some(FallbackToText::new(
+                        format!("test_name_{}", v + 2),
+                        NAMEOID,
+                        -1,
+                    )),
                 ])
             })
             .collect();
@@ -502,15 +558,16 @@ mod tests {
         let create_enum_query = "CREATE TYPE color AS ENUM ('red', 'green', 'blue');";
         Spi::run(create_enum_query).unwrap();
 
-        let enum_oid = Spi::get_one::<Oid>("SELECT 'color'::regtype::oid;")
+        let enum_oid = Spi::get_one::<Oid>("select oid from pg_type where typname = 'color';")
             .unwrap()
             .unwrap();
+        set_fallback_typoid(enum_oid);
 
-        let test_table = TestTable::<Enum>::new("color".into());
+        let test_table = TestTable::<FallbackToText>::new("color".into());
         let values = vec![
-            Some(Enum::new("red".into(), enum_oid)),
-            Some(Enum::new("green".into(), enum_oid)),
-            Some(Enum::new("blue".into(), enum_oid)),
+            Some(FallbackToText::new("red".into(), enum_oid, -1)),
+            Some(FallbackToText::new("green".into(), enum_oid, -1)),
+            Some(FallbackToText::new("blue".into(), enum_oid, -1)),
         ];
         test_helper(test_table, values);
 
@@ -523,26 +580,27 @@ mod tests {
         let create_enum_query = "CREATE TYPE color AS ENUM ('red', 'green', 'blue');";
         Spi::run(create_enum_query).unwrap();
 
-        let enum_oid = Spi::get_one::<Oid>("SELECT 'color'::regtype::oid;")
+        let enum_oid = Spi::get_one::<Oid>("select oid from pg_type where typname = 'color';")
             .unwrap()
             .unwrap();
+        set_fallback_typoid(enum_oid);
 
-        let test_table = TestTable::<Vec<Option<Enum>>>::new("color[]".into());
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("color[]".into());
         let values = vec![
             Some(vec![
-                Some(Enum::new("red".into(), enum_oid)),
-                Some(Enum::new("green".into(), enum_oid)),
-                Some(Enum::new("blue".into(), enum_oid)),
+                Some(FallbackToText::new("red".into(), enum_oid, -1)),
+                Some(FallbackToText::new("green".into(), enum_oid, -1)),
+                Some(FallbackToText::new("blue".into(), enum_oid, -1)),
             ]),
             Some(vec![
-                Some(Enum::new("red".into(), enum_oid)),
-                Some(Enum::new("green".into(), enum_oid)),
-                Some(Enum::new("blue".into(), enum_oid)),
+                Some(FallbackToText::new("red".into(), enum_oid, -1)),
+                Some(FallbackToText::new("green".into(), enum_oid, -1)),
+                Some(FallbackToText::new("blue".into(), enum_oid, -1)),
             ]),
             Some(vec![
-                Some(Enum::new("red".into(), enum_oid)),
-                Some(Enum::new("green".into(), enum_oid)),
-                Some(Enum::new("blue".into(), enum_oid)),
+                Some(FallbackToText::new("red".into(), enum_oid, -1)),
+                Some(FallbackToText::new("green".into(), enum_oid, -1)),
+                Some(FallbackToText::new("blue".into(), enum_oid, -1)),
             ]),
         ];
         test_helper(test_table, values);
@@ -552,17 +610,18 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "could not find heap tuple for enum: color.red")]
-    fn test_invalid_enum() {
+    #[should_panic(expected = "invalid input value for enum color: \"red\"")]
+    fn test_enum_invalid_value() {
         let create_enum_query = "CREATE TYPE color AS ENUM ('green', 'blue');";
         Spi::run(create_enum_query).unwrap();
 
-        let enum_oid = Spi::get_one::<Oid>("SELECT 'color'::regtype::oid;")
+        let enum_oid = Spi::get_one::<Oid>("select oid from pg_type where typname = 'color';")
             .unwrap()
             .unwrap();
+        set_fallback_typoid(enum_oid);
 
-        let test_table = TestTable::<Enum>::new("color".into());
-        let values = vec![Some(Enum::new("red".into(), enum_oid))];
+        let test_table = TestTable::<FallbackToText>::new("color".into());
+        let values = vec![Some(FallbackToText::new("red".into(), enum_oid, -1))];
         test_helper(test_table, values);
 
         let drop_enum_query = "DROP TYPE color CASCADE;";
@@ -571,21 +630,31 @@ mod tests {
 
     #[pg_test]
     fn test_bit() {
-        let test_table = TestTable::<Bit>::new("bit".into());
-        let values = vec![Bit::new("0".into()), Bit::new("1".into())]
-            .into_iter()
-            .map(|v| Some(v))
-            .collect();
+        set_fallback_typoid(BITOID);
+
+        let test_table = TestTable::<FallbackToText>::new("bit".into());
+        let values = vec![
+            FallbackToText::new("0".into(), BITOID, -1),
+            FallbackToText::new("1".into(), BITOID, -1),
+        ]
+        .into_iter()
+        .map(|v| Some(v))
+        .collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_bit_array() {
-        let test_table = TestTable::<Vec<Option<Bit>>>::new("bit[]".into());
+        set_fallback_typoid(BITOID);
+
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("bit[]".into());
         let values = vec![
-            vec![Some(Bit::new("0".into())), Some(Bit::new("1".into()))],
-            vec![Some(Bit::new("1".into()))],
-            vec![Some(Bit::new("0".into()))],
+            vec![
+                Some(FallbackToText::new("0".into(), BITOID, -1)),
+                Some(FallbackToText::new("1".into(), BITOID, -1)),
+            ],
+            vec![Some(FallbackToText::new("1".into(), BITOID, -1))],
+            vec![Some(FallbackToText::new("0".into(), BITOID, -1))],
         ]
         .into_iter()
         .map(|v| Some(v))
@@ -595,9 +664,11 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "\"a\" is not a valid binary digit")]
-    fn test_invalid_bit_value() {
-        let test_table = TestTable::<Bit>::new("bit".into());
-        let values = vec![Bit::new("a".into())]
+    fn test_bit_invalid_value() {
+        set_fallback_typoid(BITOID);
+
+        let test_table = TestTable::<FallbackToText>::new("bit".into());
+        let values = vec![FallbackToText::new("a".into(), BITOID, -1)]
             .into_iter()
             .map(|v| Some(v))
             .collect();
@@ -606,9 +677,11 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "bit string length 2 does not match type bit(1)")]
-    fn test_invalid_bit_length() {
-        let test_table = TestTable::<Bit>::new("bit".into());
-        let values = vec![Bit::new("01".into())]
+    fn test_bit_invalid_length() {
+        set_fallback_typoid(BITOID);
+
+        let test_table = TestTable::<FallbackToText>::new("bit".into());
+        let values = vec![FallbackToText::new("01".into(), BITOID, -1)]
             .into_iter()
             .map(|v| Some(v))
             .collect();
@@ -617,24 +690,46 @@ mod tests {
 
     #[pg_test]
     fn test_varbit() {
-        let test_table = TestTable::<VarBit>::new("varbit".into());
+        set_fallback_typoid(VARBITOID);
+
+        let test_table = TestTable::<FallbackToText>::new("varbit".into());
         let values = (1..=10)
             .into_iter()
-            .map(|v| Some(VarBit::new(format!("0101").repeat(v))))
+            .map(|v| {
+                Some(FallbackToText::new(
+                    format!("0101").repeat(v),
+                    VARBITOID,
+                    -1,
+                ))
+            })
             .collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_varbit_array() {
-        let test_table = TestTable::<Vec<Option<VarBit>>>::new("varbit[]".into());
+        set_fallback_typoid(VARBITOID);
+
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("varbit[]".into());
         let values = (1..=10)
             .into_iter()
             .map(|v| {
                 Some(vec![
-                    Some(VarBit::new(format!("0101").repeat(v))),
-                    Some(VarBit::new(format!("0101").repeat(v + 1))),
-                    Some(VarBit::new(format!("0101").repeat(v + 2))),
+                    Some(FallbackToText::new(
+                        format!("0101").repeat(v),
+                        VARBITOID,
+                        -1,
+                    )),
+                    Some(FallbackToText::new(
+                        format!("0101").repeat(v + 1),
+                        VARBITOID,
+                        -1,
+                    )),
+                    Some(FallbackToText::new(
+                        format!("0101").repeat(v + 2),
+                        VARBITOID,
+                        -1,
+                    )),
                 ])
             })
             .collect();

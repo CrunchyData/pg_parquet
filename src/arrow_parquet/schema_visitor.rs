@@ -4,18 +4,18 @@ use arrow::datatypes::{Field, Fields, Schema};
 use arrow_schema::ExtensionType;
 use parquet::arrow::arrow_to_parquet_schema;
 use pg_sys::{
-    Oid, BITOID, BOOLOID, BPCHAROID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID,
-    INT4OID, INT8OID, INTERVALOID, JSONBOID, JSONOID, NAMEOID, NUMERICOID, OIDOID, RECORDOID,
-    TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, UUIDOID, VARBITOID, VARCHAROID,
+    Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
+    INTERVALOID, JSONBOID, JSONOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID,
+    TIMESTAMPTZOID, TIMETZOID, UUIDOID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
 use crate::{
     pgrx_utils::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
-        is_enum_typoid, tuple_desc,
+        tuple_desc,
     },
-    type_compat::{DECIMAL_PRECISION, DECIMAL_SCALE},
+    type_compat::{set_fallback_typoid, DECIMAL_PRECISION, DECIMAL_SCALE},
 };
 
 pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> String {
@@ -192,17 +192,12 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
             .with_extension_type(ExtensionType::Json)
             .into(),
         CHAROID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into(),
-        TEXTOID | VARCHAROID | BPCHAROID | NAMEOID | BITOID | VARBITOID => {
-            Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
-        }
+        TEXTOID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into(),
         BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into(),
         OIDOID => Field::new(elem_name, arrow::datatypes::DataType::UInt32, true).into(),
         _ => {
-            if is_enum_typoid(typoid) {
-                Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
-            } else {
-                panic!("unsupported primitive type {}", typoid)
-            }
+            set_fallback_typoid(typoid);
+            Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
         }
     }
 }

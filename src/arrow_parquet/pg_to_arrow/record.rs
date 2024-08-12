@@ -8,15 +8,13 @@ use arrow::{
 use pgrx::{
     heap_tuple::PgHeapTuple,
     pg_sys::{
-        self, deconstruct_array, heap_getattr, Datum, InvalidOid, Oid, BITARRAYOID, BITOID,
-        BOOLARRAYOID, BOOLOID, BPCHARARRAYOID, BPCHAROID, BYTEAARRAYOID, BYTEAOID, CHARARRAYOID,
-        CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID,
-        INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID,
-        INTERVALOID, JSONARRAYOID, JSONBARRAYOID, JSONBOID, JSONOID, NAMEARRAYOID, NAMEOID,
-        NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID,
-        TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID, TIMESTAMPTZOID,
-        TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID, VARBITARRAYOID, VARBITOID,
-        VARCHARARRAYOID, VARCHAROID,
+        self, deconstruct_array, heap_getattr, Datum, InvalidOid, Oid, BOOLARRAYOID, BOOLOID,
+        BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID,
+        FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID,
+        INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID, JSONARRAYOID, JSONBARRAYOID,
+        JSONBOID, JSONOID, NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID, TEXTARRAYOID, TEXTOID,
+        TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID,
+        TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID,
     },
     AllocatedByRust, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB, PgBox,
     PgTupleDesc, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
@@ -29,9 +27,9 @@ use crate::{
     },
     pgrx_utils::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
-        is_enum_typoid, tuple_desc,
+        tuple_desc,
     },
-    type_compat::{Bit, Bpchar, Enum, Name, VarBit, Varchar},
+    type_compat::{set_fallback_typoid, FallbackToText},
 };
 
 // PgHeapTuple
@@ -341,66 +339,6 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_element_typoid,
             attribute_typmod,
         ),
-        VARCHAROID => collect_attribute_array_from_tuples_helper::<Varchar>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        VARCHARARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Varchar>>>(
-            tuples,
-            attribute_name,
-            attribute_element_typoid,
-            attribute_typmod,
-        ),
-        NAMEOID => collect_attribute_array_from_tuples_helper::<Name>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        NAMEARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Name>>>(
-            tuples,
-            attribute_name,
-            attribute_element_typoid,
-            attribute_typmod,
-        ),
-        BPCHAROID => collect_attribute_array_from_tuples_helper::<Bpchar>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        BPCHARARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Bpchar>>>(
-            tuples,
-            attribute_name,
-            attribute_element_typoid,
-            attribute_typmod,
-        ),
-        BITOID => collect_attribute_array_from_tuples_helper::<Bit>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        BITARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<Bit>>>(
-            tuples,
-            attribute_name,
-            attribute_element_typoid,
-            attribute_typmod,
-        ),
-        VARBITOID => collect_attribute_array_from_tuples_helper::<VarBit>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        VARBITARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<VarBit>>>(
-            tuples,
-            attribute_name,
-            attribute_element_typoid,
-            attribute_typmod,
-        ),
         BYTEAOID => collect_attribute_array_from_tuples_helper::<&[u8]>(
             tuples,
             attribute_name,
@@ -426,40 +364,42 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_typmod,
         ),
         _ => {
-            if is_composite_type(attribute_typoid) {
-                collect_tuple_attribute_array_from_tuples_helper(
-                    tuples,
-                    tupledesc,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
-                )
-            } else if is_composite_type(attribute_element_typoid) {
-                collect_array_of_tuple_attribute_array_from_tuples_helper(
-                    tuples,
-                    tupledesc,
-                    attribute_name,
-                    attribute_element_typoid,
-                    attribute_typmod,
-                )
-            } else if is_enum_typoid(attribute_typoid) {
-                Enum::set_type_oid(attribute_typoid);
-                collect_attribute_array_from_tuples_helper::<Enum>(
-                    tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
-                )
-            } else if is_enum_typoid(attribute_element_typoid) {
-                Enum::set_type_oid(attribute_element_typoid);
-                collect_attribute_array_from_tuples_helper::<Vec<Option<Enum>>>(
-                    tuples,
-                    attribute_name,
-                    attribute_element_typoid,
-                    attribute_typmod,
-                )
+            if attribute_element_typoid != InvalidOid {
+                if is_composite_type(attribute_element_typoid) {
+                    collect_array_of_tuple_attribute_array_from_tuples_helper(
+                        tuples,
+                        tupledesc,
+                        attribute_name,
+                        attribute_element_typoid,
+                        attribute_typmod,
+                    )
+                } else {
+                    set_fallback_typoid(attribute_element_typoid);
+                    collect_attribute_array_from_tuples_helper::<Vec<Option<FallbackToText>>>(
+                        tuples,
+                        attribute_name,
+                        attribute_element_typoid,
+                        attribute_typmod,
+                    )
+                }
             } else {
-                panic!("unsupported type {}", attribute_typoid);
+                if is_composite_type(attribute_typoid) {
+                    collect_tuple_attribute_array_from_tuples_helper(
+                        tuples,
+                        tupledesc,
+                        attribute_name,
+                        attribute_typoid,
+                        attribute_typmod,
+                    )
+                } else {
+                    set_fallback_typoid(attribute_typoid);
+                    collect_attribute_array_from_tuples_helper::<FallbackToText>(
+                        tuples,
+                        attribute_name,
+                        attribute_typoid,
+                        attribute_typmod,
+                    )
+                }
             }
         }
     }

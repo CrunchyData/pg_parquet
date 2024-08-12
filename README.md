@@ -69,13 +69,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `double`          | DOUBLE                    |                  |
 | `numeric(38,8)`   | FIXED_LEN_BYTE_ARRAY(16)  | DECIMAL(128)     |
 | `"char"`          | BYTE_ARRAY                | STRING           |
-| `name`            | BYTE_ARRAY                | STRING           |
-| `varchar`         | BYTE_ARRAY                | STRING           |
-| `bpchar`          | BYTE_ARRAY                | STRING           |
 | `text`            | BYTE_ARRAY                | STRING           |
-| `enum`            | BYTE_ARRAY                | STRING           |
-| `bit`             | BYTE_ARRAY                | STRING           |
-| `varbit`          | BYTE_ARRAY                | STRING           |
 | `json`            | BYTE_ARRAY                | JSON             |
 | `jsonb`           | BYTE_ARRAY                | JSON             |
 | `bytea`           | BYTE_ARRAY                |                  |
@@ -94,13 +88,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `double[]`        | DOUBLE                    | LIST             |
 | `numeric(38,8)[]` | FIXED_LEN_BYTE_ARRAY(16)  | LIST             |
 | `"char"[]`        | BYTE_ARRAY                | LIST             |
-| `name[]`          | BYTE_ARRAY                | LIST             |
-| `varchar[]`       | BYTE_ARRAY                | LIST             |
-| `bpchar[]`        | BYTE_ARRAY                | LIST             |
 | `text[]`          | BYTE_ARRAY                | LIST             |
-| `enum[]`          | BYTE_ARRAY                | LIST             |
-| `bit[]`           | BYTE_ARRAY                | LIST             |
-| `varbit[]`        | BYTE_ARRAY                | LIST             |
 | `json[]`          | BYTE_ARRAY                | LIST             |
 | `jsonb[]`         | BYTE_ARRAY                | LIST             |
 | `bytea[]`         | BYTE_ARRAY                | LIST             |
@@ -112,3 +100,6 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `interval[]`      | FIXED_LEN_BYTE_ARRAY(12)  | LIST             |
 | `uuid[]`          | FIXED_LEN_BYTE_ARRAY(16)  | LIST             |
 | `composite`       | STRUCT                    |                  |
+
+> [!NOTE]
+> Any type that does not have a corresponding Parquet type will be represented, as a fallback mechanism, as `BYTE_ARRAY` with `STRING` logical type. e.g. `enum`

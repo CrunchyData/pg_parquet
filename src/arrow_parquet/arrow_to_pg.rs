@@ -6,14 +6,12 @@ use arrow::array::{
 };
 use pgrx::{
     pg_sys::{
-        Datum, Oid, BITARRAYOID, BITOID, BOOLARRAYOID, BOOLOID, BPCHARARRAYOID, BPCHAROID,
-        BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID,
-        FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID,
-        INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID, JSONARRAYOID, JSONBARRAYOID,
-        JSONBOID, JSONOID, NAMEARRAYOID, NAMEOID, NUMERICARRAYOID, NUMERICOID, OIDARRAYOID, OIDOID,
-        TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
+        Datum, Oid, BOOLARRAYOID, BOOLOID, BYTEAARRAYOID, BYTEAOID, CHARARRAYOID, CHAROID,
+        DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID, FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID,
+        INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID, INT8OID, INTERVALARRAYOID, INTERVALOID,
+        JSONARRAYOID, JSONBARRAYOID, JSONBOID, JSONOID, NUMERICARRAYOID, NUMERICOID, OIDARRAYOID,
+        OIDOID, TEXTARRAYOID, TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID,
         TIMESTAMPTZARRAYOID, TIMESTAMPTZOID, TIMETZARRAYOID, TIMETZOID, UUIDARRAYOID, UUIDOID,
-        VARBITARRAYOID, VARBITOID, VARCHARARRAYOID, VARCHAROID,
     },
     prelude::PgHeapTuple,
     AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, Json, JsonB, PgTupleDesc, Time,
@@ -21,19 +19,15 @@ use pgrx::{
 };
 
 use crate::{
-    pgrx_utils::{
-        array_element_typoid, is_array_type, is_composite_type, is_enum_typoid, tuple_desc,
-    },
-    type_compat::{Bit, Bpchar, Enum, Name, VarBit, Varchar},
+    pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc},
+    type_compat::{set_fallback_typoid, FallbackToText},
 };
 
-pub(crate) mod bit;
 pub(crate) mod bool;
-pub(crate) mod bpchar;
 pub(crate) mod bytea;
 pub(crate) mod char;
 pub(crate) mod date;
-pub(crate) mod enumeration;
+pub(crate) mod fallback_to_text;
 pub(crate) mod float4;
 pub(crate) mod float8;
 pub(crate) mod int2;
@@ -42,7 +36,6 @@ pub(crate) mod int8;
 pub(crate) mod interval;
 pub(crate) mod json;
 pub(crate) mod jsonb;
-pub(crate) mod name;
 pub(crate) mod numeric;
 pub(crate) mod oid;
 pub(crate) mod record;
@@ -52,8 +45,6 @@ pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
 pub(crate) mod uuid;
-pub(crate) mod varbit;
-pub(crate) mod varchar;
 
 pub(crate) trait ArrowArrayToPgType<'a, A: From<ArrayData>, T: 'a + IntoDatum> {
     fn as_pg(array: A, typoid: Oid, typmod: i32, tupledesc: Option<PgTupleDesc<'a>>) -> Option<T>;
@@ -134,51 +125,6 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
         }
         TEXTOID => {
             let val = <String as ArrowArrayToPgType<StringArray, String>>::as_pg(
-                primitive_array.into(),
-                typoid,
-                typmod,
-                None,
-            );
-            val.into_datum()
-        }
-        VARCHAROID => {
-            let val = <Varchar as ArrowArrayToPgType<StringArray, Varchar>>::as_pg(
-                primitive_array.into(),
-                typoid,
-                typmod,
-                None,
-            );
-            val.into_datum()
-        }
-        NAMEOID => {
-            let val = <Name as ArrowArrayToPgType<StringArray, Name>>::as_pg(
-                primitive_array.into(),
-                typoid,
-                typmod,
-                None,
-            );
-            val.into_datum()
-        }
-        BPCHAROID => {
-            let val = <Bpchar as ArrowArrayToPgType<StringArray, Bpchar>>::as_pg(
-                primitive_array.into(),
-                typoid,
-                typmod,
-                None,
-            );
-            val.into_datum()
-        }
-        BITOID => {
-            let val = <Bit as ArrowArrayToPgType<StringArray, Bit>>::as_pg(
-                primitive_array.into(),
-                typoid,
-                typmod,
-                None,
-            );
-            val.into_datum()
-        }
-        VARBITOID => {
-            let val = <VarBit as ArrowArrayToPgType<StringArray, VarBit>>::as_pg(
                 primitive_array.into(),
                 typoid,
                 typmod,
@@ -303,17 +249,16 @@ fn as_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
                 );
 
                 val.into_datum()
-            } else if is_enum_typoid(typoid) {
-                Enum::set_type_oid(typoid);
-                let val = <Enum as ArrowArrayToPgType<StringArray, Enum>>::as_pg(
-                    primitive_array.into(),
-                    typoid,
-                    typmod,
-                    None,
-                );
-                val.into_datum()
             } else {
-                panic!("unsupported primitive type {:?}", primitive_array)
+                set_fallback_typoid(typoid);
+                let val =
+                    <FallbackToText as ArrowArrayToPgType<StringArray, FallbackToText>>::as_pg(
+                        primitive_array.into(),
+                        typoid,
+                        typmod,
+                        None,
+                    );
+                val.into_datum()
             }
         }
     }
@@ -401,47 +346,6 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
             let val = <Vec<Option<String>> as ArrowArrayToPgType<
                 StringArray,
                 Vec<Option<String>>,
-            >>::as_pg(list_array.into(), element_typoid, typmod, None);
-            val.into_datum()
-        }
-        VARCHARARRAYOID => {
-            let val = <Vec<Option<Varchar>> as ArrowArrayToPgType<
-                StringArray,
-                Vec<Option<Varchar>>,
-            >>::as_pg(list_array.into(), element_typoid, typmod, None);
-            val.into_datum()
-        }
-        NAMEARRAYOID => {
-            let val =
-                <Vec<Option<Name>> as ArrowArrayToPgType<StringArray, Vec<Option<Name>>>>::as_pg(
-                    list_array.into(),
-                    element_typoid,
-                    typmod,
-                    None,
-                );
-            val.into_datum()
-        }
-        BPCHARARRAYOID => {
-            let val = <Vec<Option<Bpchar>> as ArrowArrayToPgType<
-                StringArray,
-                Vec<Option<Bpchar>>,
-            >>::as_pg(list_array.into(), element_typoid, typmod, None);
-            val.into_datum()
-        }
-        BITARRAYOID => {
-            let val =
-                <Vec<Option<Bit>> as ArrowArrayToPgType<StringArray, Vec<Option<Bit>>>>::as_pg(
-                    list_array.into(),
-                    element_typoid,
-                    typmod,
-                    None,
-                );
-            val.into_datum()
-        }
-        VARBITARRAYOID => {
-            let val = <Vec<Option<VarBit>> as ArrowArrayToPgType<
-                StringArray,
-                Vec<Option<VarBit>>,
             >>::as_pg(list_array.into(), element_typoid, typmod, None);
             val.into_datum()
         }
@@ -553,15 +457,13 @@ fn as_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
                 );
 
                 val.into_datum()
-            } else if is_enum_typoid(element_typoid) {
-                Enum::set_type_oid(element_typoid);
-                let val = <Vec<Option<Enum>> as ArrowArrayToPgType<
+            } else {
+                set_fallback_typoid(element_typoid);
+                let val = <Vec<Option<FallbackToText>> as ArrowArrayToPgType<
                     StringArray,
-                    Vec<Option<Enum>>,
+                    Vec<Option<FallbackToText>>,
                 >>::as_pg(list_array.into(), element_typoid, typmod, None);
                 val.into_datum()
-            } else {
-                panic!("unsupported array type {:?}", typoid)
             }
         }
     }

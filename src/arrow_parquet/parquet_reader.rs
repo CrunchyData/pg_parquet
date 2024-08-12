@@ -110,7 +110,7 @@ impl ParquetReaderContext {
         self.buffer.extend_from_slice(&trailer_len_bytes);
     }
 
-    fn row_to_tuple_datums(
+    fn record_batch_to_tuple_datums(
         record_batch: RecordBatch,
         tupledesc: &PgTupleDesc,
     ) -> Vec<Option<Datum>> {
@@ -163,7 +163,7 @@ impl ParquetReaderContext {
                 let attnum_len_bytes = natts.to_be_bytes();
                 self.buffer.extend_from_slice(&attnum_len_bytes);
 
-                let tuple_datums = Self::row_to_tuple_datums(record_batch, &tupledesc);
+                let tuple_datums = Self::record_batch_to_tuple_datums(record_batch, &tupledesc);
 
                 for (datum, out_func) in tuple_datums.into_iter().zip(self.binary_out_funcs.iter())
                 {
