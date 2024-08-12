@@ -6,8 +6,8 @@ use crate::type_compat::i64_to_timetz;
 use super::ArrowArrayToPgType;
 
 // Timetz
-impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, TimeWithTimeZone> for TimeWithTimeZone {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Time64MicrosecondArray, TimeWithTimeZone> for TimeWithTimeZone {
+    fn to_pg_type(
         arr: Time64MicrosecondArray,
         _typoid: Oid,
         _typmod: i32,
@@ -23,10 +23,10 @@ impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, TimeWithTimeZone> for Ti
 }
 
 // Timetz[]
-impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, Vec<Option<TimeWithTimeZone>>>
+impl ArrowArrayToPgType<'_, Time64MicrosecondArray, Vec<Option<TimeWithTimeZone>>>
     for Vec<Option<TimeWithTimeZone>>
 {
-    fn as_pg(
+    fn to_pg_type(
         arr: Time64MicrosecondArray,
         _typoid: Oid,
         _typmod: i32,

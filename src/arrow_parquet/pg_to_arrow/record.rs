@@ -9,8 +9,8 @@ use pgrx::{heap_tuple::PgHeapTuple, pg_sys::Oid, AllocatedByRust};
 
 use crate::{
     arrow_parquet::{
-        pg_to_arrow::PgTypeToArrowArray,
         arrow_utils::{arrow_array_offsets, create_arrow_list_array},
+        pg_to_arrow::PgTypeToArrowArray,
     },
     pgrx_utils::{collect_valid_attributes, tuple_desc},
 };
@@ -21,7 +21,7 @@ use super::collect_attribute_array_from_tuples;
 impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
     for Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>
 {
-    fn as_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
         let mut struct_attribute_arrays = vec![];
         let mut struct_attribute_fields = vec![];
 
@@ -76,11 +76,11 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 impl PgTypeToArrowArray<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>
     for Vec<Option<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>>
 {
-    fn as_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let array = self.into_iter().flatten().flatten().collect::<Vec<_>>();
-        let (field, primitive_array) = array.as_arrow_array(name, typoid, typmod);
+        let (field, primitive_array) = array.to_arrow_array(name, typoid, typmod);
 
         create_arrow_list_array(name, field, primitive_array, offsets, nulls)
     }

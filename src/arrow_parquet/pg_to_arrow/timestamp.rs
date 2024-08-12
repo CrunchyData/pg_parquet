@@ -16,7 +16,7 @@ use crate::{
 
 // Timestamp
 impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let timestamp_array = self
             .into_iter()
             .map(|timstamp| timstamp.and_then(timestamp_to_i64))
@@ -31,7 +31,7 @@ impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
 
 // Timestamp[]
 impl PgTypeToArrowArray<Vec<Option<Timestamp>>> for Vec<Option<Vec<Option<Timestamp>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Timestamp(TimeUnit::Microsecond, None), true);

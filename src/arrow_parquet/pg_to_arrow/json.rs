@@ -14,7 +14,7 @@ use crate::arrow_parquet::{
 
 // Json
 impl PgTypeToArrowArray<Json> for Vec<Option<Json>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let field = Field::new(name, DataType::Utf8, true).with_extension_type(ExtensionType::Json);
 
         let array = self
@@ -29,7 +29,7 @@ impl PgTypeToArrowArray<Json> for Vec<Option<Json>> {
 
 // Json[]
 impl PgTypeToArrowArray<Vec<Option<Json>>> for Vec<Option<Vec<Option<Json>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Utf8, true).with_extension_type(ExtensionType::Json);

@@ -16,7 +16,7 @@ use crate::{
 
 // Interval
 impl PgTypeToArrowArray<Interval> for Vec<Option<Interval>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let interval_array = self
             .into_iter()
             .map(|interval| interval.and_then(interval_to_nano))
@@ -31,7 +31,7 @@ impl PgTypeToArrowArray<Interval> for Vec<Option<Interval>> {
 
 // Interval[]
 impl PgTypeToArrowArray<Vec<Option<Interval>>> for Vec<Option<Vec<Option<Interval>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Interval(IntervalUnit::MonthDayNano), true);

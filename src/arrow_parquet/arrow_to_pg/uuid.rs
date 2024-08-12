@@ -4,8 +4,8 @@ use pgrx::{pg_sys::Oid, PgTupleDesc, Uuid};
 use super::ArrowArrayToPgType;
 
 // Uuid
-impl<'a> ArrowArrayToPgType<'_, FixedSizeBinaryArray, Uuid> for Uuid {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, FixedSizeBinaryArray, Uuid> for Uuid {
+    fn to_pg_type(
         arr: FixedSizeBinaryArray,
         _typoid: Oid,
         _typmod: i32,
@@ -22,8 +22,8 @@ impl<'a> ArrowArrayToPgType<'_, FixedSizeBinaryArray, Uuid> for Uuid {
 }
 
 // Uuid[]
-impl<'a> ArrowArrayToPgType<'_, FixedSizeBinaryArray, Vec<Option<Uuid>>> for Vec<Option<Uuid>> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, FixedSizeBinaryArray, Vec<Option<Uuid>>> for Vec<Option<Uuid>> {
+    fn to_pg_type(
         arr: FixedSizeBinaryArray,
         _typoid: Oid,
         _typmod: i32,

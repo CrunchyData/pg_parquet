@@ -25,14 +25,10 @@ pub(crate) fn is_parquet_format(copy_stmt: &PgBox<CopyStmt>) -> bool {
 
         let format = unsafe { defGetString(option.as_ptr()) };
         let format = unsafe { std::ffi::CStr::from_ptr(format).to_str().unwrap() };
-        if format == "parquet" {
-            return true;
-        } else {
-            return false;
-        }
+        return format == "parquet";
     }
 
-    return false;
+    false
 }
 
 pub(crate) fn is_parquet_file(copy_stmt: &PgBox<CopyStmt>) -> bool {

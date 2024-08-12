@@ -42,8 +42,7 @@ mod tests {
     fn comma_separated_copy_options(options: &HashMap<String, CopyOptionValue>) -> String {
         let mut comma_sepated_options = String::new();
 
-        let mut option_idx = 0;
-        for (key, value) in options.iter() {
+        for (option_idx, (key, value)) in options.iter().enumerate() {
             match value {
                 CopyOptionValue::StringOption(value) => {
                     comma_sepated_options.push_str(&format!("{} '{}'", key, value));
@@ -56,8 +55,6 @@ mod tests {
             if option_idx < options.len() - 1 {
                 comma_sepated_options.push_str(", ");
             }
-
-            option_idx += 1;
         }
 
         comma_sepated_options
@@ -89,7 +86,7 @@ mod tests {
             );
             copy_to_options.insert(
                 "row_group_size".to_string(),
-                CopyOptionValue::IntOption(DEFAULT_ROW_GROUP_SIZE as i64),
+                CopyOptionValue::IntOption(DEFAULT_ROW_GROUP_SIZE),
             );
 
             let mut copy_from_options = HashMap::new();
@@ -184,10 +181,10 @@ mod tests {
                 let options_str = comma_separated_copy_options(&self.copy_to_options);
                 copy_to_query.push_str(&options_str);
 
-                copy_to_query.push_str(")");
+                copy_to_query.push(')');
             }
 
-            copy_to_query.push_str(";");
+            copy_to_query.push(';');
 
             Spi::run(copy_to_query.as_str()).unwrap();
         }
@@ -201,10 +198,10 @@ mod tests {
                 let options_str = comma_separated_copy_options(&self.copy_from_options);
                 copy_from_query.push_str(&options_str);
 
-                copy_from_query.push_str(")");
+                copy_from_query.push(')');
             }
 
-            copy_from_query.push_str(";");
+            copy_from_query.push(';');
 
             Spi::run(copy_from_query.as_str()).unwrap();
         }
@@ -237,16 +234,21 @@ mod tests {
         )
     }
 
+    struct TestResult<T> {
+        expected: Vec<(Option<T>,)>,
+        result: Vec<(Option<T>,)>,
+    }
+
     fn test_common<T: IntoDatum + FromDatum>(
         test_table: TestTable<T>,
         values: Vec<Option<T>>,
-    ) -> (Vec<(Option<T>,)>, Vec<(Option<T>,)>) {
+    ) -> TestResult<T> {
         test_table.insert(values);
 
         // Insert a NULL value to test NULL handling
         test_table.insert(vec![None]);
 
-        let expected_result = test_table.select_all();
+        let expected = test_table.select_all();
 
         test_table.copy_to_parquet();
 
@@ -256,7 +258,7 @@ mod tests {
 
         let result = test_table.select_all();
 
-        (expected_result, result)
+        TestResult { expected, result }
     }
 
     fn test_assert<T>(expected_result: Vec<(Option<T>,)>, result: Vec<(Option<T>,)>)
@@ -272,14 +274,14 @@ mod tests {
         test_table: TestTable<T>,
         values: Vec<Option<T>>,
     ) {
-        let (expected_result, result) = test_common(test_table, values);
-        test_assert(expected_result, result);
+        let test_result = test_common(test_table, values);
+        test_assert(test_result.expected, test_result.result);
     }
 
     #[pg_test]
     fn test_int2() {
         let test_table = TestTable::<i16>::new("int2".into());
-        let values = (1_i16..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i16..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -287,7 +289,6 @@ mod tests {
     fn test_int2_array() {
         let test_table = TestTable::<Vec<Option<i16>>>::new("int2[]".into());
         let values = (1_i16..=10)
-            .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
             .collect();
         test_helper(test_table, values);
@@ -296,7 +297,7 @@ mod tests {
     #[pg_test]
     fn test_int4() {
         let test_table = TestTable::<i32>::new("int4".into());
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -304,7 +305,6 @@ mod tests {
     fn test_int4_array() {
         let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into());
         let values = (1_i32..=10)
-            .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
             .collect();
         test_helper(test_table, values);
@@ -313,7 +313,7 @@ mod tests {
     #[pg_test]
     fn test_int8() {
         let test_table = TestTable::<i64>::new("int8".into());
-        let values = (1_i64..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i64..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -321,7 +321,6 @@ mod tests {
     fn test_int8_array() {
         let test_table = TestTable::<Vec<Option<i64>>>::new("int8[]".into());
         let values = (1_i64..=10)
-            .into_iter()
             .map(|v| Some(vec![Some(v), Some(v + 1), Some(v + 2)]))
             .collect();
         test_helper(test_table, values);
@@ -330,7 +329,7 @@ mod tests {
     #[pg_test]
     fn test_flaot4() {
         let test_table = TestTable::<f32>::new("float4".into());
-        let values = (1..=10).into_iter().map(|v| Some(v as f32)).collect();
+        let values = (1..=10).map(|v| Some(v as f32)).collect();
         test_helper(test_table, values);
     }
 
@@ -338,7 +337,6 @@ mod tests {
     fn test_float4_array() {
         let test_table = TestTable::<Vec<Option<f32>>>::new("float4[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(v as f32),
@@ -353,7 +351,7 @@ mod tests {
     #[pg_test]
     fn test_flaot8() {
         let test_table = TestTable::<f64>::new("float8".into());
-        let values = (1..=10).into_iter().map(|v| Some(v as f64)).collect();
+        let values = (1..=10).map(|v| Some(v as f64)).collect();
         test_helper(test_table, values);
     }
 
@@ -361,7 +359,6 @@ mod tests {
     fn test_float8_array() {
         let test_table = TestTable::<Vec<Option<f64>>>::new("float8[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(v as f64),
@@ -376,10 +373,7 @@ mod tests {
     #[pg_test]
     fn test_bool() {
         let test_table = TestTable::<bool>::new("bool".into());
-        let values = (1..=10)
-            .into_iter()
-            .map(|v| Some(if v % 2 == 0 { false } else { true }))
-            .collect();
+        let values = (1..=10).map(|v| Some(v % 2 != 0)).collect();
         test_helper(test_table, values);
     }
 
@@ -387,14 +381,7 @@ mod tests {
     fn test_bool_array() {
         let test_table = TestTable::<Vec<Option<bool>>>::new("bool[]".into());
         let values = (1..=10)
-            .into_iter()
-            .map(|v| {
-                Some(vec![
-                    Some(if v % 2 == 0 { false } else { true }),
-                    Some(if v % 2 == 0 { true } else { false }),
-                    Some(if v % 2 == 0 { false } else { true }),
-                ])
-            })
+            .map(|v| Some(vec![Some(v % 2 != 0), Some(v % 2 != 0), Some(v % 2 != 0)]))
             .collect();
         test_helper(test_table, values);
     }
@@ -402,10 +389,7 @@ mod tests {
     #[pg_test]
     fn test_text() {
         let test_table = TestTable::<String>::new("text".into());
-        let values = (1..=10)
-            .into_iter()
-            .map(|v| Some(format!("test_text_{}", v)))
-            .collect();
+        let values = (1..=10).map(|v| Some(format!("test_text_{}", v))).collect();
         test_helper(test_table, values);
     }
 
@@ -413,7 +397,6 @@ mod tests {
     fn test_text_array() {
         let test_table = TestTable::<Vec<Option<String>>>::new("text[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(format!("test_text_{}", v)),
@@ -431,7 +414,6 @@ mod tests {
 
         let test_table = TestTable::<FallbackToText>::new("varchar".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(FallbackToText::new(
                     format!("test_varchar_{}", v),
@@ -449,7 +431,6 @@ mod tests {
 
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("varchar[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(FallbackToText::new(
@@ -479,7 +460,6 @@ mod tests {
 
         let test_table = TestTable::<FallbackToText>::new("bpchar".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(FallbackToText::new(
                     format!("test_bpchar_{}", v),
@@ -497,7 +477,6 @@ mod tests {
 
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("bpchar[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(FallbackToText::new(
@@ -527,7 +506,6 @@ mod tests {
 
         let test_table = TestTable::<FallbackToText>::new("name".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| Some(FallbackToText::new(format!("test_name_{}", v), NAMEOID, -1)))
             .collect();
         test_helper(test_table, values);
@@ -539,7 +517,6 @@ mod tests {
 
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("name[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(FallbackToText::new(format!("test_name_{}", v), NAMEOID, -1)),
@@ -644,7 +621,7 @@ mod tests {
             FallbackToText::new("1".into(), BITOID, -1),
         ]
         .into_iter()
-        .map(|v| Some(v))
+        .map(Some)
         .collect();
         test_helper(test_table, values);
     }
@@ -663,7 +640,7 @@ mod tests {
             vec![Some(FallbackToText::new("0".into(), BITOID, -1))],
         ]
         .into_iter()
-        .map(|v| Some(v))
+        .map(Some)
         .collect();
         test_helper(test_table, values);
     }
@@ -676,7 +653,7 @@ mod tests {
         let test_table = TestTable::<FallbackToText>::new("bit".into());
         let values = vec![FallbackToText::new("a".into(), BITOID, -1)]
             .into_iter()
-            .map(|v| Some(v))
+            .map(Some)
             .collect();
         test_helper(test_table, values);
     }
@@ -689,7 +666,7 @@ mod tests {
         let test_table = TestTable::<FallbackToText>::new("bit".into());
         let values = vec![FallbackToText::new("01".into(), BITOID, -1)]
             .into_iter()
-            .map(|v| Some(v))
+            .map(Some)
             .collect();
         test_helper(test_table, values);
     }
@@ -700,10 +677,9 @@ mod tests {
 
         let test_table = TestTable::<FallbackToText>::new("varbit".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(FallbackToText::new(
-                    format!("0101").repeat(v),
+                    "0101".to_string().repeat(v),
                     VARBITOID,
                     -1,
                 ))
@@ -718,21 +694,20 @@ mod tests {
 
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("varbit[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(FallbackToText::new(
-                        format!("0101").repeat(v),
+                        "0101".to_string().repeat(v),
                         VARBITOID,
                         -1,
                     )),
                     Some(FallbackToText::new(
-                        format!("0101").repeat(v + 1),
+                        "0101".to_string().repeat(v + 1),
                         VARBITOID,
                         -1,
                     )),
                     Some(FallbackToText::new(
-                        format!("0101").repeat(v + 2),
+                        "0101".to_string().repeat(v + 2),
                         VARBITOID,
                         -1,
                     )),
@@ -745,7 +720,7 @@ mod tests {
     #[pg_test]
     fn test_char() {
         let test_table = TestTable::<i8>::new("\"char\"".into());
-        let values = (1..=10).into_iter().map(|v| Some(v as i8)).collect();
+        let values = (1..=10).map(|v| Some(v as i8)).collect();
         test_helper(test_table, values);
     }
 
@@ -753,7 +728,6 @@ mod tests {
     fn test_char_array() {
         let test_table = TestTable::<Vec<Option<i8>>>::new("\"char\"[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(v as i8),
@@ -769,7 +743,6 @@ mod tests {
     fn test_bytea() {
         let test_table = TestTable::<Vec<u8>>::new("bytea".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| Some(vec![v as u8, (v + 1) as u8, (v + 2) as u8]))
             .collect();
         test_helper(test_table, values);
@@ -779,7 +752,6 @@ mod tests {
     fn test_bytea_array() {
         let test_table = TestTable::<Vec<Option<Vec<u8>>>>::new("bytea[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(vec![v as u8, (v + 1) as u8, (v + 2) as u8]),
@@ -794,7 +766,7 @@ mod tests {
     #[pg_test]
     fn test_oid() {
         let test_table = TestTable::<Oid>::new("oid".into());
-        let values = (1_u32..=10).into_iter().map(|v| Some(v.into())).collect();
+        let values = (1_u32..=10).map(|v| Some(v.into())).collect();
         test_helper(test_table, values);
     }
 
@@ -802,7 +774,6 @@ mod tests {
     fn test_oid_array() {
         let test_table = TestTable::<Vec<Option<Oid>>>::new("oid[]".into());
         let values = (1_u32..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(v.into()),
@@ -818,7 +789,6 @@ mod tests {
     fn test_date() {
         let test_table = TestTable::<Date>::new("date".into());
         let values = (1_u8..=10)
-            .into_iter()
             .map(|day| Some(Date::new(2022, 5, day).unwrap()))
             .collect();
         test_helper(test_table, values);
@@ -828,7 +798,6 @@ mod tests {
     fn test_date_array() {
         let test_table = TestTable::<Vec<Option<Date>>>::new("date[]".into());
         let values = (1_u8..=10)
-            .into_iter()
             .map(|day| {
                 Some(vec![
                     Some(Date::new(2022, 5, day).unwrap()),
@@ -843,7 +812,7 @@ mod tests {
     #[pg_test]
     fn test_time() {
         let test_table = TestTable::<Time>::new("time".into());
-        let values = (1_i64..=10).into_iter().map(|i| Some(i.into())).collect();
+        let values = (1_i64..=10).map(|i| Some(i.into())).collect();
         test_helper(test_table, values);
     }
 
@@ -851,7 +820,6 @@ mod tests {
     fn test_time_array() {
         let test_table = TestTable::<Vec<Option<Time>>>::new("time[]".into());
         let values = (1_i64..=10)
-            .into_iter()
             .map(|i| {
                 Some(vec![
                     Some(i.into()),
@@ -867,12 +835,11 @@ mod tests {
     fn test_timetz() {
         let test_table = TestTable::<TimeWithTimeZone>::new("timetz".into());
         let values = (1_u8..=10)
-            .into_iter()
             .map(|minute| {
                 Some(TimeWithTimeZone::with_timezone(5, minute, 15.0, "Europe/Istanbul").unwrap())
             })
             .collect();
-        let (expected, actual) = test_common(test_table, values);
+        let TestResult { expected, result } = test_common(test_table, values);
 
         // timetz is converted to utc timetz after copying to parquet,
         // so we need to the results to utc before comparing them
@@ -881,19 +848,18 @@ mod tests {
             .map(|(timetz,)| (timetz.and_then(timetz_to_utc_time),))
             .collect::<Vec<_>>();
 
-        let actual = actual
+        let result = result
             .into_iter()
             .map(|(timetz,)| (timetz.and_then(timetz_to_utc_time),))
             .collect::<Vec<_>>();
 
-        test_assert(expected, actual);
+        test_assert(expected, result);
     }
 
     #[pg_test]
     fn test_timetz_array() {
         let test_table = TestTable::<Vec<Option<TimeWithTimeZone>>>::new("timetz[]".into());
         let values = (1_u8..=10)
-            .into_iter()
             .map(|minute| {
                 Some(vec![
                     Some(
@@ -911,7 +877,7 @@ mod tests {
                 ])
             })
             .collect();
-        let (expected, actual) = test_common(test_table, values);
+        let TestResult { expected, result } = test_common(test_table, values);
 
         // timetz is converted to utc timetz after copying to parquet,
         // so we need to the results to utc before comparing them
@@ -920,18 +886,18 @@ mod tests {
             .map(|(timetz,)| (timetz.and_then(timetz_array_to_utc_time_array),))
             .collect::<Vec<_>>();
 
-        let actual = actual
+        let result = result
             .into_iter()
             .map(|(timetz,)| (timetz.and_then(timetz_array_to_utc_time_array),))
             .collect::<Vec<_>>();
 
-        test_assert(expected, actual);
+        test_assert(expected, result);
     }
 
     #[pg_test]
     fn test_timestamp() {
         let test_table = TestTable::<Timestamp>::new("timestamp".into());
-        let values = (1_i64..=10).into_iter().map(|i| Some(i.into())).collect();
+        let values = (1_i64..=10).map(|i| Some(i.into())).collect();
         test_helper(test_table, values);
     }
 
@@ -939,7 +905,6 @@ mod tests {
     fn test_timestamp_array() {
         let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into());
         let values = (1_i64..=10)
-            .into_iter()
             .map(|i| {
                 Some(vec![
                     Some(i.into()),
@@ -955,7 +920,6 @@ mod tests {
     fn test_timestamptz() {
         let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into());
         let values = (1_u8..=10)
-            .into_iter()
             .map(|minute| {
                 Some(
                     TimestampWithTimeZone::with_timezone(
@@ -979,7 +943,6 @@ mod tests {
         let test_table =
             TestTable::<Vec<Option<TimestampWithTimeZone>>>::new("timestamptz[]".into());
         let values = (1_u8..=10)
-            .into_iter()
             .map(|minute| {
                 Some(vec![
                     Some(
@@ -1028,7 +991,6 @@ mod tests {
     fn test_interval() {
         let test_table = TestTable::<Interval>::new("interval".into());
         let values = (1_i32..=10)
-            .into_iter()
             .map(|day| Some(Interval::new(5, day, 120).unwrap()))
             .collect();
         test_helper(test_table, values);
@@ -1038,7 +1000,6 @@ mod tests {
     fn test_interval_array() {
         let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into());
         let values = (1_i32..=10)
-            .into_iter()
             .map(|day| {
                 Some(vec![
                     Some(Interval::new(5, day, 120).unwrap()),
@@ -1061,7 +1022,7 @@ mod tests {
         let uuids = uuids
             .into_iter()
             .map(|uuid| {
-                let uuid = uuid.replace("-", "");
+                let uuid = uuid.replace('-', "");
                 let bytes = u128::from_str_radix(&uuid, 16).unwrap();
                 let bytes = bytes.to_be_bytes().to_vec();
                 Uuid::from_slice(bytes.as_slice()).unwrap()
@@ -1069,7 +1030,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         let test_table = TestTable::<Uuid>::new("uuid".into());
-        let values = uuids.into_iter().map(|v| Some(v)).collect();
+        let values = uuids.into_iter().map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -1084,7 +1045,7 @@ mod tests {
         let uuids = uuids
             .into_iter()
             .map(|uuid| {
-                let uuid = uuid.replace("-", "");
+                let uuid = uuid.replace('-', "");
                 let bytes = u128::from_str_radix(&uuid, 16).unwrap();
                 let bytes = bytes.to_be_bytes().to_vec();
                 Uuid::from_slice(bytes.as_slice()).unwrap()
@@ -1103,7 +1064,6 @@ mod tests {
     fn test_json() {
         let test_table = TestTable::<Json>::new("json".into()).with_order_by_col("a->>'a'".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(Json(
                     serde_json::from_str(format!("{{\"a\":\"test_json_{}\"}}", v).as_str())
@@ -1111,9 +1071,9 @@ mod tests {
                 ))
             })
             .collect();
-        let (expected_result, result) = test_common(test_table, values);
+        let TestResult { expected, result } = test_common(test_table, values);
 
-        for ((expected,), (actual,)) in expected_result.into_iter().zip(result.into_iter()) {
+        for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
             if expected.is_none() {
                 assert!(actual.is_none());
             }
@@ -1134,7 +1094,6 @@ mod tests {
         let test_table = TestTable::<Vec<Option<Json>>>::new("json[]".into())
             .with_order_by_col("a::text[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(Json(
@@ -1152,9 +1111,9 @@ mod tests {
                 ])
             })
             .collect();
-        let (expected_result, result) = test_common(test_table, values);
+        let TestResult { expected, result } = test_common(test_table, values);
 
-        for ((expected,), (actual,)) in expected_result.into_iter().zip(result.into_iter()) {
+        for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
             if expected.is_none() {
                 assert!(actual.is_none());
             }
@@ -1188,7 +1147,6 @@ mod tests {
         let test_table =
             TestTable::<JsonB>::new("jsonb".into()).with_order_by_col("a->>'a'".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(JsonB(
                     serde_json::from_str(format!("{{\"a\":\"test_jsonb_{}\"}}", v).as_str())
@@ -1196,9 +1154,9 @@ mod tests {
                 ))
             })
             .collect();
-        let (expected_result, result) = test_common(test_table, values);
+        let TestResult { expected, result } = test_common(test_table, values);
 
-        for ((expected,), (actual,)) in expected_result.into_iter().zip(result.into_iter()) {
+        for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
             if expected.is_none() {
                 assert!(actual.is_none());
             }
@@ -1218,7 +1176,6 @@ mod tests {
     fn test_jsonb_array() {
         let test_table = TestTable::<Vec<Option<JsonB>>>::new("jsonb[]".into());
         let values = (1..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     Some(JsonB(
@@ -1240,9 +1197,9 @@ mod tests {
                 ])
             })
             .collect();
-        let (expected_result, result) = test_common(test_table, values);
+        let TestResult { expected, result } = test_common(test_table, values);
 
-        for ((expected,), (actual,)) in expected_result.into_iter().zip(result.into_iter()) {
+        for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
             if expected.is_none() {
                 assert!(actual.is_none());
             }
@@ -1274,10 +1231,7 @@ mod tests {
     #[pg_test]
     fn test_numeric() {
         let test_table = TestTable::<AnyNumeric>::new("numeric".into());
-        let values = (1_i32..=10)
-            .into_iter()
-            .map(|v| i128_to_numeric(v as i128))
-            .collect();
+        let values = (1_i32..=10).map(|v| i128_to_numeric(v as i128)).collect();
         test_helper(test_table, values);
     }
 
@@ -1285,7 +1239,6 @@ mod tests {
     fn test_numeric_array() {
         let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric[]".into());
         let values = (1_i32..=10)
-            .into_iter()
             .map(|v| {
                 Some(vec![
                     i128_to_numeric(v as i128),
@@ -1430,7 +1383,7 @@ mod tests {
         let test_table = TestTable::<i32>::new("int4".into())
             .with_copy_to_options(HashMap::new())
             .with_copy_from_options(HashMap::new());
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -1501,7 +1454,7 @@ mod tests {
 
             let test_table =
                 TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-            let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+            let values = (1_i32..=10).map(Some).collect();
             test_helper(test_table, values);
         }
     }
@@ -1516,7 +1469,7 @@ mod tests {
     #[should_panic(expected = "unsupported uri invalid_uri")]
     fn test_invalid_uri() {
         let test_table = TestTable::<i32>::new("int4".into()).with_uri("invalid_uri".to_string());
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -1530,7 +1483,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -1544,7 +1497,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -1558,7 +1511,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -1572,7 +1525,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -1586,7 +1539,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 
@@ -1597,7 +1550,7 @@ mod tests {
         copy_options.insert("row_group_size".to_string(), CopyOptionValue::IntOption(-1));
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-        let values = (1_i32..=10).into_iter().map(|v| Some(v)).collect();
+        let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
 }

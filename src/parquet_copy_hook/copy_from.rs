@@ -150,7 +150,7 @@ fn copy_attlist(pstmt: &PgBox<pg_sys::PlannedStmt>) -> *mut List {
 }
 
 fn copy_attnames(pstmt: &PgBox<pg_sys::PlannedStmt>) -> Vec<String> {
-    let attnamelist = copy_attlist(&pstmt);
+    let attnamelist = copy_attlist(pstmt);
     unsafe {
         PgList::from_pg(attnamelist)
             .iter_ptr()
@@ -181,7 +181,7 @@ fn copy_ns_item(
     pstmt: &PgBox<pg_sys::PlannedStmt>,
     relation: &PgRelation,
 ) -> PgBox<ParseNamespaceItem> {
-    let is_copy_from = is_copy_from_parquet_stmt(&pstmt);
+    let is_copy_from = is_copy_from_parquet_stmt(pstmt);
 
     let nsitem = unsafe {
         addRangeTableEntryForRelation(
@@ -203,7 +203,7 @@ fn copy_ns_item(
 fn filter_tupledesc_for_relation(relation: &PgRelation, attnamelist: Vec<String>) -> PgTupleDesc {
     let table_tupledesc = relation.tuple_desc();
 
-    if attnamelist.len() == 0 {
+    if attnamelist.is_empty() {
         return table_tupledesc;
     }
 

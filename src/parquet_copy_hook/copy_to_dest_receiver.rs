@@ -129,7 +129,7 @@ extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceiver) -
 
             let datums: Vec<Option<Datum>> = datums
                 .into_iter()
-                .zip(nulls.into_iter())
+                .zip(nulls)
                 .map(|(datum, is_null)| if is_null { None } else { Some(datum) })
                 .collect();
 
@@ -172,9 +172,7 @@ extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
 }
 
 #[pg_guard]
-extern "C" fn copy_destroy(_dest: *mut DestReceiver) {
-    ()
-}
+extern "C" fn copy_destroy(_dest: *mut DestReceiver) {}
 
 #[pg_guard]
 #[no_mangle]

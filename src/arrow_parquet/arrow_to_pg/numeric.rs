@@ -6,8 +6,8 @@ use crate::type_compat::i128_to_numeric;
 use super::ArrowArrayToPgType;
 
 // Numeric
-impl<'a> ArrowArrayToPgType<'_, Decimal128Array, AnyNumeric> for AnyNumeric {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Decimal128Array, AnyNumeric> for AnyNumeric {
+    fn to_pg_type(
         arr: Decimal128Array,
         _typoid: Oid,
         _typmod: i32,
@@ -24,10 +24,8 @@ impl<'a> ArrowArrayToPgType<'_, Decimal128Array, AnyNumeric> for AnyNumeric {
 }
 
 // Numeric[]
-impl<'a> ArrowArrayToPgType<'_, Decimal128Array, Vec<Option<AnyNumeric>>>
-    for Vec<Option<AnyNumeric>>
-{
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Decimal128Array, Vec<Option<AnyNumeric>>> for Vec<Option<AnyNumeric>> {
+    fn to_pg_type(
         arr: Decimal128Array,
         _typoid: Oid,
         _typmod: i32,

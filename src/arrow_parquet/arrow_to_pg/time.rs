@@ -6,8 +6,8 @@ use crate::type_compat::i64_to_time;
 use super::ArrowArrayToPgType;
 
 // Time
-impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, Time> for Time {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Time64MicrosecondArray, Time> for Time {
+    fn to_pg_type(
         arr: Time64MicrosecondArray,
         _typoid: Oid,
         _typmod: i32,
@@ -23,8 +23,8 @@ impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, Time> for Time {
 }
 
 // Time[]
-impl<'a> ArrowArrayToPgType<'_, Time64MicrosecondArray, Vec<Option<Time>>> for Vec<Option<Time>> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Time64MicrosecondArray, Vec<Option<Time>>> for Vec<Option<Time>> {
+    fn to_pg_type(
         arr: Time64MicrosecondArray,
         _typoid: Oid,
         _typmod: i32,

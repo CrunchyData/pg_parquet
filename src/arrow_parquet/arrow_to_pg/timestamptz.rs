@@ -6,10 +6,10 @@ use crate::type_compat::i64_to_timestamptz;
 use super::ArrowArrayToPgType;
 
 // Timestamptz
-impl<'a> ArrowArrayToPgType<'_, TimestampMicrosecondArray, TimestampWithTimeZone>
+impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, TimestampWithTimeZone>
     for TimestampWithTimeZone
 {
-    fn as_pg(
+    fn to_pg_type(
         arr: TimestampMicrosecondArray,
         _typoid: Oid,
         _typmod: i32,
@@ -25,10 +25,10 @@ impl<'a> ArrowArrayToPgType<'_, TimestampMicrosecondArray, TimestampWithTimeZone
 }
 
 // Timestamptz[]
-impl<'a> ArrowArrayToPgType<'_, TimestampMicrosecondArray, Vec<Option<TimestampWithTimeZone>>>
+impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, Vec<Option<TimestampWithTimeZone>>>
     for Vec<Option<TimestampWithTimeZone>>
 {
-    fn as_pg(
+    fn to_pg_type(
         arr: TimestampMicrosecondArray,
         _typoid: Oid,
         _typmod: i32,

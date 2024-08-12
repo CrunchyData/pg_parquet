@@ -13,7 +13,7 @@ use crate::arrow_parquet::{
 
 // Float64
 impl PgTypeToArrowArray<f64> for Vec<Option<f64>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let field = Field::new(name, DataType::Float64, true);
         let array = Float64Array::from(self);
         (Arc::new(field), Arc::new(array))
@@ -22,7 +22,7 @@ impl PgTypeToArrowArray<f64> for Vec<Option<f64>> {
 
 // Float64[]
 impl PgTypeToArrowArray<Vec<Option<f64>>> for Vec<Option<Vec<Option<f64>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Float64, true);

@@ -16,7 +16,7 @@ use crate::{
 
 // Date
 impl PgTypeToArrowArray<Date> for Vec<Option<Date>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let date_array = self
             .into_iter()
             .map(|date| date.and_then(date_to_i32))
@@ -30,7 +30,7 @@ impl PgTypeToArrowArray<Date> for Vec<Option<Date>> {
 
 // Date[]
 impl PgTypeToArrowArray<Vec<Option<Date>>> for Vec<Option<Vec<Option<Date>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Date32, true);

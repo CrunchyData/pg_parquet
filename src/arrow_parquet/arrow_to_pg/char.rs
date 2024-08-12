@@ -4,8 +4,8 @@ use pgrx::{pg_sys::Oid, PgTupleDesc};
 use super::ArrowArrayToPgType;
 
 // Char
-impl<'a> ArrowArrayToPgType<'_, StringArray, i8> for i8 {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, StringArray, i8> for i8 {
+    fn to_pg_type(
         arr: StringArray,
         _typoid: Oid,
         _typmod: i32,
@@ -22,8 +22,8 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, i8> for i8 {
 }
 
 // Char[]
-impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<i8>>> for Vec<Option<i8>> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, StringArray, Vec<Option<i8>>> for Vec<Option<i8>> {
+    fn to_pg_type(
         arr: StringArray,
         _typoid: Oid,
         _typmod: i32,
@@ -31,9 +31,9 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<i8>>> for Vec<Option<i8>
     ) -> Option<Vec<Option<i8>>> {
         let mut vals = vec![];
         for val in arr.iter() {
-            let val = val.and_then(|val| {
+            let val = val.map(|val| {
                 let val: i8 = val.chars().next().unwrap() as i8;
-                Some(val)
+                val
             });
             vals.push(val);
         }

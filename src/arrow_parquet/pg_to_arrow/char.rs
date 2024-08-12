@@ -13,10 +13,10 @@ use crate::arrow_parquet::{
 
 // Char
 impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let array = self
             .into_iter()
-            .map(|c| c.and_then(|c| Some((c as u8 as char).to_string())))
+            .map(|c| c.map(|c| (c as u8 as char).to_string()))
             .collect::<Vec<_>>();
 
         let field = Field::new(name, DataType::Utf8, true);
@@ -27,7 +27,7 @@ impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
 
 // "Char"[]
 impl PgTypeToArrowArray<Vec<Option<i8>>> for Vec<Option<Vec<Option<i8>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Utf8, true);
@@ -36,7 +36,7 @@ impl PgTypeToArrowArray<Vec<Option<i8>>> for Vec<Option<Vec<Option<i8>>>> {
             .into_iter()
             .flatten()
             .flatten()
-            .map(|c| c.and_then(|c| Some((c as u8 as char).to_string())))
+            .map(|c| c.map(|c| (c as u8 as char).to_string()))
             .collect::<Vec<_>>();
 
         let array = StringArray::from(array);

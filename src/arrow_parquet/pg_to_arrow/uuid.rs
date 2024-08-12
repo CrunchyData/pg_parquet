@@ -14,7 +14,7 @@ use crate::arrow_parquet::{
 
 // Uuid
 impl PgTypeToArrowArray<Uuid> for Vec<Option<Uuid>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let uuid_array = self
             .iter()
             .map(|uuid| uuid.map(|uuid| uuid.to_vec()))
@@ -35,7 +35,7 @@ impl PgTypeToArrowArray<Uuid> for Vec<Option<Uuid>> {
 
 // Uuid[]
 impl PgTypeToArrowArray<Vec<Option<Uuid>>> for Vec<Option<Vec<Option<Uuid>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::FixedSizeBinary(16), true)

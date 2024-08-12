@@ -11,7 +11,7 @@ use pgrx::{
 };
 use tokio::runtime::Runtime;
 
-use crate::{arrow_parquet::arrow_to_pg::as_pg_datum, pgrx_utils::collect_valid_attributes};
+use crate::{arrow_parquet::arrow_to_pg::to_pg_datum, pgrx_utils::collect_valid_attributes};
 
 use super::uri_utils::parquet_reader_from_uri;
 
@@ -117,7 +117,7 @@ impl ParquetReaderContext {
         let mut datums = vec![];
 
         let include_generated_columns = false;
-        let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
+        let attributes = collect_valid_attributes(tupledesc, include_generated_columns);
 
         for attribute in attributes {
             let name = attribute.name();
@@ -126,7 +126,7 @@ impl ParquetReaderContext {
 
             let column = record_batch.column_by_name(name).unwrap();
 
-            let datum = as_pg_datum(column.to_data(), typoid, typmod);
+            let datum = to_pg_datum(column.to_data(), typoid, typmod);
             datums.push(datum);
         }
 
@@ -180,7 +180,7 @@ impl ParquetReaderContext {
                             /* variable bytes: attribute's data */
                             let data = vardata_any(datum_bytes) as *const u8;
                             let data_bytes = std::slice::from_raw_parts(data, data_size);
-                            self.buffer.extend_from_slice(&data_bytes);
+                            self.buffer.extend_from_slice(data_bytes);
                         };
                     } else {
                         /* 4 bytes: null */

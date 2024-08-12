@@ -4,8 +4,8 @@ use pgrx::{pg_sys::Oid, PgTupleDesc};
 use super::ArrowArrayToPgType;
 
 // Float4
-impl<'a> ArrowArrayToPgType<'_, Float32Array, f32> for f32 {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Float32Array, f32> for f32 {
+    fn to_pg_type(
         arr: Float32Array,
         _typoid: Oid,
         _typmod: i32,
@@ -21,8 +21,8 @@ impl<'a> ArrowArrayToPgType<'_, Float32Array, f32> for f32 {
 }
 
 // Float4[]
-impl<'a> ArrowArrayToPgType<'_, Float32Array, Vec<Option<f32>>> for Vec<Option<f32>> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Float32Array, Vec<Option<f32>>> for Vec<Option<f32>> {
+    fn to_pg_type(
         arr: Float32Array,
         _typoid: Oid,
         _typmod: i32,

@@ -13,7 +13,7 @@ use crate::arrow_parquet::{
 
 // Text
 impl PgTypeToArrowArray<String> for Vec<Option<String>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let field = Field::new(name, DataType::Utf8, true);
         let array = StringArray::from(self);
         (Arc::new(field), Arc::new(array))
@@ -22,7 +22,7 @@ impl PgTypeToArrowArray<String> for Vec<Option<String>> {
 
 // Text[]
 impl PgTypeToArrowArray<Vec<Option<String>>> for Vec<Option<Vec<Option<String>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Utf8, true);

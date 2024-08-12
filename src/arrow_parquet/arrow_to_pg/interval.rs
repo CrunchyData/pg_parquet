@@ -6,8 +6,8 @@ use crate::type_compat::nano_to_interval;
 use super::ArrowArrayToPgType;
 
 // Interval
-impl<'a> ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Interval> for Interval {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Interval> for Interval {
+    fn to_pg_type(
         arr: IntervalMonthDayNanoArray,
         _typoid: Oid,
         _typmod: i32,
@@ -24,10 +24,10 @@ impl<'a> ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Interval> for Interva
 }
 
 // Interval[]
-impl<'a> ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Vec<Option<Interval>>>
+impl ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Vec<Option<Interval>>>
     for Vec<Option<Interval>>
 {
-    fn as_pg(
+    fn to_pg_type(
         arr: IntervalMonthDayNanoArray,
         _typoid: Oid,
         _typmod: i32,

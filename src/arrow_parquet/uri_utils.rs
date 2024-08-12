@@ -49,7 +49,7 @@ fn parse_bucket_and_key(uri: &str) -> (String, String) {
 pub(crate) async fn parquet_reader_from_uri(
     uri: &str,
 ) -> ParquetRecordBatchStream<ParquetObjectReader> {
-    let uri_format = UriFormat::from_str(&uri).unwrap_or_else(|e| panic!("{}", e));
+    let uri_format = UriFormat::from_str(uri).unwrap_or_else(|e| panic!("{}", e));
 
     let parquet_object_reader = match uri_format {
         UriFormat::File => {
@@ -60,7 +60,7 @@ pub(crate) async fn parquet_reader_from_uri(
             ParquetObjectReader::new(storage_container, meta)
         }
         UriFormat::S3 => {
-            let (bucket, key) = parse_bucket_and_key(&uri);
+            let (bucket, key) = parse_bucket_and_key(uri);
             let storage_container = Arc::new(
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket)
@@ -89,7 +89,7 @@ pub(crate) async fn parquet_writer_from_uri(
     arrow_schema: SchemaRef,
     writer_props: WriterProperties,
 ) -> AsyncArrowWriter<ParquetObjectWriter> {
-    let uri_format = UriFormat::from_str(&uri).unwrap_or_else(|e| panic!("{}", e));
+    let uri_format = UriFormat::from_str(uri).unwrap_or_else(|e| panic!("{}", e));
 
     let parquet_object_writer = match uri_format {
         UriFormat::File => {
@@ -98,6 +98,7 @@ pub(crate) async fn parquet_writer_from_uri(
             // create if not exists
             std::fs::OpenOptions::new()
                 .write(true)
+                .truncate(true)
                 .create(true)
                 .open(uri)
                 .unwrap();
@@ -107,7 +108,7 @@ pub(crate) async fn parquet_writer_from_uri(
             ParquetObjectWriter::new(storage_container, location)
         }
         UriFormat::S3 => {
-            let (bucket, key) = parse_bucket_and_key(&uri);
+            let (bucket, key) = parse_bucket_and_key(uri);
             let storage_container = Arc::new(
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket)

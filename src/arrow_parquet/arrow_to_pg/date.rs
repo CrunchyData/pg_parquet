@@ -6,8 +6,8 @@ use crate::type_compat::i32_to_date;
 use super::ArrowArrayToPgType;
 
 // Date
-impl<'a> ArrowArrayToPgType<'_, Date32Array, Date> for Date {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Date32Array, Date> for Date {
+    fn to_pg_type(
         arr: Date32Array,
         _typoid: Oid,
         _typmod: i32,
@@ -24,8 +24,8 @@ impl<'a> ArrowArrayToPgType<'_, Date32Array, Date> for Date {
 }
 
 // Date[]
-impl<'a> ArrowArrayToPgType<'_, Date32Array, Vec<Option<Date>>> for Vec<Option<Date>> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, Date32Array, Vec<Option<Date>>> for Vec<Option<Date>> {
+    fn to_pg_type(
         arr: Date32Array,
         _typoid: Oid,
         _typmod: i32,

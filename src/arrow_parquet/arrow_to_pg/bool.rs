@@ -4,8 +4,8 @@ use pgrx::{pg_sys::Oid, PgTupleDesc};
 use super::ArrowArrayToPgType;
 
 // Bool
-impl<'a> ArrowArrayToPgType<'_, BooleanArray, bool> for bool {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, BooleanArray, bool> for bool {
+    fn to_pg_type(
         arr: BooleanArray,
         _typoid: Oid,
         _typmod: i32,
@@ -21,8 +21,8 @@ impl<'a> ArrowArrayToPgType<'_, BooleanArray, bool> for bool {
 }
 
 // Bool[]
-impl<'a> ArrowArrayToPgType<'_, BooleanArray, Vec<Option<bool>>> for Vec<Option<bool>> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, BooleanArray, Vec<Option<bool>>> for Vec<Option<bool>> {
+    fn to_pg_type(
         arr: BooleanArray,
         _typoid: Oid,
         _typmod: i32,

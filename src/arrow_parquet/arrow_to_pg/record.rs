@@ -3,13 +3,13 @@ use pgrx::{pg_sys::Oid, prelude::PgHeapTuple, AllocatedByRust, PgTupleDesc};
 
 use crate::pgrx_utils::collect_valid_attributes;
 
-use super::{as_pg_datum, ArrowArrayToPgType};
+use super::{to_pg_datum, ArrowArrayToPgType};
 
 // PgHeapTuple
 impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
     for PgHeapTuple<'a, AllocatedByRust>
 {
-    fn as_pg(
+    fn to_pg_type(
         arr: StructArray,
         _typoid: Oid,
         _typmod: i32,
@@ -33,7 +33,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
 
             let column_data = arr.column_by_name(name).unwrap();
 
-            let datum = as_pg_datum(column_data.into_data(), typoid, typmod);
+            let datum = to_pg_datum(column_data.into_data(), typoid, typmod);
             datums.push(datum);
         }
 
@@ -45,7 +45,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
 impl<'a> ArrowArrayToPgType<'a, StructArray, Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>>
     for Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>
 {
-    fn as_pg(
+    fn to_pg_type(
         arr: StructArray,
         _typoid: Oid,
         _typmod: i32,
@@ -60,7 +60,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, Vec<Option<PgHeapTuple<'a, Allocate
             let tuple = <PgHeapTuple<AllocatedByRust> as ArrowArrayToPgType<
                 StructArray,
                 PgHeapTuple<AllocatedByRust>,
-            >>::as_pg(tuple, _typoid, _typmod, tupledesc.clone());
+            >>::to_pg_type(tuple, _typoid, _typmod, tupledesc.clone());
 
             values.push(tuple);
         }

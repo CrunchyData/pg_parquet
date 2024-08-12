@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 use parquet::basic::Compression;
 
@@ -40,16 +40,16 @@ impl From<ParquetCodecOption> for Compression {
     }
 }
 
-impl ToString for ParquetCodecOption {
-    fn to_string(&self) -> String {
+impl Display for ParquetCodecOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParquetCodecOption::Uncompressed => "uncompressed".to_string(),
-            ParquetCodecOption::Snappy => "snappy".to_string(),
-            ParquetCodecOption::Gzip => "gzip".to_string(),
-            ParquetCodecOption::Lz4 => "lz4".to_string(),
-            ParquetCodecOption::Lz4raw => "lz4raw".to_string(),
-            ParquetCodecOption::Brotli => "brotli".to_string(),
-            ParquetCodecOption::Zstd => "zstd".to_string(),
+            ParquetCodecOption::Uncompressed => write!(f, "uncompressed"),
+            ParquetCodecOption::Snappy => write!(f, "snappy"),
+            ParquetCodecOption::Gzip => write!(f, "gzip"),
+            ParquetCodecOption::Lz4 => write!(f, "lz4"),
+            ParquetCodecOption::Lz4raw => write!(f, "lz4raw"),
+            ParquetCodecOption::Brotli => write!(f, "brotli"),
+            ParquetCodecOption::Zstd => write!(f, "zstd"),
         }
     }
 }

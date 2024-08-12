@@ -4,8 +4,8 @@ use pgrx::{pg_sys::Oid, PgTupleDesc};
 use super::ArrowArrayToPgType;
 
 // Bytea
-impl<'a> ArrowArrayToPgType<'_, BinaryArray, Vec<u8>> for Vec<u8> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, BinaryArray, Vec<u8>> for Vec<u8> {
+    fn to_pg_type(
         arr: BinaryArray,
         _typoid: Oid,
         _typmod: i32,
@@ -20,8 +20,8 @@ impl<'a> ArrowArrayToPgType<'_, BinaryArray, Vec<u8>> for Vec<u8> {
 }
 
 // Bytea[]
-impl<'a> ArrowArrayToPgType<'_, BinaryArray, Vec<Option<Vec<u8>>>> for Vec<Option<Vec<u8>>> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, BinaryArray, Vec<Option<Vec<u8>>>> for Vec<Option<Vec<u8>>> {
+    fn to_pg_type(
         arr: BinaryArray,
         _typoid: Oid,
         _typmod: i32,

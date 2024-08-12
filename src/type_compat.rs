@@ -195,15 +195,15 @@ pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
     let sign = if numeric_str.starts_with('-') { -1 } else { 1 };
     let numeric_str = numeric_str.trim_start_matches('-');
 
-    let integral = numeric_str.split('.').nth(0).unwrap();
-    let mut integral = i128::from_str_radix(integral, 10).unwrap();
+    let integral = numeric_str.split('.').next().unwrap();
+    let mut integral = integral.parse::<i128>().unwrap();
     let fraction = if let Some(fraction) = numeric_str.split('.').nth(1) {
         fraction
     } else {
         "0"
     };
     let fraction_len = fraction.len();
-    let mut fraction = i128::from_str_radix(fraction, 10).unwrap();
+    let mut fraction = fraction.parse::<i128>().unwrap();
     let zeros_needed = if fraction == 0 {
         DECIMAL_SCALE as usize
     } else {
@@ -219,9 +219,7 @@ pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
 
     let mut fraction_digits = vec![];
     if zeros_needed > 0 {
-        for _ in 0..zeros_needed {
-            fraction_digits.push(0);
-        }
+        fraction_digits = vec![0; zeros_needed];
     }
     while fraction > 0 {
         let digit = fraction % 10;
@@ -382,7 +380,7 @@ impl FromDatum for FallbackToText {
         Self: Sized,
     {
         if is_null {
-            return None;
+            None
         } else {
             let output_func = get_output_function_for_typoid(typoid);
 

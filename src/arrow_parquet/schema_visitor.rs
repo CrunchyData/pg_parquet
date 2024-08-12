@@ -61,11 +61,7 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
 
 fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<Field> {
     let field = visit_primitive_schema(typoid, array_name);
-    let list_field = Field::new(
-        array_name,
-        arrow::datatypes::DataType::List(field.into()),
-        true,
-    );
+    let list_field = Field::new(array_name, arrow::datatypes::DataType::List(field), true);
 
     list_field.into()
 }

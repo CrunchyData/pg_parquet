@@ -6,8 +6,8 @@ use crate::type_compat::FallbackToText;
 use super::ArrowArrayToPgType;
 
 // Text representation of any type
-impl<'a> ArrowArrayToPgType<'_, StringArray, FallbackToText> for FallbackToText {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, StringArray, FallbackToText> for FallbackToText {
+    fn to_pg_type(
         arr: StringArray,
         typoid: Oid,
         typmod: i32,
@@ -24,10 +24,10 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, FallbackToText> for FallbackToText 
 }
 
 // Text[] representation of any type
-impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<FallbackToText>>>
+impl ArrowArrayToPgType<'_, StringArray, Vec<Option<FallbackToText>>>
     for Vec<Option<FallbackToText>>
 {
-    fn as_pg(
+    fn to_pg_type(
         arr: StringArray,
         typoid: Oid,
         typmod: i32,

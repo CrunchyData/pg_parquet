@@ -43,7 +43,7 @@ pub(crate) mod timetz;
 pub(crate) mod uuid;
 
 pub(crate) trait PgTypeToArrowArray<T: IntoDatum + FromDatum> {
-    fn as_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef);
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef);
 }
 
 pub(crate) fn collect_attribute_array_from_tuples<'a>(
@@ -327,24 +327,22 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
                         attribute_typmod,
                     )
                 }
+            } else if is_composite_type(attribute_typoid) {
+                collect_tuple_attribute_array_from_tuples_helper(
+                    tuples,
+                    tupledesc,
+                    attribute_name,
+                    attribute_typoid,
+                    attribute_typmod,
+                )
             } else {
-                if is_composite_type(attribute_typoid) {
-                    collect_tuple_attribute_array_from_tuples_helper(
-                        tuples,
-                        tupledesc,
-                        attribute_name,
-                        attribute_typoid,
-                        attribute_typmod,
-                    )
-                } else {
-                    set_fallback_typoid(attribute_typoid);
-                    collect_attribute_array_from_tuples_helper::<FallbackToText>(
-                        tuples,
-                        attribute_name,
-                        attribute_typoid,
-                        attribute_typmod,
-                    )
-                }
+                set_fallback_typoid(attribute_typoid);
+                collect_attribute_array_from_tuples_helper::<FallbackToText>(
+                    tuples,
+                    attribute_name,
+                    attribute_typoid,
+                    attribute_typmod,
+                )
             }
         }
     }
@@ -378,7 +376,7 @@ where
     }
 
     let (field, array) =
-        attribute_values.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
+        attribute_values.to_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
     (field, array, tuples)
 }
 
@@ -432,7 +430,7 @@ fn collect_tuple_attribute_array_from_tuples_helper<'a>(
     }
 
     let (field, array) =
-        attribute_values.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
+        attribute_values.to_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
     (field, array, tuples_restored)
 }
 
@@ -487,14 +485,14 @@ fn collect_array_of_tuple_attribute_array_from_tuples_helper<'a>(
     }
 
     let (field, array) =
-        attribute_values.as_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
+        attribute_values.to_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
     (field, array, tuples_restored)
 }
 
-fn tuple_from_datum_and_tupdesc<'a>(
+fn tuple_from_datum_and_tupdesc(
     datum: Datum,
-    tupledesc: PgTupleDesc<'a>,
-) -> PgHeapTuple<'a, AllocatedByRust> {
+    tupledesc: PgTupleDesc,
+) -> PgHeapTuple<AllocatedByRust> {
     unsafe {
         let htup_header = pg_sys::pg_detoast_datum(datum.cast_mut_ptr()) as pg_sys::HeapTupleHeader;
 
@@ -506,10 +504,10 @@ fn tuple_from_datum_and_tupdesc<'a>(
     }
 }
 
-fn tuple_array_from_datum_and_tupdesc<'a>(
+fn tuple_array_from_datum_and_tupdesc(
     datum: Datum,
-    tupledesc: PgTupleDesc<'a>,
-) -> Vec<Option<PgHeapTuple<'a, AllocatedByRust>>> {
+    tupledesc: PgTupleDesc,
+) -> Vec<Option<PgHeapTuple<AllocatedByRust>>> {
     unsafe {
         let arraytype = pg_sys::pg_detoast_datum(datum.cast_mut_ptr()) as *mut pg_sys::ArrayType;
 
@@ -546,7 +544,7 @@ fn tuple_array_from_datum_and_tupdesc<'a>(
 
         let mut tuples = vec![];
 
-        for (datum, isnull) in datums.into_iter().zip(nulls.into_iter()) {
+        for (datum, isnull) in datums.iter().zip(nulls.iter()) {
             if *isnull {
                 tuples.push(None);
             } else {

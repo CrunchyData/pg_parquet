@@ -26,14 +26,14 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
 
         let mut relation = PgRelation::from_pg(std::ptr::null_mut());
 
-        if copy_has_relation(&pstmt) {
-            let rel_oid = copy_relation_oid(&pstmt);
-            let lock_mode = copy_lock_mode(&pstmt);
+        if copy_has_relation(pstmt) {
+            let rel_oid = copy_relation_oid(pstmt);
+            let lock_mode = copy_lock_mode(pstmt);
             relation = PgRelation::with_lock(rel_oid, lock_mode);
         }
 
         // prepare raw query
-        let raw_query = prepare_copy_to_raw_stmt(&pstmt, &copy_stmt, &relation);
+        let raw_query = prepare_copy_to_raw_stmt(pstmt, &copy_stmt, &relation);
 
         // analyze and rewrite raw query
         let rewritten_queries = pg_analyze_and_rewrite_fixedparams(
@@ -93,8 +93,8 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
         // drop portal
         PortalDrop(portal.as_ptr(), false);
 
-        return completion_tag.nprocessed;
-    };
+        completion_tag.nprocessed
+    }
 }
 
 fn prepare_copy_to_raw_stmt(

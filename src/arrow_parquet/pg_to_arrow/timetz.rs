@@ -16,7 +16,7 @@ use crate::{
 
 // TimeTz
 impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let timetz_array = self
             .into_iter()
             .map(|timetz| timetz.and_then(timetz_to_i64))
@@ -33,7 +33,7 @@ impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
 impl PgTypeToArrowArray<Vec<Option<TimeWithTimeZone>>>
     for Vec<Option<Vec<Option<TimeWithTimeZone>>>>
 {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true);

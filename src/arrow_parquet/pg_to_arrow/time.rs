@@ -16,7 +16,7 @@ use crate::{
 
 // Time
 impl PgTypeToArrowArray<Time> for Vec<Option<Time>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let time_array = self
             .into_iter()
             .map(|time| time.and_then(time_to_i64))
@@ -31,7 +31,7 @@ impl PgTypeToArrowArray<Time> for Vec<Option<Time>> {
 
 // Time[]
 impl PgTypeToArrowArray<Vec<Option<Time>>> for Vec<Option<Vec<Option<Time>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true);

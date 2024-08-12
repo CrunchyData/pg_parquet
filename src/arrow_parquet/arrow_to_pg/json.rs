@@ -4,8 +4,8 @@ use pgrx::{pg_sys::Oid, Json, PgTupleDesc};
 use super::ArrowArrayToPgType;
 
 // Json
-impl<'a> ArrowArrayToPgType<'_, StringArray, Json> for Json {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, StringArray, Json> for Json {
+    fn to_pg_type(
         arr: StringArray,
         _typoid: Oid,
         _typmod: i32,
@@ -22,8 +22,8 @@ impl<'a> ArrowArrayToPgType<'_, StringArray, Json> for Json {
 }
 
 // Json[]
-impl<'a> ArrowArrayToPgType<'_, StringArray, Vec<Option<Json>>> for Vec<Option<Json>> {
-    fn as_pg(
+impl ArrowArrayToPgType<'_, StringArray, Vec<Option<Json>>> for Vec<Option<Json>> {
+    fn to_pg_type(
         arr: StringArray,
         _typoid: Oid,
         _typmod: i32,

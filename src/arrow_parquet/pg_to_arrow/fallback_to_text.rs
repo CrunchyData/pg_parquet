@@ -16,11 +16,11 @@ use crate::{
 
 // Text representation of any type
 impl PgTypeToArrowArray<FallbackToText> for Vec<Option<FallbackToText>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let field = Field::new(name, DataType::Utf8, true);
         let array = self
             .into_iter()
-            .map(|val| val.map(|val| String::from(val)))
+            .map(|val| val.map(String::from))
             .collect::<Vec<_>>();
         let array = StringArray::from(array);
         (Arc::new(field), Arc::new(array))
@@ -29,7 +29,7 @@ impl PgTypeToArrowArray<FallbackToText> for Vec<Option<FallbackToText>> {
 
 // Text[] representation of any type
 impl PgTypeToArrowArray<Vec<Option<FallbackToText>>> for Vec<Option<Vec<Option<FallbackToText>>>> {
-    fn as_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Utf8, true);
@@ -37,7 +37,7 @@ impl PgTypeToArrowArray<Vec<Option<FallbackToText>>> for Vec<Option<Vec<Option<F
         let array = self.into_iter().flatten().flatten().collect::<Vec<_>>();
         let array = array
             .into_iter()
-            .map(|val| val.map(|val| String::from(val)))
+            .map(|val| val.map(String::from))
             .collect::<Vec<_>>();
 
         let array = StringArray::from(array);
