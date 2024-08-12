@@ -4,7 +4,7 @@ use parquet::basic::Compression;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub(crate) enum ParquetCodecOption {
+pub enum ParquetCodecOption {
     Uncompressed,
     Snappy,
     Gzip,

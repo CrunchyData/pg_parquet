@@ -78,7 +78,7 @@ fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List) {
 }
 
 #[pg_guard]
-pub extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tupledesc: TupleDesc) {
+extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tupledesc: TupleDesc) {
     let parquet_dest = dest as *mut CopyToParquetDestReceiver;
     let mut parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
 
@@ -108,7 +108,7 @@ pub extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tuplede
 }
 
 #[pg_guard]
-pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceiver) -> bool {
+extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceiver) -> bool {
     let parquet_dest = dest as *mut CopyToParquetDestReceiver;
     let mut parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
 
@@ -151,7 +151,7 @@ pub extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceive
 }
 
 #[pg_guard]
-pub extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
+extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
     let parquet_dest = dest as *mut CopyToParquetDestReceiver;
     let mut parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
 
@@ -172,7 +172,7 @@ pub extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
 }
 
 #[pg_guard]
-pub extern "C" fn copy_destroy(_dest: *mut DestReceiver) {
+extern "C" fn copy_destroy(_dest: *mut DestReceiver) {
     ()
 }
 

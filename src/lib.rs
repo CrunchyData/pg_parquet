@@ -6,6 +6,12 @@ mod parquet_copy_hook;
 mod pgrx_utils;
 mod type_compat;
 
+// re-export external api
+#[allow(unused_imports)]
+pub use crate::arrow_parquet::codec::ParquetCodecOption;
+#[allow(unused_imports)]
+pub use crate::parquet_copy_hook::copy_to_dest_receiver::create_copy_to_parquet_dest_receiver;
+
 pgrx::pg_module_magic!();
 
 #[allow(static_mut_refs)]
