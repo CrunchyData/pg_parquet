@@ -8,8 +8,8 @@ use pgrx::{pg_sys::Oid, AnyNumeric};
 
 use crate::{
     arrow_parquet::{
+        arrow_utils::{arrow_array_offsets, create_arrow_list_array},
         pg_to_arrow::PgTypeToArrowArray,
-        utils::{arrow_array_offsets, create_arrow_list_array},
     },
     type_compat::{numeric_to_i128, DECIMAL_PRECISION, DECIMAL_SCALE},
 };

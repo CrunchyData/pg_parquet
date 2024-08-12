@@ -8,8 +8,8 @@ use pgrx::{pg_sys::Oid, Interval};
 
 use crate::{
     arrow_parquet::{
+        arrow_utils::{arrow_array_offsets, create_arrow_list_array},
         pg_to_arrow::PgTypeToArrowArray,
-        utils::{arrow_array_offsets, create_arrow_list_array},
     },
     type_compat::interval_to_nano,
 };
@@ -35,8 +35,6 @@ impl PgTypeToArrowArray<Vec<Option<Interval>>> for Vec<Option<Vec<Option<Interva
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Interval(IntervalUnit::MonthDayNano), true);
-
-        
 
         let array = self
             .into_iter()

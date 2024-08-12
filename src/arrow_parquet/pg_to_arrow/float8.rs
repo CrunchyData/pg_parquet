@@ -7,8 +7,8 @@ use arrow::{
 use pgrx::pg_sys::Oid;
 
 use crate::arrow_parquet::{
+    arrow_utils::{arrow_array_offsets, create_arrow_list_array},
     pg_to_arrow::PgTypeToArrowArray,
-    utils::{arrow_array_offsets, create_arrow_list_array},
 };
 
 // Float64
@@ -26,8 +26,6 @@ impl PgTypeToArrowArray<Vec<Option<f64>>> for Vec<Option<Vec<Option<f64>>>> {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let field = Field::new(name, DataType::Float64, true);
-
-        
 
         let array = self.into_iter().flatten().flatten().collect::<Vec<_>>();
         let array = Float64Array::from(array);

@@ -13,7 +13,7 @@ use tokio::runtime::Runtime;
 
 use crate::{arrow_parquet::arrow_to_pg::as_pg_datum, pgrx_utils::collect_valid_attributes};
 
-use super::parquet_uri_utils::parquet_reader_from_uri;
+use super::uri_utils::parquet_reader_from_uri;
 
 pub(crate) struct ParquetReaderContext {
     buffer: Vec<u8>,

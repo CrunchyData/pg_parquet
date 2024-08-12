@@ -8,8 +8,8 @@ use arrow_schema::ExtensionType;
 use pgrx::{pg_sys::Oid, Uuid};
 
 use crate::arrow_parquet::{
+    arrow_utils::{arrow_array_offsets, create_arrow_list_array},
     pg_to_arrow::PgTypeToArrowArray,
-    utils::{arrow_array_offsets, create_arrow_list_array},
 };
 
 // Uuid

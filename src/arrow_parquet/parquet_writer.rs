@@ -11,9 +11,8 @@ use tokio::runtime::Runtime;
 
 use crate::{
     arrow_parquet::{
-        codec::ParquetCodecOption, parquet_uri_utils::parquet_writer_from_uri,
-        pg_to_arrow::record::collect_attribute_array_from_tuples,
-        schema_visitor::parse_arrow_schema_from_tupledesc,
+        codec::ParquetCodecOption, pg_to_arrow::collect_attribute_array_from_tuples,
+        schema_visitor::parse_arrow_schema_from_tupledesc, uri_utils::parquet_writer_from_uri,
     },
     pgrx_utils::collect_valid_attributes,
 };

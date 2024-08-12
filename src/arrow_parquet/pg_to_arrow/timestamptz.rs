@@ -8,8 +8,8 @@ use pgrx::{pg_sys::Oid, TimestampWithTimeZone};
 
 use crate::{
     arrow_parquet::{
+        arrow_utils::{arrow_array_offsets, create_arrow_list_array},
         pg_to_arrow::PgTypeToArrowArray,
-        utils::{arrow_array_offsets, create_arrow_list_array, },
     },
     type_compat::timestamptz_to_i64,
 };
@@ -45,8 +45,6 @@ impl PgTypeToArrowArray<Vec<Option<TimestampWithTimeZone>>>
             DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
             true,
         );
-
-        
 
         let array = self
             .into_iter()
