@@ -17,12 +17,12 @@ pg16 = ["pgrx/pg16", "pgrx-tests/pg16" ]
 pg_test = []
 
 [dependencies]
-arrow = {git = "https://github.com/aykut-bozkurt/arrow-rs.git", rev = "ba8cb48", default-features = false}
-arrow-schema = {git = "https://github.com/aykut-bozkurt/arrow-rs.git", rev = "ba8cb48", default-features = false}
+arrow = {git = "https://github.com/aykut-bozkurt/arrow-rs.git", rev = "adc57b1", default-features = false}
+arrow-schema = {git = "https://github.com/aykut-bozkurt/arrow-rs.git", rev = "adc57b1", default-features = false}
 bytes = "1"
 futures = "0.3"
 object_store = {version = "0.10", default-features = false, features = ["aws"]}
-parquet = {git = "https://github.com/aykut-bozkurt/arrow-rs.git", rev = "ba8cb48", default-features = false, features = [
+parquet = {git = "https://github.com/aykut-bozkurt/arrow-rs.git", rev = "adc57b1", default-features = false, features = [
     "arrow",
     "snap",
     "brotli",

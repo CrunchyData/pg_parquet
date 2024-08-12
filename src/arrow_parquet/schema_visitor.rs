@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow::datatypes::{Field, Fields, Schema};
 use arrow_schema::ExtensionType;
@@ -170,6 +170,10 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
             arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             true,
         )
+        .with_metadata(HashMap::from_iter(vec![(
+            "adjusted_to_utc".into(),
+            "true".into(),
+        )]))
         .into(),
         INTERVALOID => Field::new(
             elem_name,

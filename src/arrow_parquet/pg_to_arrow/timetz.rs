@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use arrow::{
     array::{ArrayRef, Time64MicrosecondArray},
@@ -22,7 +22,9 @@ impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
             .map(|timetz| timetz.and_then(timetz_to_i64))
             .collect::<Vec<_>>();
 
-        let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true);
+        let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true).with_metadata(
+            HashMap::from_iter(vec![("adjusted_to_utc".into(), "true".into())]),
+        );
 
         let array = Time64MicrosecondArray::from(timetz_array);
         (Arc::new(field), Arc::new(array))
@@ -36,7 +38,9 @@ impl PgTypeToArrowArray<Vec<Option<TimeWithTimeZone>>>
     fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true);
+        let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true).with_metadata(
+            HashMap::from_iter(vec![("adjusted_to_utc".into(), "true".into())]),
+        );
 
         let array = self
             .into_iter()

@@ -5,7 +5,7 @@ use pgrx::{
     direct_function_call,
     pg_sys::{
         self, fmgr_info, getTypeInputInfo, getTypeOutputInfo, AsPgCStr, FmgrInfo,
-        InputFunctionCall, InvalidOid, Oid, OutputFunctionCall, TimeTzADT, TIME_UTC,
+        InputFunctionCall, InvalidOid, Oid, OutputFunctionCall, TimeTzADT,
     },
     AnyNumeric, Date, FromDatum, Interval, IntoDatum, PgBox, Time, TimeWithTimeZone, Timestamp,
     TimestampWithTimeZone,
@@ -146,30 +146,11 @@ pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> Option<i64> {
 }
 
 pub(crate) fn i64_to_timetz(i64_timetz: i64) -> Option<TimeWithTimeZone> {
-    let timetz = TimeTzADT {
+    let adjusted_timetz = TimeTzADT {
         time: i64_timetz,
-        zone: TIME_UTC as _,
+        zone: 0,
     };
-    let timetz: TimeWithTimeZone = timetz.into();
-
-    let timezone_as_secs: AnyNumeric = unsafe {
-        direct_function_call(
-            pg_sys::extract_timetz,
-            &["timezone".into_datum(), timetz.into_datum()],
-        )
-    }
-    .unwrap();
-
-    let timezone_as_secs: f64 = timezone_as_secs.try_into().unwrap();
-    let timezone_as_interval = Interval::from_seconds(timezone_as_secs);
-    let adjusted_timetz: TimeWithTimeZone = unsafe {
-        direct_function_call(
-            pg_sys::timetz_pl_interval,
-            &[timetz.into_datum(), timezone_as_interval.into_datum()],
-        )
-        .unwrap()
-    };
-
+    let adjusted_timetz: TimeWithTimeZone = adjusted_timetz.into();
     Some(adjusted_timetz)
 }
 
