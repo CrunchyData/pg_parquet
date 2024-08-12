@@ -3,6 +3,7 @@ use std::{str::FromStr, sync::Arc};
 use arrow::datatypes::SchemaRef;
 use object_store::aws::AmazonS3Builder;
 use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
+use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::{
     arrow::{
         async_reader::{ParquetObjectReader, ParquetRecordBatchStream},
@@ -12,8 +13,6 @@ use parquet::{
 };
 
 use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
-
-use super::parquet_object_writer::ParquetObjectWriter;
 
 enum UriFormat {
     File,

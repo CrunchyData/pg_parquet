@@ -3,7 +3,7 @@ use arrow::{
     datatypes::FieldRef,
 };
 use parquet::{
-    arrow::AsyncArrowWriter,
+    arrow::{async_writer::ParquetObjectWriter, AsyncArrowWriter},
     file::properties::{EnabledStatistics, WriterProperties},
 };
 use pgrx::{heap_tuple::PgHeapTuple, pg_sys::RECORDOID, AllocatedByRust, PgTupleDesc};
@@ -17,8 +17,6 @@ use crate::{
     },
     pgrx_utils::collect_valid_attributes,
 };
-
-use super::parquet_object_writer::ParquetObjectWriter;
 
 pub(crate) struct ParquetWriterContext<'a> {
     runtime: Runtime,
