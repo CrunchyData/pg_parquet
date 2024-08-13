@@ -16,7 +16,10 @@ use pgrx::{
 
 use crate::{
     pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc},
-    type_compat::{set_fallback_typoid, FallbackToText},
+    type_compat::{
+        extract_precision_from_numeric_typmod, set_fallback_typoid, FallbackToText,
+        MAX_DECIMAL_PRECISION,
+    },
 };
 
 pub(crate) mod bool;
@@ -124,18 +127,44 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
             attribute_element_typoid,
             attribute_typmod,
         ),
-        NUMERICOID => collect_attribute_array_from_tuples_helper::<AnyNumeric>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        NUMERICARRAYOID => collect_attribute_array_from_tuples_helper::<Vec<Option<AnyNumeric>>>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
+        NUMERICOID => {
+            let precision = extract_precision_from_numeric_typmod(attribute_typmod);
+            if precision > MAX_DECIMAL_PRECISION {
+                set_fallback_typoid(attribute_typoid);
+                collect_attribute_array_from_tuples_helper::<FallbackToText>(
+                    tuples,
+                    attribute_name,
+                    attribute_typoid,
+                    attribute_typmod,
+                )
+            } else {
+                collect_attribute_array_from_tuples_helper::<AnyNumeric>(
+                    tuples,
+                    attribute_name,
+                    attribute_typoid,
+                    attribute_typmod,
+                )
+            }
+        }
+        NUMERICARRAYOID => {
+            let precision = extract_precision_from_numeric_typmod(attribute_typmod);
+            if precision > MAX_DECIMAL_PRECISION {
+                set_fallback_typoid(attribute_element_typoid);
+                collect_attribute_array_from_tuples_helper::<Vec<Option<FallbackToText>>>(
+                    tuples,
+                    attribute_name,
+                    attribute_element_typoid,
+                    attribute_typmod,
+                )
+            } else {
+                collect_attribute_array_from_tuples_helper::<Vec<Option<AnyNumeric>>>(
+                    tuples,
+                    attribute_name,
+                    attribute_element_typoid,
+                    attribute_typmod,
+                )
+            }
+        }
         BOOLOID => collect_attribute_array_from_tuples_helper::<bool>(
             tuples,
             attribute_name,

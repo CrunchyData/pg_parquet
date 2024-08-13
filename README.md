@@ -95,17 +95,17 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `real`            | FLOAT                     |                  |
 | `oid`             | INT32                     |                  |
 | `double`          | DOUBLE                    |                  |
-| `numeric(38,8)`   | FIXED_LEN_BYTE_ARRAY(16)  | DECIMAL(128)     |
+| `numeric`(1)      | FIXED_LEN_BYTE_ARRAY(16)  | DECIMAL(128)     |
 | `"char"`          | BYTE_ARRAY                | STRING           |
 | `text`            | BYTE_ARRAY                | STRING           |
 | `json`            | BYTE_ARRAY                | JSON             |
 | `jsonb`           | BYTE_ARRAY                | JSON             |
 | `bytea`           | BYTE_ARRAY                |                  |
-| `date`            | INT32                     | DATE             |
+| `date` (2)        | INT32                     | DATE             |
 | `timestamp`       | INT64                     | TIMESTAMP_MICROS |
-| `timestamptz`     | INT64                     | TIMESTAMP_MICROS |
+| `timestamptz` (3) | INT64                     | TIMESTAMP_MICROS |
 | `time`            | INT64                     | TIME_MICROS      |
-| `timetz`          | INT64                     | TIME_MICROS      |
+| `timetz`(3)       | INT64                     | TIME_MICROS      |
 | `interval`        | FIXED_LEN_BYTE_ARRAY(12)  | INTERVAL         |
 | `uuid`            | FIXED_LEN_BYTE_ARRAY(16)  | UUID             |
 | `bool[]`          | BOOLEAN                   | LIST             |
@@ -114,7 +114,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `bigint[]`        | INT64                     | LIST             |
 | `real[]`          | FLOAT                     | LIST             |
 | `double[]`        | DOUBLE                    | LIST             |
-| `numeric(38,8)[]` | FIXED_LEN_BYTE_ARRAY(16)  | LIST             |
+| `numeric[]`       | FIXED_LEN_BYTE_ARRAY(16)  | LIST             |
 | `"char"[]`        | BYTE_ARRAY                | LIST             |
 | `text[]`          | BYTE_ARRAY                | LIST             |
 | `json[]`          | BYTE_ARRAY                | LIST             |
@@ -128,6 +128,11 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `interval[]`      | FIXED_LEN_BYTE_ARRAY(12)  | LIST             |
 | `uuid[]`          | FIXED_LEN_BYTE_ARRAY(16)  | LIST             |
 | `composite`       | STRUCT                    |                  |
+
+> [!WARNING]
+> (1) The `numeric` types with <= `38` precision is represented as `FIXED_LEN_BYTE_ARRAY(16)` with `DECIMAL(128)` logical type. The `numeric` types with > `38` precision is represented as `BYTE_ARRAY` with `STRING` logical type.
+> (2) The `date` type is represented according to `Unix epoch` when writing to Parquet files. It is converted back according to `PostgreSQL epoch` when reading from Parquet files.
+> (3) The `timestamptz` and `timetz` types are adjusted to `UTC` when writing to Parquet files. They are converted back with `UTC` timezone when reading from Parquet files.
 
 > [!NOTE]
 > Any type that does not have a corresponding Parquet type will be represented, as a fallback mechanism, as `BYTE_ARRAY` with `STRING` logical type. e.g. `enum`

@@ -29,7 +29,7 @@ mod tests {
     use crate::arrow_parquet::codec::ParquetCodecOption;
     use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
     use crate::type_compat::{i128_to_numeric, set_fallback_typoid, FallbackToText};
-    use pgrx::pg_sys::{Oid, BITOID, BPCHAROID, NAMEOID, VARBITOID, VARCHAROID};
+    use pgrx::pg_sys::{Oid, BITOID, BPCHAROID, NAMEOID, NUMERICOID, VARBITOID, VARCHAROID};
     use pgrx::{
         composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB,
         Spi, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
@@ -232,6 +232,10 @@ mod tests {
                 .map(|timetz| timetz.map(|timetz| timetz.to_utc()))
                 .collect(),
         )
+    }
+
+    fn make_numeric_typmod(precision: i32, scale: i32) -> i32 {
+        ((precision << 16) | (scale & 0x7ff)) + pgrx::pg_sys::VARHDRSZ as i32
     }
 
     struct TestResult<T> {
@@ -1230,20 +1234,70 @@ mod tests {
 
     #[pg_test]
     fn test_numeric() {
-        let test_table = TestTable::<AnyNumeric>::new("numeric".into());
-        let values = (1_i32..=10).map(|v| i128_to_numeric(v as i128)).collect();
+        let test_table = TestTable::<AnyNumeric>::new("numeric(10,4)".into());
+        let values = (1_i32..=10)
+            .map(|v| i128_to_numeric((v * 10000) as i128, 4))
+            .collect();
         test_helper(test_table, values);
     }
 
     #[pg_test]
     fn test_numeric_array() {
-        let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric[]".into());
+        let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric(10,4)[]".into());
         let values = (1_i32..=10)
             .map(|v| {
                 Some(vec![
-                    i128_to_numeric(v as i128),
-                    i128_to_numeric((v + 1) as i128),
-                    i128_to_numeric((v + 2) as i128),
+                    i128_to_numeric((v * 10000) as i128, 4),
+                    i128_to_numeric((v * 10000) as i128, 4),
+                    i128_to_numeric((v * 10000) as i128, 4),
+                ])
+            })
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_huge_numeric() {
+        let typmod = make_numeric_typmod(100, 4);
+        set_fallback_typoid(NUMERICOID);
+
+        let test_table = TestTable::<FallbackToText>::new("numeric(100,4)".into());
+        let values = (1_i32..=10)
+            .map(|v| {
+                Some(FallbackToText::new(
+                    v.to_string().repeat(40),
+                    NUMERICOID,
+                    typmod,
+                ))
+            })
+            .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_huge_numeric_array() {
+        let typmod = make_numeric_typmod(100, 4);
+        set_fallback_typoid(NUMERICOID);
+
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("numeric(100,4)[]".into());
+        let values = (1_i32..=10)
+            .map(|v| {
+                Some(vec![
+                    Some(FallbackToText::new(
+                        v.to_string().repeat(40),
+                        NUMERICOID,
+                        typmod,
+                    )),
+                    Some(FallbackToText::new(
+                        (v + 1).to_string().repeat(40),
+                        NUMERICOID,
+                        typmod,
+                    )),
+                    Some(FallbackToText::new(
+                        (v + 2).to_string().repeat(40),
+                        NUMERICOID,
+                        typmod,
+                    )),
                 ])
             })
             .collect();

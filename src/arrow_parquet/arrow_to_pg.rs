@@ -20,7 +20,10 @@ use pgrx::{
 
 use crate::{
     pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc},
-    type_compat::{set_fallback_typoid, FallbackToText},
+    type_compat::{
+        extract_precision_from_numeric_typmod, set_fallback_typoid, FallbackToText,
+        MAX_DECIMAL_PRECISION,
+    },
 };
 
 pub(crate) mod bool;
@@ -156,13 +159,27 @@ fn to_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
             val.into_datum()
         }
         NUMERICOID => {
-            let val = <AnyNumeric as ArrowArrayToPgType<Decimal128Array, AnyNumeric>>::to_pg_type(
-                primitive_array.into(),
-                typoid,
-                typmod,
-                None,
-            );
-            val.into_datum()
+            let precision = extract_precision_from_numeric_typmod(typmod);
+            if precision > MAX_DECIMAL_PRECISION {
+                set_fallback_typoid(typoid);
+                let val =
+                    <FallbackToText as ArrowArrayToPgType<StringArray, FallbackToText>>::to_pg_type(
+                        primitive_array.into(),
+                        typoid,
+                        typmod,
+                        None,
+                    );
+                val.into_datum()
+            } else {
+                let val =
+                    <AnyNumeric as ArrowArrayToPgType<Decimal128Array, AnyNumeric>>::to_pg_type(
+                        primitive_array.into(),
+                        typoid,
+                        typmod,
+                        None,
+                    );
+                val.into_datum()
+            }
         }
         DATEOID => {
             let val = <Date as ArrowArrayToPgType<Date32Array, Date>>::to_pg_type(
@@ -377,11 +394,25 @@ fn to_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
             val.into_datum()
         }
         NUMERICARRAYOID => {
-            let val = <Vec<Option<AnyNumeric>> as ArrowArrayToPgType<
-                Decimal128Array,
-                Vec<Option<AnyNumeric>>,
-            >>::to_pg_type(list_array.into(), element_typoid, typmod, None);
-            val.into_datum()
+            let precision = extract_precision_from_numeric_typmod(typmod);
+            if precision > MAX_DECIMAL_PRECISION {
+                set_fallback_typoid(element_typoid);
+                let val = <Vec<Option<FallbackToText>> as ArrowArrayToPgType<
+                    StringArray,
+                    Vec<Option<FallbackToText>>,
+                >>::to_pg_type(
+                    list_array.into(), element_typoid, typmod, None
+                );
+                val.into_datum()
+            } else {
+                let val = <Vec<Option<AnyNumeric>> as ArrowArrayToPgType<
+                    Decimal128Array,
+                    Vec<Option<AnyNumeric>>,
+                >>::to_pg_type(
+                    list_array.into(), element_typoid, typmod, None
+                );
+                val.into_datum()
+            }
         }
         DATEARRAYOID => {
             let val =

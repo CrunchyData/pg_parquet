@@ -11,8 +11,7 @@ use pgrx::{
     TimestampWithTimeZone,
 };
 
-pub(crate) const DECIMAL_PRECISION: u8 = 38;
-pub(crate) const DECIMAL_SCALE: i8 = 8;
+pub(crate) const MAX_DECIMAL_PRECISION: usize = 38;
 
 pub(crate) fn date_to_i32(date: Date) -> Option<i32> {
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
@@ -168,7 +167,7 @@ pub(crate) fn nano_to_interval(nano: IntervalMonthDayNano) -> Option<Interval> {
     Some(Interval::new(months, days, microseconds).unwrap())
 }
 
-pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
+pub(crate) fn numeric_to_i128(numeric: AnyNumeric, scale: usize) -> Option<i128> {
     let numeric_str: &CStr =
         unsafe { direct_function_call(pg_sys::numeric_out, &[numeric.into_datum()]).unwrap() };
     let numeric_str = numeric_str.to_str().unwrap();
@@ -186,14 +185,14 @@ pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
     let fraction_len = fraction.len();
     let mut fraction = fraction.parse::<i128>().unwrap();
     let zeros_needed = if fraction == 0 {
-        DECIMAL_SCALE as usize
+        scale
     } else {
-        DECIMAL_SCALE as usize - fraction_len
+        scale - fraction_len
     };
 
     let mut integral_digits = vec![];
     while integral > 0 {
-        let digit = integral % 10;
+        let digit = (integral % 10) as i8;
         integral_digits.push(digit);
         integral /= 10;
     }
@@ -203,7 +202,7 @@ pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
         fraction_digits = vec![0; zeros_needed];
     }
     while fraction > 0 {
-        let digit = fraction % 10;
+        let digit = (fraction % 10) as i8;
         fraction_digits.push(digit);
         fraction /= 10;
     }
@@ -216,48 +215,40 @@ pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
 
     let mut decimal: i128 = 0;
     for (i, digit) in digits_ordered_and_merged.iter().rev().enumerate() {
-        decimal += digit * 10_i128.pow(i as u32);
+        decimal += *digit as i128 * 10_i128.pow(i as u32);
     }
     decimal *= sign;
 
     Some(decimal)
 }
 
-pub(crate) fn i128_to_numeric(i128_decimal: i128) -> Option<AnyNumeric> {
+pub(crate) fn i128_to_numeric(i128_decimal: i128, scale: usize) -> Option<AnyNumeric> {
     let sign = if i128_decimal < 0 { "-" } else { "" };
     let i128_decimal = i128_decimal.abs();
 
     let mut decimal_digits = vec![];
     let mut decimal = i128_decimal;
     while decimal > 0 {
-        let digit = decimal % 10;
+        let digit = (decimal % 10) as i8;
         decimal_digits.push(digit);
         decimal /= 10;
     }
 
-    let mut integral = vec![];
-    let mut fraction = vec![];
-    let mut is_integral = false;
-    for digit in decimal_digits.into_iter().rev() {
-        if is_integral {
-            integral.push(digit);
-        } else {
-            fraction.push(digit);
-        }
-        if fraction.len() == DECIMAL_SCALE as usize {
-            is_integral = true;
-        }
-    }
-
-    let integral = integral
-        .into_iter()
+    let fraction = decimal_digits
+        .iter()
+        .take(scale)
+        .map(|v| v.to_string())
         .rev()
-        .map(|d| d.to_string())
-        .collect::<String>();
-    let fraction = fraction
-        .into_iter()
-        .map(|d| d.to_string())
-        .collect::<String>();
+        .reduce(|acc, v| acc + &v)
+        .unwrap_or_default();
+
+    let integral = decimal_digits
+        .iter()
+        .skip(scale)
+        .map(|v| v.to_string())
+        .rev()
+        .reduce(|acc, v| acc + &v)
+        .unwrap_or_default();
 
     let numeric_str = format!("{}{}.{}", sign, integral, fraction);
     let numeric_str = std::ffi::CString::new(numeric_str).unwrap();
@@ -271,6 +262,18 @@ pub(crate) fn i128_to_numeric(i128_decimal: i128) -> Option<AnyNumeric> {
     };
 
     Some(numeric)
+}
+
+// taken from PG's numeric.c
+#[inline]
+pub(crate) fn extract_precision_from_numeric_typmod(typmod: i32) -> usize {
+    (((typmod - pg_sys::VARHDRSZ as i32) >> 16) & 0xffff) as usize
+}
+
+// taken from PG's numeric.c
+#[inline]
+pub(crate) fn extract_scale_from_numeric_typmod(typmod: i32) -> usize {
+    ((((typmod - pg_sys::VARHDRSZ as i32) & 0x7ff) ^ 1024) - 1024) as usize
 }
 
 // we need to set this just before converting FallbackToText to Datum

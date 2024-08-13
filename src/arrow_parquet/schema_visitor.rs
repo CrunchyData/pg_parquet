@@ -15,7 +15,10 @@ use crate::{
         array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
         tuple_desc,
     },
-    type_compat::{set_fallback_typoid, DECIMAL_PRECISION, DECIMAL_SCALE},
+    type_compat::{
+        extract_precision_from_numeric_typmod, extract_scale_from_numeric_typmod,
+        set_fallback_typoid, MAX_DECIMAL_PRECISION,
+    },
 };
 
 pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> String {
@@ -50,7 +53,7 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
             let attribute_element_typoid = array_element_typoid(attribute_typoid);
             visit_list_schema(attribute_element_typoid, attribute_typmod, attribute_name)
         } else {
-            visit_primitive_schema(attribute_typoid, attribute_name)
+            visit_primitive_schema(attribute_typoid, attribute_typmod, attribute_name)
         };
 
         struct_attribute_fields.push(field);
@@ -59,8 +62,12 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
     Schema::new(Fields::from(struct_attribute_fields))
 }
 
-fn create_list_field_from_primitive_field(array_name: &str, typoid: Oid) -> Arc<Field> {
-    let field = visit_primitive_schema(typoid, array_name);
+fn create_list_field_from_primitive_field(
+    array_name: &str,
+    typoid: Oid,
+    typmod: i32,
+) -> Arc<Field> {
+    let field = visit_primitive_schema(typoid, typmod, array_name);
     let list_field = Field::new(array_name, arrow::datatypes::DataType::List(field), true);
 
     list_field.into()
@@ -100,7 +107,7 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
             let attribute_element_typoid = array_element_typoid(attribute_oid);
             visit_list_schema(attribute_element_typoid, attribute_typmod, attribute_name)
         } else {
-            visit_primitive_schema(attribute_oid, attribute_name)
+            visit_primitive_schema(attribute_oid, attribute_typmod, attribute_name)
         };
 
         child_fields.push(child_field);
@@ -123,11 +130,11 @@ fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str) -> Arc<Field> {
         let struct_field = visit_struct_schema(tupledesc, array_name);
         create_list_field_from_struct_field(array_name, struct_field)
     } else {
-        create_list_field_from_primitive_field(array_name, typoid)
+        create_list_field_from_primitive_field(array_name, typoid, typmod)
     }
 }
 
-fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
+fn visit_primitive_schema(typoid: Oid, typmod: i32, elem_name: &str) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
     match typoid {
@@ -137,12 +144,22 @@ fn visit_primitive_schema(typoid: Oid, elem_name: &str) -> Arc<Field> {
         INT2OID => Field::new(elem_name, arrow::datatypes::DataType::Int16, true).into(),
         INT4OID => Field::new(elem_name, arrow::datatypes::DataType::Int32, true).into(),
         INT8OID => Field::new(elem_name, arrow::datatypes::DataType::Int64, true).into(),
-        NUMERICOID => Field::new(
-            elem_name,
-            arrow::datatypes::DataType::Decimal128(DECIMAL_PRECISION, DECIMAL_SCALE),
-            true,
-        )
-        .into(),
+        NUMERICOID => {
+            let precision = extract_precision_from_numeric_typmod(typmod);
+            let scale = extract_scale_from_numeric_typmod(typmod);
+
+            if precision > MAX_DECIMAL_PRECISION {
+                set_fallback_typoid(typoid);
+                Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
+            } else {
+                Field::new(
+                    elem_name,
+                    arrow::datatypes::DataType::Decimal128(precision as _, scale as _),
+                    true,
+                )
+                .into()
+            }
+        }
         DATEOID => Field::new(elem_name, arrow::datatypes::DataType::Date32, true).into(),
         TIMESTAMPOID => Field::new(
             elem_name,
