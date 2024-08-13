@@ -11,7 +11,7 @@ use crate::{
         arrow_utils::{arrow_array_offsets, create_arrow_list_array},
         pg_to_arrow::PgTypeToArrowArray,
     },
-    type_compat::{
+    type_compat::pg_arrow_type_conversions::{
         extract_precision_from_numeric_typmod, extract_scale_from_numeric_typmod, numeric_to_i128,
     },
 };

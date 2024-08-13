@@ -113,14 +113,14 @@ pub(crate) fn validate_copy_from_options(pstmt: &PgBox<pg_sys::PlannedStmt>) {
 }
 
 pub(crate) fn copy_stmt_filename(pstmt: &PgBox<pg_sys::PlannedStmt>) -> *mut i8 {
-    assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
+    debug_assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
-    assert!(!copy_stmt.filename.is_null());
+    debug_assert!(!copy_stmt.filename.is_null());
     copy_stmt.filename
 }
 
 pub(crate) fn copy_stmt_row_group_size_option(pstmt: &PgBox<pg_sys::PlannedStmt>) -> i64 {
-    assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
+    debug_assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
 
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
 
@@ -142,7 +142,7 @@ pub(crate) fn copy_stmt_row_group_size_option(pstmt: &PgBox<pg_sys::PlannedStmt>
 pub(crate) fn copy_stmt_codec_option(
     pstmt: &PgBox<pg_sys::PlannedStmt>,
 ) -> Option<ParquetCodecOption> {
-    assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
+    debug_assert!(unsafe { is_a(pstmt.utilityStmt, T_CopyStmt) });
 
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
 

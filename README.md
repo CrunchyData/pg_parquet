@@ -108,6 +108,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `timetz`(3)       | INT64                     | TIME_MICROS      |
 | `interval`        | FIXED_LEN_BYTE_ARRAY(12)  | INTERVAL         |
 | `uuid`            | FIXED_LEN_BYTE_ARRAY(16)  | UUID             |
+| `geometry`(4)     | BYTE_ARRAY                |                  |
 | `bool[]`          | BOOLEAN                   | LIST             |
 | `smallint[]`      | INT16                     | LIST             |
 | `integer[]`       | INT32                     | LIST             |
@@ -127,12 +128,13 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `timetz[]`        | INT64                     | LIST             |
 | `interval[]`      | FIXED_LEN_BYTE_ARRAY(12)  | LIST             |
 | `uuid[]`          | FIXED_LEN_BYTE_ARRAY(16)  | LIST             |
+| `geometry[]`      | BYTE_ARRAY                | LIST             |
 | `composite`       | STRUCT                    |                  |
 
 > [!WARNING]
-> (1) The `numeric` types with <= `38` precision is represented as `FIXED_LEN_BYTE_ARRAY(16)` with `DECIMAL(128)` logical type. The `numeric` types with > `38` precision is represented as `BYTE_ARRAY` with `STRING` logical type.
-> (2) The `date` type is represented according to `Unix epoch` when writing to Parquet files. It is converted back according to `PostgreSQL epoch` when reading from Parquet files.
-> (3) The `timestamptz` and `timetz` types are adjusted to `UTC` when writing to Parquet files. They are converted back with `UTC` timezone when reading from Parquet files.
+> - (1) The `numeric` types with <= `38` precision is represented as `FIXED_LEN_BYTE_ARRAY(16)` with `DECIMAL(128)` logical type. The `numeric` types with > `38` precision is represented as `BYTE_ARRAY` with `STRING` logical type.
+  - (2) The `date` type is represented according to `Unix epoch` when writing to Parquet files. It is converted back according to `PostgreSQL epoch` when reading from Parquet files.- (3) The `timestamptz` and `timetz` types are adjusted to `UTC` when writing to Parquet files. They are converted back with `UTC` timezone when reading from Parquet files.
+  - (4) The `geometry` type is represented as `BYTE_ARRAY` encoded as `EWKB` when `postgis` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
 
 > [!NOTE]
 > Any type that does not have a corresponding Parquet type will be represented, as a fallback mechanism, as `BYTE_ARRAY` with `STRING` logical type. e.g. `enum`

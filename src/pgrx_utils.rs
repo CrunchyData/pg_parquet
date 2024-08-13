@@ -52,6 +52,6 @@ pub(crate) fn is_array_type(typoid: Oid) -> bool {
 }
 
 pub(crate) fn array_element_typoid(array_typoid: Oid) -> Oid {
-    assert!(is_array_type(array_typoid));
+    debug_assert!(is_array_type(array_typoid));
     unsafe { pg_sys::get_element_type(array_typoid) }
 }

@@ -21,8 +21,9 @@ use pgrx::{
 use crate::{
     pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc},
     type_compat::{
-        extract_precision_from_numeric_typmod, set_fallback_typoid, FallbackToText,
-        MAX_DECIMAL_PRECISION,
+        fallback_to_text::{set_fallback_typoid, FallbackToText},
+        geometry::{is_postgis_geometry_type, set_geometry_typoid, Geometry},
+        pg_arrow_type_conversions::{extract_precision_from_numeric_typmod, MAX_DECIMAL_PRECISION},
     },
 };
 
@@ -33,6 +34,7 @@ pub(crate) mod date;
 pub(crate) mod fallback_to_text;
 pub(crate) mod float4;
 pub(crate) mod float8;
+pub(crate) mod geometry;
 pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
@@ -272,6 +274,15 @@ fn to_pg_primitive_datum(primitive_array: ArrayData, typoid: Oid, typmod: i32) -
                 );
 
                 val.into_datum()
+            } else if is_postgis_geometry_type(typoid) {
+                set_geometry_typoid(typoid);
+                let val = <Geometry as ArrowArrayToPgType<BinaryArray, Geometry>>::to_pg_type(
+                    primitive_array.into(),
+                    typoid,
+                    typmod,
+                    None,
+                );
+                val.into_datum()
             } else {
                 set_fallback_typoid(typoid);
                 let val =
@@ -497,6 +508,15 @@ fn to_pg_array_datum(list_array: ArrayData, typoid: Oid, typmod: i32) -> Option<
                     list_array.into(), element_typoid, typmod, Some(tupledesc)
                 );
 
+                val.into_datum()
+            } else if is_postgis_geometry_type(element_typoid) {
+                set_geometry_typoid(element_typoid);
+                let val = <Vec<Option<Geometry>> as ArrowArrayToPgType<
+                    BinaryArray,
+                    Vec<Option<Geometry>>,
+                >>::to_pg_type(
+                    list_array.into(), element_typoid, typmod, None
+                );
                 val.into_datum()
             } else {
                 set_fallback_typoid(element_typoid);

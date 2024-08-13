@@ -11,7 +11,7 @@ use crate::{
         arrow_utils::{arrow_array_offsets, create_arrow_list_array},
         pg_to_arrow::PgTypeToArrowArray,
     },
-    type_compat::date_to_i32,
+    type_compat::pg_arrow_type_conversions::date_to_i32,
 };
 
 // Date

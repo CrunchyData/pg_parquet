@@ -1,7 +1,7 @@
 use arrow::array::{Array, Date32Array};
 use pgrx::{pg_sys::Oid, Date, PgTupleDesc};
 
-use crate::type_compat::i32_to_date;
+use crate::type_compat::pg_arrow_type_conversions::i32_to_date;
 
 use super::ArrowArrayToPgType;
 

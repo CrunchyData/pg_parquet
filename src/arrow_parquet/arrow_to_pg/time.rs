@@ -1,7 +1,7 @@
 use arrow::array::{Array, Time64MicrosecondArray};
 use pgrx::{pg_sys::Oid, PgTupleDesc, Time};
 
-use crate::type_compat::i64_to_time;
+use crate::type_compat::pg_arrow_type_conversions::i64_to_time;
 
 use super::ArrowArrayToPgType;
 

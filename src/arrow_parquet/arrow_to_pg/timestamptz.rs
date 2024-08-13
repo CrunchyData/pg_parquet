@@ -1,7 +1,7 @@
 use arrow::array::{Array, TimestampMicrosecondArray};
 use pgrx::{pg_sys::Oid, PgTupleDesc, TimestampWithTimeZone};
 
-use crate::type_compat::i64_to_timestamptz;
+use crate::type_compat::pg_arrow_type_conversions::i64_to_timestamptz;
 
 use super::ArrowArrayToPgType;
 

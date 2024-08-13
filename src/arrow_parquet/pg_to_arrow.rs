@@ -17,8 +17,9 @@ use pgrx::{
 use crate::{
     pgrx_utils::{array_element_typoid, is_array_type, is_composite_type, tuple_desc},
     type_compat::{
-        extract_precision_from_numeric_typmod, set_fallback_typoid, FallbackToText,
-        MAX_DECIMAL_PRECISION,
+        fallback_to_text::{set_fallback_typoid, FallbackToText},
+        geometry::{is_postgis_geometry_type, set_geometry_typoid, Geometry},
+        pg_arrow_type_conversions::{extract_precision_from_numeric_typmod, MAX_DECIMAL_PRECISION},
     },
 };
 
@@ -29,6 +30,7 @@ pub(crate) mod date;
 pub(crate) mod fallback_to_text;
 pub(crate) mod float4;
 pub(crate) mod float8;
+pub(crate) mod geometry;
 pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
@@ -347,6 +349,14 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
                         attribute_element_typoid,
                         attribute_typmod,
                     )
+                } else if is_postgis_geometry_type(attribute_element_typoid) {
+                    set_geometry_typoid(attribute_element_typoid);
+                    collect_attribute_array_from_tuples_helper::<Vec<Option<Geometry>>>(
+                        tuples,
+                        attribute_name,
+                        attribute_element_typoid,
+                        attribute_typmod,
+                    )
                 } else {
                     set_fallback_typoid(attribute_element_typoid);
                     collect_attribute_array_from_tuples_helper::<Vec<Option<FallbackToText>>>(
@@ -360,6 +370,14 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
                 collect_tuple_attribute_array_from_tuples_helper(
                     tuples,
                     tupledesc,
+                    attribute_name,
+                    attribute_typoid,
+                    attribute_typmod,
+                )
+            } else if is_postgis_geometry_type(attribute_typoid) {
+                set_geometry_typoid(attribute_typoid);
+                collect_attribute_array_from_tuples_helper::<Geometry>(
+                    tuples,
                     attribute_name,
                     attribute_typoid,
                     attribute_typmod,

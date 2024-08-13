@@ -4,7 +4,7 @@ use pgrx::{
     pg_guard,
     pg_sys::{
         self, canonicalize_qual, coerce_to_boolean, eval_const_expressions, make_ands_explicit,
-        make_parsestate, AccessShareLock, CopyStmt, CreateTemplateTupleDesc, List,
+        make_parsestate, AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc, List,
         ParseExprKind_EXPR_KIND_COPY_WHERE, ParseNamespaceItem, ParseState, RowExclusiveLock,
         TupleDescInitEntry,
     },
@@ -127,8 +127,9 @@ fn copy_from_transform_where_clause(
         )
     };
 
+    let construct = std::ffi::CString::new("WHERE").unwrap();
     let where_clause =
-        unsafe { coerce_to_boolean(pstate.as_ptr(), where_clause, "WHERE".as_ptr() as _) };
+        unsafe { coerce_to_boolean(pstate.as_ptr(), where_clause, construct.as_ptr()) };
 
     let where_clause = unsafe { assign_expr_collations(pstate.as_ptr(), where_clause) };
 
@@ -227,7 +228,7 @@ fn filter_tupledesc_for_relation(relation: &PgRelation, attnamelist: Vec<String>
                     TupleDescInitEntry(
                         tupledesc.as_ptr(),
                         attribute_number,
-                        attname.as_ptr() as _,
+                        attname.as_pg_cstr() as _,
                         att_typoid,
                         att_typmod,
                         att_ndims as _,

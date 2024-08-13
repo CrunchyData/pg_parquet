@@ -11,7 +11,7 @@ use crate::{
         arrow_utils::{arrow_array_offsets, create_arrow_list_array},
         pg_to_arrow::PgTypeToArrowArray,
     },
-    type_compat::interval_to_nano,
+    type_compat::pg_arrow_type_conversions::interval_to_nano,
 };
 
 // Interval

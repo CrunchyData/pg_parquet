@@ -1,7 +1,7 @@
 use arrow::array::{Array, IntervalMonthDayNanoArray};
 use pgrx::{pg_sys::Oid, Interval, PgTupleDesc};
 
-use crate::type_compat::nano_to_interval;
+use crate::type_compat::pg_arrow_type_conversions::nano_to_interval;
 
 use super::ArrowArrayToPgType;
 

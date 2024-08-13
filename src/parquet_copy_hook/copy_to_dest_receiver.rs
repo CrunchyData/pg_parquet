@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use pg_sys::{
-    BlessTupleDesc, CommandDest_DestCopyOut, CurrentMemoryContext, Datum, DestReceiver,
+    AsPgCStr, BlessTupleDesc, CommandDest_DestCopyOut, CurrentMemoryContext, Datum, DestReceiver,
     HeapTupleData, List, MemoryContext, TupleDesc, TupleTableSlot,
 };
 use pgrx::{prelude::*, PgList, PgMemoryContexts, PgTupleDesc};
@@ -184,7 +184,7 @@ pub extern "C" fn create_copy_to_parquet_dest_receiver(
     let per_copy_context = unsafe {
         pg_sys::AllocSetContextCreateExtended(
             CurrentMemoryContext as _,
-            "ParquetCopyDestReceiver\0".as_ptr() as _,
+            "ParquetCopyDestReceiver".as_pg_cstr(),
             pg_sys::ALLOCSET_DEFAULT_MINSIZE as _,
             pg_sys::ALLOCSET_DEFAULT_INITSIZE as _,
             pg_sys::ALLOCSET_DEFAULT_MAXSIZE as _,

@@ -28,7 +28,11 @@ mod tests {
 
     use crate::arrow_parquet::codec::ParquetCodecOption;
     use crate::parquet_copy_hook::copy_utils::DEFAULT_ROW_GROUP_SIZE;
-    use crate::type_compat::{i128_to_numeric, set_fallback_typoid, FallbackToText};
+    use crate::type_compat::geometry::{find_postgis_geometry_type, set_geometry_typoid, Geometry};
+    use crate::type_compat::{
+        fallback_to_text::{set_fallback_typoid, FallbackToText},
+        pg_arrow_type_conversions::i128_to_numeric,
+    };
     use pgrx::pg_sys::{Oid, BITOID, BPCHAROID, NAMEOID, NUMERICOID, VARBITOID, VARCHAROID};
     use pgrx::{
         composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB,
@@ -1301,6 +1305,72 @@ mod tests {
                 ])
             })
             .collect();
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_geometry() {
+        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(query).unwrap();
+
+        set_geometry_typoid(find_postgis_geometry_type());
+
+        let test_table = TestTable::<Geometry>::new("geometry".into());
+
+        let query = "SELECT ST_AsEWKB(ST_GeomFromText('POINT(1 1)')::geometry);";
+        let ewkb1 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+
+        let query =
+            "SELECT ST_AsEWKB(ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')::geometry);";
+        let ewkb2 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+
+        let query = "SELECT ST_AsEWKB(ST_GeomFromText('LINESTRING(0 0, 1 1)')::geometry);";
+        let ewkb3 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+
+        let values = vec![
+            Some(Geometry(ewkb1)),
+            Some(Geometry(ewkb2)),
+            Some(Geometry(ewkb3)),
+        ];
+        test_helper(test_table, values);
+    }
+
+    #[pg_test]
+    fn test_geometry_array() {
+        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(query).unwrap();
+
+        set_geometry_typoid(find_postgis_geometry_type());
+
+        let test_table = TestTable::<Vec<Option<Geometry>>>::new("geometry[]".into());
+
+        let query = "SELECT ST_AsEWKB(ST_GeomFromText('POINT(1 1)')::geometry);";
+        let ewkb1 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+
+        let query =
+            "SELECT ST_AsEWKB(ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')::geometry);";
+        let ewkb2 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+
+        let query = "SELECT ST_AsEWKB(ST_GeomFromText('LINESTRING(0 0, 1 1)')::geometry);";
+        let ewkb3 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+
+        let values = vec![
+            Some(vec![
+                Some(Geometry(ewkb1.clone())),
+                Some(Geometry(ewkb2.clone())),
+                Some(Geometry(ewkb3.clone())),
+            ]),
+            Some(vec![
+                Some(Geometry(ewkb2.clone())),
+                Some(Geometry(ewkb3.clone())),
+                Some(Geometry(ewkb1.clone())),
+            ]),
+            Some(vec![
+                Some(Geometry(ewkb3.clone())),
+                Some(Geometry(ewkb1.clone())),
+                Some(Geometry(ewkb2.clone())),
+            ]),
+        ];
         test_helper(test_table, values);
     }
 

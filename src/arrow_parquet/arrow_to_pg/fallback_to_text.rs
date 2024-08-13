@@ -1,7 +1,7 @@
 use arrow::array::{Array, StringArray};
 use pgrx::{pg_sys::Oid, PgTupleDesc};
 
-use crate::type_compat::FallbackToText;
+use crate::type_compat::fallback_to_text::FallbackToText;
 
 use super::ArrowArrayToPgType;
 

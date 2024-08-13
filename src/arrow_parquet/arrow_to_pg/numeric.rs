@@ -1,7 +1,9 @@
 use arrow::array::{Array, Decimal128Array};
 use pgrx::{pg_sys::Oid, AnyNumeric, PgTupleDesc};
 
-use crate::type_compat::{extract_scale_from_numeric_typmod, i128_to_numeric};
+use crate::type_compat::pg_arrow_type_conversions::{
+    extract_scale_from_numeric_typmod, i128_to_numeric,
+};
 
 use super::ArrowArrayToPgType;
 

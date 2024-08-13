@@ -28,7 +28,7 @@ jobs:
           wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
           sudo apt-get update
           sudo apt-get install build-essential libreadline-dev zlib1g-dev flex bison libxml2-dev libxslt-dev libssl-dev libxml2-utils xsltproc ccache pkg-config
-          sudo apt-get -y install postgresql-16 libpq-dev postgresql-server-dev-16 postgresql-client-16
+          sudo apt-get -y install postgresql-16-postgis-3 libpq-dev postgresql-server-dev-16 postgresql-client-16
 
       - name: Install and configure pgrx
         run: |

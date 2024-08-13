@@ -16,8 +16,12 @@ use crate::{
         tuple_desc,
     },
     type_compat::{
-        extract_precision_from_numeric_typmod, extract_scale_from_numeric_typmod,
-        set_fallback_typoid, MAX_DECIMAL_PRECISION,
+        fallback_to_text::set_fallback_typoid,
+        geometry::{is_postgis_geometry_type, set_geometry_typoid},
+        pg_arrow_type_conversions::{
+            extract_precision_from_numeric_typmod, extract_scale_from_numeric_typmod,
+            MAX_DECIMAL_PRECISION,
+        },
     },
 };
 
@@ -31,7 +35,7 @@ pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> St
 }
 
 pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schema {
-    assert!(tupledesc.oid() == RECORDOID);
+    debug_assert!(tupledesc.oid() == RECORDOID);
 
     let mut struct_attribute_fields = vec![];
 
@@ -213,8 +217,13 @@ fn visit_primitive_schema(typoid: Oid, typmod: i32, elem_name: &str) -> Arc<Fiel
         BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into(),
         OIDOID => Field::new(elem_name, arrow::datatypes::DataType::UInt32, true).into(),
         _ => {
-            set_fallback_typoid(typoid);
-            Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
+            if is_postgis_geometry_type(typoid) {
+                set_geometry_typoid(typoid);
+                Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into()
+            } else {
+                set_fallback_typoid(typoid);
+                Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
+            }
         }
     }
 }

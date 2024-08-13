@@ -21,7 +21,7 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
     parquet_dest: PgBox<DestReceiver>,
 ) -> u64 {
     unsafe {
-        assert!(is_a(pstmt.utilityStmt, T_CopyStmt));
+        debug_assert!(is_a(pstmt.utilityStmt, T_CopyStmt));
         let copy_stmt = PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _);
 
         let mut relation = PgRelation::from_pg(std::ptr::null_mut());

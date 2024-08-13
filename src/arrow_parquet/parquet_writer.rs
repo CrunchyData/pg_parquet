@@ -29,7 +29,7 @@ impl<'a> ParquetWriterContext<'a> {
         codec: ParquetCodecOption,
         tupledesc: PgTupleDesc<'a>,
     ) -> ParquetWriterContext<'a> {
-        assert!(tupledesc.oid() == RECORDOID);
+        debug_assert!(tupledesc.oid() == RECORDOID);
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
