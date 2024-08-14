@@ -12,18 +12,21 @@ use pgrx::{prelude::*, PgTupleDesc};
 
 use crate::{
     pgrx_utils::{
-        array_element_typoid, collect_valid_attributes, is_array_type, is_composite_type,
-        tuple_desc,
+        array_element_typoid, collect_valid_attributes, domain_array_base_elem_typoid,
+        is_array_type, is_composite_type, tuple_desc,
     },
     type_compat::{
         fallback_to_text::set_fallback_typoid,
         geometry::{is_postgis_geometry_type, set_geometry_typoid},
+        map::{is_crunchy_map_type, set_crunchy_map_typoid},
         pg_arrow_type_conversions::{
             extract_precision_from_numeric_typmod, extract_scale_from_numeric_typmod,
             MAX_DECIMAL_PRECISION,
         },
     },
 };
+
+use super::arrow_utils::to_not_nullable_field;
 
 pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> String {
     let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc);
@@ -47,13 +50,14 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
         let attribute_typoid = attribute.type_oid().value();
         let attribute_typmod = attribute.type_mod();
 
-        let is_composite = is_composite_type(attribute_typoid);
-        let is_array = is_array_type(attribute_typoid);
-
-        let field = if is_composite {
+        let field = if is_composite_type(attribute_typoid) {
             let attribute_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
             visit_struct_schema(attribute_tupledesc, attribute_name)
-        } else if is_array {
+        } else if is_crunchy_map_type(attribute_typoid) {
+            set_crunchy_map_typoid(attribute_typoid);
+            let attribute_base_elem_typoid = domain_array_base_elem_typoid(attribute_typoid);
+            visit_map_schema(attribute_base_elem_typoid, attribute_typmod, attribute_name)
+        } else if is_array_type(attribute_typoid) {
             let attribute_element_typoid = array_element_typoid(attribute_typoid);
             visit_list_schema(attribute_element_typoid, attribute_typmod, attribute_name)
         } else {
@@ -77,6 +81,16 @@ fn create_list_field_from_primitive_field(
     list_field.into()
 }
 
+fn create_list_field_from_map_field(array_name: &str, map_field: Arc<Field>) -> Arc<Field> {
+    let list_field = Field::new(
+        array_name,
+        arrow::datatypes::DataType::List(map_field),
+        true,
+    );
+
+    list_field.into()
+}
+
 fn create_list_field_from_struct_field(array_name: &str, struct_field: Arc<Field>) -> Arc<Field> {
     let list_field = Field::new(
         array_name,
@@ -87,7 +101,7 @@ fn create_list_field_from_struct_field(array_name: &str, struct_field: Arc<Field
     list_field.into()
 }
 
-fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
+pub(crate) fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
     let mut child_fields: Vec<Arc<Field>> = vec![];
@@ -107,6 +121,10 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
         let child_field = if is_composite_type(attribute_oid) {
             let attribute_tupledesc = tuple_desc(attribute_oid, attribute_typmod);
             visit_struct_schema(attribute_tupledesc, attribute_name)
+        } else if is_crunchy_map_type(attribute_oid) {
+            set_crunchy_map_typoid(attribute_oid);
+            let attribute_base_elem_typoid = domain_array_base_elem_typoid(attribute_oid);
+            visit_map_schema(attribute_base_elem_typoid, attribute_typmod, attribute_name)
         } else if is_array_type(attribute_oid) {
             let attribute_element_typoid = array_element_typoid(attribute_oid);
             visit_list_schema(attribute_element_typoid, attribute_typmod, attribute_name)
@@ -133,9 +151,27 @@ fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str) -> Arc<Field> {
         let tupledesc = tuple_desc(typoid, typmod);
         let struct_field = visit_struct_schema(tupledesc, array_name);
         create_list_field_from_struct_field(array_name, struct_field)
+    } else if is_crunchy_map_type(typoid) {
+        set_crunchy_map_typoid(typoid);
+        let base_elem_typoid = domain_array_base_elem_typoid(typoid);
+        let map_field = visit_map_schema(base_elem_typoid, typmod, array_name);
+        create_list_field_from_map_field(array_name, map_field)
     } else {
         create_list_field_from_primitive_field(array_name, typoid, typmod)
     }
+}
+
+fn visit_map_schema(typoid: Oid, typmod: i32, map_name: &str) -> Arc<Field> {
+    let tupledesc = tuple_desc(typoid, typmod);
+    let struct_field = visit_struct_schema(tupledesc, map_name);
+    let struct_field = to_not_nullable_field(struct_field);
+
+    Field::new(
+        map_name,
+        arrow::datatypes::DataType::Map(struct_field, false),
+        true,
+    )
+    .into()
 }
 
 fn visit_primitive_schema(typoid: Oid, typmod: i32, elem_name: &str) -> Arc<Field> {
