@@ -10,9 +10,9 @@ use crate::parquet_copy_hook::{
 };
 
 use super::{
-    copy_from::execute_copy_from,
+    copy_from::{execute_copy_from, pop_parquet_reader_context},
     copy_to::execute_copy_to_with_dest_receiver,
-    copy_to_dest_receiver::PARQUET_WRITER_CONTEXT,
+    copy_to_dest_receiver::pop_parquet_writer_context,
     copy_utils::{copy_stmt_codec, validate_copy_from_options, validate_copy_to_options},
 };
 
@@ -72,11 +72,10 @@ impl PgHooks for ParquetCopyHook {
                 }
             })
             .catch_others(|cause| {
-                // make sure to close the writer context if an error occurs
-                let old_writer_ctx = unsafe { PARQUET_WRITER_CONTEXT.replace(None) };
-                if let Some(old_writer_ctx) = old_writer_ctx {
-                    old_writer_ctx.close();
-                }
+                // make sure to pop the parquet writer context
+                let throw_error = false;
+                pop_parquet_writer_context(throw_error);
+
                 cause.rethrow()
             })
             .execute();
@@ -85,13 +84,23 @@ impl PgHooks for ParquetCopyHook {
         } else if is_copy_from_parquet_stmt(&pstmt) {
             validate_copy_from_options(&pstmt);
 
-            let nprocessed = execute_copy_from(pstmt, query_string, query_env);
+            PgTryBuilder::new(|| {
+                let nprocessed = execute_copy_from(pstmt, query_string, query_env);
 
-            let mut completion_tag = unsafe { PgBox::from_pg(completion_tag) };
-            if !completion_tag.is_null() {
-                completion_tag.nprocessed = nprocessed as _;
-                completion_tag.commandTag = CommandTag_CMDTAG_COPY;
-            }
+                let mut completion_tag = unsafe { PgBox::from_pg(completion_tag) };
+                if !completion_tag.is_null() {
+                    completion_tag.nprocessed = nprocessed as _;
+                    completion_tag.commandTag = CommandTag_CMDTAG_COPY;
+                }
+            })
+            .catch_others(|cause| {
+                // make sure to pop the parquet reader context
+                let throw_error = false;
+                pop_parquet_reader_context(throw_error);
+
+                cause.rethrow()
+            })
+            .execute();
 
             return HookResult::new(());
         }

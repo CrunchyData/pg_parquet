@@ -12,7 +12,8 @@ use pgrx::{
 
 use crate::arrow_parquet::codec::{all_supported_codecs, FromPath, ParquetCodecOption};
 
-pub(crate) const DEFAULT_ROW_GROUP_SIZE: i64 = 100000;
+// same as DuckDB
+pub(crate) const DEFAULT_ROW_GROUP_SIZE: i64 = 122880;
 
 pub(crate) fn is_parquet_format(copy_stmt: &PgBox<CopyStmt>) -> bool {
     let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };

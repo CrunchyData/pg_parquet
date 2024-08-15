@@ -1,5 +1,3 @@
-use std::cell::RefCell;
-
 use pg_sys::{
     AsPgCStr, BlessTupleDesc, CommandDest_DestCopyOut, CurrentMemoryContext, Datum, DestReceiver,
     HeapTupleData, List, MemoryContext, TupleDesc, TupleTableSlot,
@@ -28,8 +26,35 @@ struct CopyToParquetDestReceiver {
     per_copy_context: MemoryContext,
 }
 
-pub(crate) static mut PARQUET_WRITER_CONTEXT: RefCell<Option<ParquetWriterContext>> =
-    RefCell::new(None);
+static mut PARQUET_WRITER_CONTEXT_STACK: Vec<ParquetWriterContext> = vec![];
+
+pub(crate) fn peek_parquet_writer_context() -> Option<&'static mut ParquetWriterContext<'static>> {
+    unsafe { PARQUET_WRITER_CONTEXT_STACK.last_mut() }
+}
+
+pub(crate) fn pop_parquet_writer_context(throw_error: bool) {
+    let current_parquet_writer_context = unsafe { PARQUET_WRITER_CONTEXT_STACK.pop() };
+
+    if current_parquet_writer_context.is_none() {
+        let level = if throw_error {
+            PgLogLevel::ERROR
+        } else {
+            PgLogLevel::DEBUG2
+        };
+
+        ereport!(
+            level,
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "parquet writer context stack is already empty"
+        );
+    }
+
+    current_parquet_writer_context.unwrap().close();
+}
+
+pub(crate) fn push_parquet_writer_context(writer_ctx: ParquetWriterContext<'static>) {
+    unsafe { PARQUET_WRITER_CONTEXT_STACK.push(writer_ctx) };
+}
 
 fn collect_tuple(
     parquet_dest: &mut PgBox<CopyToParquetDestReceiver>,
@@ -68,13 +93,14 @@ fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List) {
         parquet_schema_string_from_tupledesc(tupledesc.clone())
     );
 
-    unsafe {
-        PARQUET_WRITER_CONTEXT
-            .borrow_mut()
-            .as_mut()
-            .unwrap()
-            .write_new_row_group(tuples)
-    };
+    let current_parquet_writer_context = peek_parquet_writer_context();
+
+    if current_parquet_writer_context.is_none() {
+        panic!("parquet writer context is not found");
+    }
+
+    let current_parquet_writer_context = current_parquet_writer_context.unwrap();
+    current_parquet_writer_context.write_new_row_group(tuples);
 }
 
 #[pg_guard]
@@ -92,10 +118,10 @@ extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tupledesc: 
 
     let codec = parquet_dest.codec;
 
-    // create parquet writer context
+    // create parquet writer context and push it to the stack
     let parquet_writer_context =
         ParquetWriterContext::new(filename, codec, tupledesc.clone().to_owned());
-    unsafe { PARQUET_WRITER_CONTEXT = RefCell::new(Some(parquet_writer_context)) };
+    push_parquet_writer_context(parquet_writer_context);
 
     // count the number of attributes that are not dropped
     let include_generated_columns = true;
@@ -161,10 +187,8 @@ extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
 
     reset_collected_tuples(&mut parquet_dest);
 
-    unsafe {
-        let old_writer_ctx = PARQUET_WRITER_CONTEXT.replace(None);
-        old_writer_ctx.unwrap().close();
-    };
+    let throw_error = true;
+    pop_parquet_writer_context(throw_error);
 
     let mut per_copy_ctx = PgMemoryContexts::For(parquet_dest.per_copy_context);
     unsafe { per_copy_ctx.reset() };

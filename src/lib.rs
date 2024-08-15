@@ -1677,6 +1677,75 @@ mod tests {
         let values = (1_i32..=10).map(Some).collect();
         test_helper(test_table, values);
     }
+
+    #[pg_test]
+    fn test_nested_copy_to_stmts() {
+        let create_func_command = "
+            CREATE OR REPLACE FUNCTION copy_to(url text)
+            RETURNS text
+            LANGUAGE plpgsql
+            AS $function$
+            DECLARE
+            BEGIN
+                EXECUTE format($$COPY (SELECT s FROM generate_series(1,3) s) TO %L WITH (format 'parquet')$$, url);
+                RETURN 'success';
+            END;
+            $function$;
+        ";
+        Spi::run(create_func_command).unwrap();
+
+        let create_table_command = "CREATE TABLE exports (id int, url text);";
+        Spi::run(create_table_command).unwrap();
+
+        let insert_query = "insert into exports values ( 1, 'file:///tmp/test1.parquet'), ( 2, 'file:///tmp/test2.parquet');";
+        Spi::run(insert_query).unwrap();
+
+        let nested_copy_command =
+            "COPY (SELECT copy_to(url) as copy_to_result FROM exports) TO 'file:///tmp/test3.parquet';";
+        Spi::run(nested_copy_command).unwrap();
+
+        let create_table_command = "
+            CREATE TABLE file1_result (s int);
+            CREATE TABLE file3_result (copy_to_result text);
+        ";
+        Spi::run(create_table_command).unwrap();
+
+        let copy_from_command = "
+            COPY file1_result FROM 'file:///tmp/test1.parquet';
+            COPY file3_result FROM 'file:///tmp/test3.parquet';
+        ";
+        Spi::run(copy_from_command).unwrap();
+
+        let select_command = "SELECT * FROM file1_result ORDER BY s;";
+        let result1 = Spi::connect(|client| {
+            let mut results = Vec::new();
+            let tup_table = client.select(select_command, None, None).unwrap();
+
+            for row in tup_table {
+                let s = row["s"].value::<i32>();
+                results.push(s.unwrap().unwrap());
+            }
+
+            results
+        });
+
+        assert_eq!(vec![1, 2, 3], result1);
+
+        let select_command = "SELECT * FROM file3_result;";
+        let result3 = Spi::connect(|client| {
+            let mut results = Vec::new();
+            let tup_table = client.select(select_command, None, None).unwrap();
+
+            for row in tup_table {
+                let copy_to_result = row["copy_to_result"].value::<&str>();
+                results.push(copy_to_result.unwrap().unwrap());
+            }
+
+            results
+        });
+
+        assert_eq!(vec!["success"; 2], result3);
+    }
 }
 
 /// This module is required by `cargo pgrx test` invocations.

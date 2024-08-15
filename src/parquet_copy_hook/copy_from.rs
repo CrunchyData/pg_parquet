@@ -1,14 +1,12 @@
-use std::cell::RefCell;
-
 use pgrx::{
-    pg_guard,
+    ereport, pg_guard,
     pg_sys::{
         self, canonicalize_qual, coerce_to_boolean, eval_const_expressions, make_ands_explicit,
         make_parsestate, AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc, List,
         ParseExprKind_EXPR_KIND_COPY_WHERE, ParseNamespaceItem, ParseState, RowExclusiveLock,
         TupleDescInitEntry,
     },
-    void_mut_ptr, PgBox, PgList, PgRelation, PgTupleDesc,
+    void_mut_ptr, PgBox, PgList, PgLogLevel, PgRelation, PgSqlErrorCode, PgTupleDesc,
 };
 
 use crate::{
@@ -21,7 +19,35 @@ use crate::{
     },
 };
 
-static mut PARQUET_READER_CONTEXT: RefCell<Option<ParquetReaderContext>> = RefCell::new(None);
+static mut PARQUET_READER_CONTEXT_STACK: Vec<ParquetReaderContext> = vec![];
+
+pub(crate) fn peek_parquet_reader_context() -> Option<&'static mut ParquetReaderContext> {
+    unsafe { PARQUET_READER_CONTEXT_STACK.last_mut() }
+}
+
+pub(crate) fn pop_parquet_reader_context(throw_error: bool) {
+    let mut current_parquet_reader_context = unsafe { PARQUET_READER_CONTEXT_STACK.pop() };
+
+    if current_parquet_reader_context.is_none() {
+        let level = if throw_error {
+            PgLogLevel::ERROR
+        } else {
+            PgLogLevel::DEBUG2
+        };
+
+        ereport!(
+            level,
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "parquet reader context stack is already empty"
+        );
+    }
+
+    current_parquet_reader_context.take();
+}
+
+pub(crate) fn push_parquet_reader_context(reader_ctx: ParquetReaderContext) {
+    unsafe { PARQUET_READER_CONTEXT_STACK.push(reader_ctx) };
+}
 
 #[pg_guard]
 extern "C" fn copy_received_parquet_data_to_buffer(
@@ -29,23 +55,26 @@ extern "C" fn copy_received_parquet_data_to_buffer(
     _minread: i32,
     maxread: i32,
 ) -> i32 {
-    let mut parquet_reader = unsafe { PARQUET_READER_CONTEXT.borrow_mut() };
-    let parquet_reader = parquet_reader.as_mut().unwrap();
+    let current_parquet_reader_context = peek_parquet_reader_context();
+    if current_parquet_reader_context.is_none() {
+        panic!("parquet reader context is not found");
+    }
+    let current_parquet_reader_context = current_parquet_reader_context.unwrap();
 
-    let mut bytes_in_buffer = parquet_reader.bytes_in_buffer();
+    let mut bytes_in_buffer = current_parquet_reader_context.bytes_in_buffer();
 
     if bytes_in_buffer == 0 {
-        parquet_reader.reset_buffer();
+        current_parquet_reader_context.reset_buffer();
 
-        if !parquet_reader.read_parquet() {
+        if !current_parquet_reader_context.read_parquet() {
             return 0;
         }
 
-        bytes_in_buffer = parquet_reader.bytes_in_buffer();
+        bytes_in_buffer = current_parquet_reader_context.bytes_in_buffer();
     }
 
     let bytes_to_copy = std::cmp::min(maxread as usize, bytes_in_buffer);
-    parquet_reader.copy_to_outbuf(bytes_to_copy, outbuf);
+    current_parquet_reader_context.copy_to_outbuf(bytes_to_copy, outbuf);
 
     bytes_to_copy as _
 }
@@ -82,7 +111,7 @@ pub(crate) fn execute_copy_from(
             .to_string();
 
         let parquet_reader_context = ParquetReaderContext::new(filename, tupledesc.as_ptr());
-        PARQUET_READER_CONTEXT = RefCell::new(Some(parquet_reader_context));
+        push_parquet_reader_context(parquet_reader_context);
 
         let copy_options = add_binary_format_option(&pstmt);
 
@@ -101,7 +130,8 @@ pub(crate) fn execute_copy_from(
 
         EndCopyFrom(copy_from_state);
 
-        PARQUET_READER_CONTEXT = RefCell::new(None);
+        let throw_error = true;
+        pop_parquet_reader_context(throw_error);
 
         nprocessed
     }
