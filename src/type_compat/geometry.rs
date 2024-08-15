@@ -59,11 +59,11 @@ extern "C" {
     fn get_extension_schema(ext_oid: Oid) -> Oid;
 }
 
-fn st_asewkb_funcoid() -> Oid {
+fn st_asbinary_funcoid() -> Oid {
     unsafe {
         debug_assert!(is_postgis_geometry_type(GEOMETRY_TYPOID));
 
-        let funcname = makeString("st_asewkb".as_pg_cstr());
+        let funcname = makeString("st_asbinary".as_pg_cstr());
         let mut funcnamelist = PgList::new();
         funcnamelist.push(funcname);
 
@@ -73,11 +73,11 @@ fn st_asewkb_funcoid() -> Oid {
     }
 }
 
-fn st_geomfromewkb_funcoid() -> Oid {
+fn st_geomfromwkb_funcoid() -> Oid {
     unsafe {
         debug_assert!(is_postgis_geometry_type(GEOMETRY_TYPOID));
 
-        let funcname = makeString("st_geomfromewkb".as_pg_cstr());
+        let funcname = makeString("st_geomfromwkb".as_pg_cstr());
         let mut funcnamelist = PgList::new();
         funcnamelist.push(funcname);
 
@@ -106,7 +106,7 @@ impl From<Vec<u8>> for Geometry {
 
 impl IntoDatum for Geometry {
     fn into_datum(self) -> Option<pg_sys::Datum> {
-        let func_oid = st_geomfromewkb_funcoid();
+        let func_oid = st_geomfromwkb_funcoid();
 
         let wkb_datum = self.0.into_datum().unwrap();
 
@@ -130,7 +130,7 @@ impl FromDatum for Geometry {
         if is_null {
             None
         } else {
-            let func_oid = st_asewkb_funcoid();
+            let func_oid = st_asbinary_funcoid();
             let geom_datum = datum;
 
             let wkb_datum = unsafe { OidFunctionCall1Coll(func_oid, InvalidOid, geom_datum) };

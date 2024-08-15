@@ -1317,20 +1317,20 @@ mod tests {
 
         let test_table = TestTable::<Geometry>::new("geometry".into());
 
-        let query = "SELECT ST_AsEWKB(ST_GeomFromText('POINT(1 1)')::geometry);";
-        let ewkb1 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+        let query = "SELECT ST_AsBinary(ST_GeomFromText('POINT(1 1)')::geometry);";
+        let wkb1 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
 
         let query =
-            "SELECT ST_AsEWKB(ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')::geometry);";
-        let ewkb2 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+            "SELECT ST_AsBinary(ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')::geometry);";
+        let wkb2 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
 
-        let query = "SELECT ST_AsEWKB(ST_GeomFromText('LINESTRING(0 0, 1 1)')::geometry);";
-        let ewkb3 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+        let query = "SELECT ST_AsBinary(ST_GeomFromText('LINESTRING(0 0, 1 1)')::geometry);";
+        let wkb3 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
 
         let values = vec![
-            Some(Geometry(ewkb1)),
-            Some(Geometry(ewkb2)),
-            Some(Geometry(ewkb3)),
+            Some(Geometry(wkb1)),
+            Some(Geometry(wkb2)),
+            Some(Geometry(wkb3)),
         ];
         test_helper(test_table, values);
     }
@@ -1344,31 +1344,31 @@ mod tests {
 
         let test_table = TestTable::<Vec<Option<Geometry>>>::new("geometry[]".into());
 
-        let query = "SELECT ST_AsEWKB(ST_GeomFromText('POINT(1 1)')::geometry);";
-        let ewkb1 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+        let query = "SELECT ST_AsBinary(ST_GeomFromText('POINT(1 1)')::geometry);";
+        let wkb1 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
 
         let query =
-            "SELECT ST_AsEWKB(ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')::geometry);";
-        let ewkb2 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+            "SELECT ST_AsBinary(ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')::geometry);";
+        let wkb2 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
 
-        let query = "SELECT ST_AsEWKB(ST_GeomFromText('LINESTRING(0 0, 1 1)')::geometry);";
-        let ewkb3 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
+        let query = "SELECT ST_AsBinary(ST_GeomFromText('LINESTRING(0 0, 1 1)')::geometry);";
+        let wkb3 = Spi::get_one::<Vec<u8>>(query).unwrap().unwrap();
 
         let values = vec![
             Some(vec![
-                Some(Geometry(ewkb1.clone())),
-                Some(Geometry(ewkb2.clone())),
-                Some(Geometry(ewkb3.clone())),
+                Some(Geometry(wkb1.clone())),
+                Some(Geometry(wkb2.clone())),
+                Some(Geometry(wkb3.clone())),
             ]),
             Some(vec![
-                Some(Geometry(ewkb2.clone())),
-                Some(Geometry(ewkb3.clone())),
-                Some(Geometry(ewkb1.clone())),
+                Some(Geometry(wkb2.clone())),
+                Some(Geometry(wkb3.clone())),
+                Some(Geometry(wkb1.clone())),
             ]),
             Some(vec![
-                Some(Geometry(ewkb3.clone())),
-                Some(Geometry(ewkb1.clone())),
-                Some(Geometry(ewkb2.clone())),
+                Some(Geometry(wkb3.clone())),
+                Some(Geometry(wkb1.clone())),
+                Some(Geometry(wkb2.clone())),
             ]),
         ];
         test_helper(test_table, values);
