@@ -9,6 +9,9 @@
 ## Quick Reference
 - [Installation From Source](#installation-from-source)
 - [Usage](#usage)
+  - [Copy FROM/TO Parquet files TO/FROM Postgres tables](#copy-tofrom-parquet-files-fromto-postgres-tables)
+  - [Inspect Parquet schema](#inspect-parquet-schema)
+  - [Inspect Parquet metadata](#inspect-parquet-metadata)
 - [Object Store Support](#object-store-support)
 - [Copy Options](#copy-options)
 - [Supported Types](#supported-types)
@@ -31,6 +34,12 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 ```
 
 ## Usage
+There ara mainly 3 things that you can do with `pg_parquet`:
+1. You can export Postgres tables/queries to Parquet files,
+2. You can ingest data from Parquet files to Postgres tables,
+3. You can inspect the schema and metadata of Parquet files.
+
+### COPY to/from Parquet files from/to Postgres tables
 You can use PostgreSQL's `COPY` command to read and write Parquet files. Below is an example of how to write a PostgreSQL table, with complex types, into a Parquet file and then to read the Parquet file content back into the same table.
 
 ```sql
@@ -68,6 +77,16 @@ COPY product_example FROM 'file:///tmp/product_example.parquet';
 -- show table
 SELECT * FROM product_example;
 ```
+
+### Inspect Parquet schema
+You can call `SELECT * FROM pgparquet.schema(<uri>)` to discover the schema of the Parquet file at given uri.
+
+### Inspect Parquet metadata
+You can call `SELECT * FROM pgparquet.metadata(<uri>)` to discover the detailed metadata of the Parquet file, such as column statistics, at given uri.
+
+You can call `SELECT * FROM pgparquet.file_metadata(<uri>)` to discover file level metadata of the Parquet file, such as format version, at given uri.
+
+You can call `SELECT * FROM pgparquet.kv_metadata(<uri>)` to query custom key-value metadata of the Parquet file at given uri.
 
 ## Object Store Support
 `pg_parquet` supports reading and writing Parquet files from/to `S3` object store. You can replace `file://`, as shown in above example, with `s3://` scheme to specify the location of the Parquet file in the `S3` object store.

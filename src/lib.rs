@@ -3,6 +3,7 @@ use pgrx::{prelude::*, register_hook};
 
 mod arrow_parquet;
 mod parquet_copy_hook;
+mod parquet_udfs;
 mod pgrx_utils;
 mod type_compat;
 
@@ -1745,6 +1746,706 @@ mod tests {
         });
 
         assert_eq!(vec!["success"; 2], result3);
+    }
+
+    #[pg_test]
+    fn test_parquet_schema() {
+        let ddls = "
+            create type person AS (id int, name text);
+            create type worker AS (p person[], monthly_salary decimal(15,6));
+            create table workers (id int, workers worker[], company text);
+            copy workers to 'file:///tmp/test.parquet';
+        ";
+        Spi::run(ddls).unwrap();
+
+        let parquet_schema_command = "select * from pgparquet.schema('file:///tmp/test.parquet') ORDER BY name, converted_type;";
+
+        let result_schema = Spi::connect(|client| {
+            let mut results = Vec::new();
+            let tup_table = client.select(parquet_schema_command, None, None).unwrap();
+
+            for row in tup_table {
+                let filename = row["filename"].value::<String>().unwrap().unwrap();
+                let name = row["name"].value::<String>().unwrap().unwrap();
+                let type_name = row["type_name"].value::<String>().unwrap();
+                let type_length = row["type_length"].value::<String>().unwrap();
+                let repetition_type = row["repetition_type"].value::<String>().unwrap();
+                let num_children = row["num_children"].value::<i32>().unwrap();
+                let converted_type = row["converted_type"].value::<String>().unwrap();
+                let scale = row["scale"].value::<i32>().unwrap();
+                let precision = row["precision"].value::<i32>().unwrap();
+                let field_id = row["field_id"].value::<i32>().unwrap();
+                let logical_type = row["logical_type"].value::<String>().unwrap();
+
+                results.push((
+                    filename,
+                    name,
+                    type_name,
+                    type_length,
+                    repetition_type,
+                    num_children,
+                    converted_type,
+                    scale,
+                    precision,
+                    field_id,
+                    logical_type,
+                ));
+            }
+
+            results
+        });
+
+        let expected_schema = vec![
+            (
+                "file:///tmp/test.parquet".into(),
+                "arrow_schema".into(),
+                None,
+                None,
+                None,
+                Some(3),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "company".into(),
+                Some("BYTE_ARRAY".into()),
+                None,
+                Some("OPTIONAL".into()),
+                None,
+                Some("UTF8".into()),
+                None,
+                None,
+                None,
+                Some("STRING".into()),
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "id".into(),
+                Some("INT32".into()),
+                None,
+                Some("OPTIONAL".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "id".into(),
+                Some("INT32".into()),
+                None,
+                Some("OPTIONAL".into()),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "list".into(),
+                None,
+                None,
+                Some("REPEATED".into()),
+                Some(1),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "list".into(),
+                None,
+                None,
+                Some("REPEATED".into()),
+                Some(1),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "monthly_salary".into(),
+                Some("INT64".into()),
+                None,
+                Some("OPTIONAL".into()),
+                None,
+                Some("DECIMAL".into()),
+                Some(6),
+                Some(15),
+                None,
+                Some("DECIMAL".into()),
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "name".into(),
+                Some("BYTE_ARRAY".into()),
+                None,
+                Some("OPTIONAL".into()),
+                None,
+                Some("UTF8".into()),
+                None,
+                None,
+                None,
+                Some("STRING".into()),
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "p".into(),
+                None,
+                None,
+                Some("OPTIONAL".into()),
+                Some(1),
+                Some("LIST".into()),
+                None,
+                None,
+                None,
+                Some("LIST".into()),
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "p".into(),
+                None,
+                None,
+                Some("OPTIONAL".into()),
+                Some(2),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "workers".into(),
+                None,
+                None,
+                Some("OPTIONAL".into()),
+                Some(1),
+                Some("LIST".into()),
+                None,
+                None,
+                None,
+                Some("LIST".into()),
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                "workers".into(),
+                None,
+                None,
+                Some("OPTIONAL".into()),
+                Some(2),
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+        ];
+
+        assert_eq!(result_schema, expected_schema);
+
+        Spi::run("DROP TABLE workers; DROP TYPE worker, person;").unwrap();
+    }
+
+    #[pg_test]
+    fn test_parquet_metadata() {
+        let total_rows = 10;
+        let row_group_size = 5;
+
+        let ddls = format!(
+            "
+            create type person AS (id int, name text);
+            create type worker AS (p person[], monthly_salary decimal(15,6));
+            create table workers (id int, workers worker[], company text);
+            insert into workers select i, null::worker[], null from generate_series(1, {}) i;
+            copy workers to 'file:///tmp/test.parquet' with (row_group_size {});
+        ",
+            total_rows, row_group_size
+        );
+        Spi::run(&ddls).unwrap();
+
+        let parquet_metadata_command =
+            "select * from pgparquet.metadata('file:///tmp/test.parquet');";
+
+        // Debug (assert_eq! requires) is only implemented for tuples up to 12 elements. This is why we split the
+        // metadata into two parts.
+        let (result_metadata_part1, result_metadata_part2) = Spi::connect(|client| {
+            let mut results_part1 = Vec::new();
+            let mut results_part2 = Vec::new();
+
+            let tup_table = client.select(parquet_metadata_command, None, None).unwrap();
+
+            for row in tup_table {
+                let filename = row["filename"].value::<String>().unwrap().unwrap();
+                let row_group_id = row["row_group_id"].value::<i64>().unwrap().unwrap();
+                let row_group_num_rows = row["row_group_num_rows"].value::<i64>().unwrap().unwrap();
+                let row_group_num_columns = row["row_group_num_columns"]
+                    .value::<i64>()
+                    .unwrap()
+                    .unwrap();
+                let row_group_bytes = row["row_group_bytes"].value::<i64>().unwrap().unwrap();
+                let column_id = row["column_id"].value::<i64>().unwrap().unwrap();
+                let file_offset = row["file_offset"].value::<i64>().unwrap().unwrap();
+                let num_values = row["num_values"].value::<i64>().unwrap().unwrap();
+                let path_in_schema = row["path_in_schema"].value::<String>().unwrap().unwrap();
+                let type_name = row["type_name"].value::<String>().unwrap().unwrap();
+                let stats_null_count = row["stats_null_count"].value::<i64>().unwrap();
+                let stats_distinct_count = row["stats_distinct_count"].value::<i64>().unwrap();
+
+                let stats_min = row["stats_min"].value::<String>().unwrap();
+                let stats_max = row["stats_max"].value::<String>().unwrap();
+                let compression = row["compression"].value::<String>().unwrap().unwrap();
+                let encodings = row["encodings"].value::<String>().unwrap().unwrap();
+                let index_page_offset = row["index_page_offset"].value::<i64>().unwrap();
+                let dictionary_page_offset = row["dictionary_page_offset"].value::<i64>().unwrap();
+                let data_page_offset = row["data_page_offset"].value::<i64>().unwrap().unwrap();
+                let total_compressed_size = row["total_compressed_size"]
+                    .value::<i64>()
+                    .unwrap()
+                    .unwrap();
+                let total_uncompressed_size = row["total_uncompressed_size"]
+                    .value::<i64>()
+                    .unwrap()
+                    .unwrap();
+
+                results_part1.push((
+                    filename,
+                    row_group_id,
+                    row_group_num_rows,
+                    row_group_num_columns,
+                    row_group_bytes,
+                    column_id,
+                    file_offset,
+                    num_values,
+                    path_in_schema,
+                    type_name,
+                    stats_null_count,
+                    stats_distinct_count,
+                ));
+
+                results_part2.push((
+                    stats_min,
+                    stats_max,
+                    compression,
+                    encodings,
+                    index_page_offset,
+                    dictionary_page_offset,
+                    data_page_offset,
+                    total_compressed_size,
+                    total_uncompressed_size,
+                ));
+            }
+
+            (results_part1, results_part2)
+        });
+
+        let expected_metadata_part1 = vec![
+            (
+                "file:///tmp/test.parquet".into(),
+                0,
+                5,
+                5,
+                248,
+                0,
+                0,
+                5,
+                "id".into(),
+                "INT32".into(),
+                None,
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                0,
+                5,
+                5,
+                248,
+                1,
+                0,
+                5,
+                "workers.list.workers.p.list.p.id".into(),
+                "INT32".into(),
+                Some(5),
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                0,
+                5,
+                5,
+                248,
+                2,
+                0,
+                5,
+                "workers.list.workers.p.list.p.name".into(),
+                "BYTE_ARRAY".into(),
+                Some(5),
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                0,
+                5,
+                5,
+                248,
+                3,
+                0,
+                5,
+                "workers.list.workers.monthly_salary".into(),
+                "INT64".into(),
+                Some(5),
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                0,
+                5,
+                5,
+                248,
+                4,
+                0,
+                5,
+                "company".into(),
+                "BYTE_ARRAY".into(),
+                Some(5),
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                1,
+                5,
+                5,
+                248,
+                0,
+                0,
+                5,
+                "id".into(),
+                "INT32".into(),
+                None,
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                1,
+                5,
+                5,
+                248,
+                1,
+                0,
+                5,
+                "workers.list.workers.p.list.p.id".into(),
+                "INT32".into(),
+                Some(5),
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                1,
+                5,
+                5,
+                248,
+                2,
+                0,
+                5,
+                "workers.list.workers.p.list.p.name".into(),
+                "BYTE_ARRAY".into(),
+                Some(5),
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                1,
+                5,
+                5,
+                248,
+                3,
+                0,
+                5,
+                "workers.list.workers.monthly_salary".into(),
+                "INT64".into(),
+                Some(5),
+                None,
+            ),
+            (
+                "file:///tmp/test.parquet".into(),
+                1,
+                5,
+                5,
+                248,
+                4,
+                0,
+                5,
+                "company".into(),
+                "BYTE_ARRAY".into(),
+                Some(5),
+                None,
+            ),
+        ];
+
+        let expected_metadata_part2 = vec![
+            (
+                Some("1".into()),
+                Some("5".into()),
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(4),
+                38,
+                78,
+                78,
+            ),
+            (
+                None,
+                None,
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(82),
+                96,
+                44,
+                44,
+            ),
+            (
+                None,
+                None,
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(126),
+                140,
+                44,
+                44,
+            ),
+            (
+                None,
+                None,
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(170),
+                184,
+                44,
+                44,
+            ),
+            (
+                None,
+                None,
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(214),
+                228,
+                38,
+                38,
+            ),
+            (
+                Some("6".into()),
+                Some("10".into()),
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(252),
+                286,
+                78,
+                78,
+            ),
+            (
+                None,
+                None,
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(330),
+                344,
+                44,
+                44,
+            ),
+            (
+                None,
+                None,
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(374),
+                388,
+                44,
+                44,
+            ),
+            (
+                None,
+                None,
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(418),
+                432,
+                44,
+                44,
+            ),
+            (
+                None,
+                None,
+                "UNCOMPRESSED".into(),
+                "PLAIN,RLE,RLE_DICTIONARY".into(),
+                None,
+                Some(462),
+                476,
+                38,
+                38,
+            ),
+        ];
+
+        assert_eq!(result_metadata_part1, expected_metadata_part1);
+        assert_eq!(result_metadata_part2, expected_metadata_part2);
+
+        Spi::run("DROP TABLE workers; DROP TYPE worker, person;").unwrap();
+    }
+
+    #[pg_test]
+    fn test_parquet_file_metadata() {
+        let total_rows = 10;
+        let row_group_size = 2;
+        let total_row_groups = total_rows / row_group_size;
+
+        let ddls = format!(
+            "
+            create type person AS (id int, name text);
+            create type worker AS (p person[], monthly_salary decimal(15,6));
+            create table workers (id int, workers worker[], company text);
+            insert into workers select i, null::worker[], null from generate_series(1, {}) i;
+            copy workers to 'file:///tmp/test.parquet' with (row_group_size {});
+        ",
+            total_rows, row_group_size
+        );
+        Spi::run(&ddls).unwrap();
+
+        let parquet_file_metadata_command =
+            "select * from pgparquet.file_metadata('file:///tmp/test.parquet');";
+
+        let result_file_metadata = Spi::connect(|client| {
+            let mut results = Vec::new();
+            let tup_table = client
+                .select(parquet_file_metadata_command, None, None)
+                .unwrap();
+
+            for row in tup_table {
+                let filename = row["filename"].value::<String>().unwrap().unwrap();
+                let created_by = row["created_by"].value::<String>().unwrap();
+                let num_rows = row["num_rows"].value::<i64>().unwrap().unwrap();
+                let num_row_groups = row["num_row_groups"].value::<i64>().unwrap().unwrap();
+                let format_version = row["format_version"].value::<String>().unwrap().unwrap();
+
+                results.push((
+                    filename,
+                    created_by,
+                    num_rows,
+                    num_row_groups,
+                    format_version,
+                ));
+            }
+
+            results
+        });
+
+        let expected_file_metadata = vec![(
+            "file:///tmp/test.parquet".into(),
+            Some("parquet-rs version 52.2.0".into()),
+            total_rows,
+            total_row_groups,
+            "1".into(),
+        )];
+
+        assert_eq!(result_file_metadata, expected_file_metadata);
+
+        Spi::run("DROP TABLE workers; DROP TYPE worker, person;").unwrap();
+    }
+
+    #[pg_test]
+    fn test_parquet_kv_metadata() {
+        let ddls = "
+            create type person AS (id int, name text);
+            create type worker AS (p person[], monthly_salary decimal(15,6));
+            create table workers (id int, workers worker[], company text);
+            copy workers to 'file:///tmp/test.parquet';
+        ";
+        Spi::run(ddls).unwrap();
+
+        let parquet_kv_metadata_command =
+            "select * from pgparquet.kv_metadata('file:///tmp/test.parquet');";
+
+        let result_kv_metadata = Spi::connect(|client| {
+            let mut results = Vec::new();
+            let tup_table = client
+                .select(parquet_kv_metadata_command, None, None)
+                .unwrap();
+
+            for row in tup_table {
+                let filename = row["filename"].value::<String>().unwrap().unwrap();
+                let key = row["key"].value::<Vec<u8>>().unwrap().unwrap();
+                let value = row["value"].value::<Vec<u8>>().unwrap();
+
+                results.push((filename, key, value));
+            }
+
+            results
+        });
+
+        let expected_kv_metadata = vec![(
+            "file:///tmp/test.parquet".into(),
+            vec![65, 82, 82, 79, 87, 58, 115, 99, 104, 101, 109, 97],
+            Some(vec![
+                47, 47, 47, 47, 47, 47, 65, 66, 65, 65, 65, 81, 65, 65, 65, 65, 65, 65, 65, 75, 65,
+                65, 119, 65, 67, 103, 65, 74, 65, 65, 81, 65, 67, 103, 65, 65, 65, 66, 65, 65, 65,
+                65, 65, 65, 65, 81, 81, 65, 67, 65, 65, 73, 65, 65, 65, 65, 66, 65, 65, 73, 65, 65,
+                65, 65, 66, 65, 65, 65, 65, 65, 77, 65, 65, 65, 67, 77, 65, 81, 65, 65, 77, 65, 65,
+                65, 65, 65, 81, 65, 65, 65, 67, 81, 47, 118, 47, 47, 70, 65, 65, 65, 65, 65, 119,
+                65, 65, 65, 65, 65, 65, 65, 69, 70, 68, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 81,
+                47, 47, 47, 47, 66, 119, 65, 65, 65, 71, 78, 118, 98, 88, 66, 104, 98, 110, 107,
+                65, 117, 80, 55, 47, 47, 120, 103, 65, 65, 65, 65, 77, 65, 65, 65, 65, 65, 65, 65,
+                66, 68, 67, 119, 66, 65, 65, 65, 66, 65, 65, 65, 65, 67, 65, 65, 65, 65, 68, 122,
+                47, 47, 47, 47, 89, 47, 118, 47, 47, 72, 65, 65, 65, 65, 65, 119, 65, 65, 65, 65,
+                65, 65, 65, 69, 78, 65, 65, 69, 65, 65, 65, 73, 65, 65, 65, 66, 77, 65, 65, 65, 65,
+                67, 65, 65, 65, 65, 71, 68, 47, 47, 47, 47, 56, 47, 118, 47, 47, 72, 65, 65, 65,
+                65, 65, 119, 65, 65, 65, 65, 65, 65, 65, 69, 72, 72, 65, 65, 65, 65, 65, 65, 65,
+                65, 65, 65, 73, 65, 65, 119, 65, 67, 65, 65, 69, 65, 65, 103, 65, 65, 65, 65, 71,
+                65, 65, 65, 65, 68, 119, 65, 65, 65, 65, 52, 65, 65, 65, 66, 116, 98, 50, 53, 48,
+                97, 71, 120, 53, 88, 51, 78, 104, 98, 71, 70, 121, 101, 81, 65, 65, 80, 80, 47, 47,
+                47, 120, 103, 65, 65, 65, 65, 77, 65, 65, 65, 65, 65, 65, 65, 66, 68, 74, 81, 65,
+                65, 65, 65, 66, 65, 65, 65, 65, 67, 65, 65, 65, 65, 77, 68, 47, 47, 47, 57, 99, 47,
+                47, 47, 47, 72, 65, 65, 65, 65, 65, 119, 65, 65, 65, 65, 65, 65, 65, 69, 78, 98,
+                65, 65, 65, 65, 65, 73, 65, 65, 65, 65, 52, 65, 65, 65, 65, 67, 65, 65, 65, 65, 79,
+                84, 47, 47, 47, 43, 65, 47, 47, 47, 47, 71, 65, 65, 65, 65, 65, 119, 65, 65, 65,
+                65, 65, 65, 65, 69, 70, 69, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 69, 65, 65, 81,
+                65, 66, 65, 65, 65, 65, 65, 81, 65, 65, 65, 66, 117, 89, 87, 49, 108, 65, 65, 65,
+                65, 65, 75, 122, 47, 47, 47, 56, 81, 65, 65, 65, 65, 71, 65, 65, 65, 65, 65, 65,
+                65, 65, 81, 73, 85, 65, 65, 65, 65, 110, 80, 47, 47, 47, 121, 65, 65, 65, 65, 65,
+                65, 65, 65, 65, 66, 65, 65, 65, 65, 65, 65, 73, 65, 65, 65, 66, 112, 90, 65, 65,
+                65, 65, 81, 65, 65, 65, 72, 65, 65, 65, 65, 65, 66, 65, 65, 65, 65, 99, 65, 65, 65,
+                65, 65, 99, 65, 65, 65, 66, 51, 98, 51, 74, 114, 90, 88, 74, 122, 65, 65, 99, 65,
+                65, 65, 66, 51, 98, 51, 74, 114, 90, 88, 74, 122, 65, 66, 65, 65, 70, 65, 65, 81,
+                65, 65, 52, 65, 68, 119, 65, 69, 65, 65, 65, 65, 67, 65, 65, 81, 65, 65, 65, 65,
+                71, 65, 65, 65, 65, 67, 65, 65, 65, 65, 65, 65, 65, 65, 69, 67, 72, 65, 65, 65, 65,
+                65, 103, 65, 68, 65, 65, 69, 65, 65, 115, 65, 67, 65, 65, 65, 65, 67, 65, 65, 65,
+                65, 65, 65, 65, 65, 65, 66, 65, 65, 65, 65, 65, 65, 73, 65, 65, 65, 66, 112, 90,
+                65, 65, 65,
+            ]),
+        )];
+
+        assert_eq!(result_kv_metadata, expected_kv_metadata);
+
+        Spi::run("DROP TABLE workers; DROP TYPE worker, person;").unwrap();
     }
 }
 
