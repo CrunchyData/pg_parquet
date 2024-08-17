@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use arrow::{
     array::{ArrayRef, RecordBatch, StructArray},
     datatypes::FieldRef,
 };
+use arrow_schema::SchemaRef;
 use parquet::{
     arrow::{async_writer::ParquetObjectWriter, AsyncArrowWriter},
     file::properties::{EnabledStatistics, WriterProperties},
@@ -21,6 +24,7 @@ pub(crate) struct ParquetWriterContext<'a> {
     runtime: Runtime,
     parquet_writer: AsyncArrowWriter<ParquetObjectWriter>,
     tupledesc: PgTupleDesc<'a>,
+    schema: SchemaRef,
 }
 
 impl<'a> ParquetWriterContext<'a> {
@@ -41,15 +45,17 @@ impl<'a> ParquetWriterContext<'a> {
             .set_compression(codec.into())
             .build();
 
-        let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc.clone()).into();
+        let schema = parse_arrow_schema_from_tupledesc(tupledesc.clone());
+        let schema = Arc::new(schema);
 
         let parquet_writer =
-            runtime.block_on(parquet_writer_from_uri(uri, arrow_schema, writer_props));
+            runtime.block_on(parquet_writer_from_uri(uri, schema.clone(), writer_props));
 
         ParquetWriterContext {
             runtime,
             parquet_writer,
             tupledesc,
+            schema,
         }
     }
 
@@ -60,8 +66,11 @@ impl<'a> ParquetWriterContext<'a> {
         pgrx::pg_sys::check_for_interrupts!();
 
         // collect arrow arrays for each attribute in the tuples
-        let tuple_attribute_arrow_arrays =
-            collect_arrow_attribute_arrays_from_tupledesc(tuples, self.tupledesc.clone());
+        let tuple_attribute_arrow_arrays = collect_arrow_attribute_arrays_from_tupledesc(
+            tuples,
+            self.tupledesc.clone(),
+            self.schema.clone(),
+        );
 
         let struct_array = StructArray::from(tuple_attribute_arrow_arrays);
         let record_batch = RecordBatch::from(struct_array);
@@ -82,6 +91,7 @@ impl<'a> ParquetWriterContext<'a> {
 fn collect_arrow_attribute_arrays_from_tupledesc(
     tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     tupledesc: PgTupleDesc,
+    schema: SchemaRef,
 ) -> Vec<(FieldRef, ArrayRef)> {
     let include_generated_columns = true;
     let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
@@ -94,6 +104,9 @@ fn collect_arrow_attribute_arrays_from_tupledesc(
         let attribute_name = attribute.name();
         let attribute_typoid = attribute.type_oid().value();
         let attribute_typmod = attribute.type_mod();
+        let attribute_field = schema
+            .field_with_name(attribute_name)
+            .expect("Expected attribute field");
 
         let (field, array, tups) = collect_attribute_array_from_tuples(
             tuples,
@@ -101,6 +114,7 @@ fn collect_arrow_attribute_arrays_from_tupledesc(
             attribute_name,
             attribute_typoid,
             attribute_typmod,
+            Arc::new(attribute_field.clone()),
         );
 
         tuples = tups;

@@ -4,22 +4,19 @@ use arrow::{
     array::{make_array, ArrayRef, IntervalMonthDayNanoArray, ListArray},
     datatypes::FieldRef,
 };
-use pgrx::{pg_sys::Oid, Interval};
+use arrow_schema::DataType;
+use pgrx::Interval;
 
 use crate::{
-    arrow_parquet::{
-        arrow_utils::arrow_array_offsets,
-        pg_to_arrow::PgTypeToArrowArray,
-        schema_visitor::{visit_list_schema, visit_primitive_schema},
-    },
+    arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray},
     type_compat::pg_arrow_type_conversions::interval_to_nano,
 };
 
+use super::PgTypeToArrowContext;
+
 // Interval
 impl PgTypeToArrowArray<Interval> for Vec<Option<Interval>> {
-    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
-        let interval_field = visit_primitive_schema(typoid, typmod, name);
-
+    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
         let intervals = self
             .into_iter()
             .map(|interval| interval.and_then(interval_to_nano))
@@ -27,16 +24,14 @@ impl PgTypeToArrowArray<Interval> for Vec<Option<Interval>> {
 
         let interval_array = IntervalMonthDayNanoArray::from(intervals);
 
-        (interval_field, Arc::new(interval_array))
+        (context.field, Arc::new(interval_array))
     }
 }
 
 // Interval[]
 impl PgTypeToArrowArray<Vec<Option<Interval>>> for Vec<Option<Vec<Option<Interval>>>> {
-    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
-
-        let interval_field = visit_primitive_schema(typoid, typmod, name);
 
         let intervals = self
             .into_iter()
@@ -47,13 +42,20 @@ impl PgTypeToArrowArray<Vec<Option<Interval>>> for Vec<Option<Vec<Option<Interva
 
         let interval_array = IntervalMonthDayNanoArray::from(intervals);
 
-        let list_field = visit_list_schema(typoid, typmod, name);
-        let list_array = ListArray::new(
-            interval_field,
-            offsets,
-            Arc::new(interval_array),
-            Some(nulls),
-        );
-        (list_field, make_array(list_array.into()))
+        let list_field = context.field;
+
+        match list_field.data_type() {
+            DataType::List(interval_field) => {
+                let list_array = ListArray::new(
+                    interval_field.clone(),
+                    offsets,
+                    Arc::new(interval_array),
+                    Some(nulls),
+                );
+
+                (list_field, make_array(list_array.into()))
+            }
+            _ => panic!("Expected List field"),
+        }
     }
 }

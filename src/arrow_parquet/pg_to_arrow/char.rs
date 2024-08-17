@@ -4,19 +4,15 @@ use arrow::{
     array::{make_array, ArrayRef, ListArray, StringArray},
     datatypes::FieldRef,
 };
-use pgrx::pg_sys::Oid;
+use arrow_schema::DataType;
 
-use crate::arrow_parquet::{
-    arrow_utils::arrow_array_offsets,
-    pg_to_arrow::PgTypeToArrowArray,
-    schema_visitor::{visit_list_schema, visit_primitive_schema},
-};
+use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
+
+use super::PgTypeToArrowContext;
 
 // Char
 impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
-    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
-        let char_field = visit_primitive_schema(typoid, typmod, name);
-
+    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
         let chars = self
             .into_iter()
             .map(|c| c.map(|c| (c as u8 as char).to_string()))
@@ -24,16 +20,14 @@ impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
 
         let char_array = StringArray::from(chars);
 
-        (char_field, Arc::new(char_array))
+        (context.field, Arc::new(char_array))
     }
 }
 
 // "Char"[]
 impl PgTypeToArrowArray<Vec<Option<i8>>> for Vec<Option<Vec<Option<i8>>>> {
-    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
-
-        let char_field = visit_primitive_schema(typoid, typmod, name);
 
         let chars = self
             .into_iter()
@@ -44,8 +38,20 @@ impl PgTypeToArrowArray<Vec<Option<i8>>> for Vec<Option<Vec<Option<i8>>>> {
 
         let char_array = StringArray::from(chars);
 
-        let list_field = visit_list_schema(typoid, typmod, name);
-        let list_array = ListArray::new(char_field, offsets, Arc::new(char_array), Some(nulls));
-        (list_field, make_array(list_array.into()))
+        let list_field = context.field;
+
+        match list_field.data_type() {
+            DataType::List(char_field) => {
+                let list_array = ListArray::new(
+                    char_field.clone(),
+                    offsets,
+                    Arc::new(char_array),
+                    Some(nulls),
+                );
+
+                (list_field, make_array(list_array.into()))
+            }
+            _ => panic!("Expected List field"),
+        }
     }
 }

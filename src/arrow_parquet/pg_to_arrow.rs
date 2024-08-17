@@ -46,218 +46,182 @@ pub(crate) mod timetz;
 pub(crate) mod uuid;
 
 pub(crate) trait PgTypeToArrowArray<T: IntoDatum + FromDatum> {
-    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef);
+    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef);
+}
+
+pub(crate) struct PgTypeToArrowContext<'a> {
+    name: &'a str,
+    field: FieldRef,
+    typoid: Oid,
+    typmod: i32,
+    tupledesc: Option<PgTupleDesc<'a>>,
 }
 
 pub(crate) fn collect_attribute_array_from_tuples<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
     tupledesc: PgTupleDesc<'a>,
-    attribute_name: &str,
+    attribute_name: &'a str,
     attribute_typoid: Oid,
     attribute_typmod: i32,
+    attribute_field: FieldRef,
 ) -> (
     FieldRef,
     ArrayRef,
     Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
 ) {
     if is_composite_type(attribute_typoid) {
-        collect_tuple_attribute_array_from_tuples_helper(
-            tuples,
-            tupledesc,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        )
+        let attribute_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
+
+        let attribute_context = PgTypeToArrowContext {
+            name: attribute_name,
+            field: attribute_field,
+            typoid: attribute_typoid,
+            typmod: attribute_typmod,
+            tupledesc: Some(attribute_tupledesc),
+        };
+
+        collect_tuple_attribute_array_from_tuples_helper(tuples, tupledesc, attribute_context)
     } else if is_array_type(attribute_typoid) {
         let attribute_element_typoid = array_element_typoid(attribute_typoid);
 
-        collect_array_attribute_array_from_tuples(
-            tuples,
-            tupledesc,
-            attribute_name,
-            attribute_element_typoid,
-            attribute_typmod,
-        )
+        let is_composite_element = is_composite_type(attribute_element_typoid);
+
+        let attribute_element_tupledesc = if is_composite_element {
+            Some(tuple_desc(attribute_element_typoid, attribute_typmod))
+        } else {
+            None
+        };
+
+        let attribute_context = PgTypeToArrowContext {
+            name: attribute_name,
+            field: attribute_field,
+            typoid: attribute_element_typoid,
+            typmod: attribute_typmod,
+            tupledesc: attribute_element_tupledesc,
+        };
+
+        collect_array_attribute_array_from_tuples(tuples, tupledesc, attribute_context)
     } else if is_crunchy_map_type(attribute_typoid) {
+        let attribute_context = PgTypeToArrowContext {
+            name: attribute_name,
+            field: attribute_field,
+            typoid: attribute_typoid,
+            typmod: attribute_typmod,
+            tupledesc: None,
+        };
+
         set_crunchy_map_typoid(attribute_typoid);
-        collect_array_attribute_array_from_tuples_helper::<PGMap<'_>>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        )
+        collect_array_attribute_array_from_tuples_helper::<PGMap<'_>>(tuples, attribute_context)
     } else {
-        collect_primitive_attribute_array_from_tuples(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        )
+        let attribute_context = PgTypeToArrowContext {
+            name: attribute_name,
+            field: attribute_field,
+            typoid: attribute_typoid,
+            typmod: attribute_typmod,
+            tupledesc: None,
+        };
+
+        collect_primitive_attribute_array_from_tuples(tuples, attribute_context)
     }
 }
 
 fn collect_primitive_attribute_array_from_tuples<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
-    attribute_name: &str,
-    attribute_typoid: Oid,
-    attribute_typmod: i32,
+    attribute_context: PgTypeToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
     Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
 ) {
-    match attribute_typoid {
-        FLOAT4OID => collect_array_attribute_array_from_tuples_helper::<f32>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        FLOAT8OID => collect_array_attribute_array_from_tuples_helper::<f64>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        INT2OID => collect_array_attribute_array_from_tuples_helper::<i16>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        INT4OID => collect_array_attribute_array_from_tuples_helper::<i32>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        INT8OID => collect_array_attribute_array_from_tuples_helper::<i64>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
+    match attribute_context.typoid {
+        FLOAT4OID => {
+            collect_array_attribute_array_from_tuples_helper::<f32>(tuples, attribute_context)
+        }
+        FLOAT8OID => {
+            collect_array_attribute_array_from_tuples_helper::<f64>(tuples, attribute_context)
+        }
+        INT2OID => {
+            collect_array_attribute_array_from_tuples_helper::<i16>(tuples, attribute_context)
+        }
+        INT4OID => {
+            collect_array_attribute_array_from_tuples_helper::<i32>(tuples, attribute_context)
+        }
+        INT8OID => {
+            collect_array_attribute_array_from_tuples_helper::<i64>(tuples, attribute_context)
+        }
         NUMERICOID => {
-            let precision = extract_precision_from_numeric_typmod(attribute_typmod);
+            let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
             if precision > MAX_DECIMAL_PRECISION {
-                set_fallback_typoid(attribute_typoid);
+                set_fallback_typoid(attribute_context.typoid);
                 collect_array_attribute_array_from_tuples_helper::<FallbackToText>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
             } else {
                 collect_array_attribute_array_from_tuples_helper::<AnyNumeric>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
             }
         }
-        BOOLOID => collect_array_attribute_array_from_tuples_helper::<bool>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        DATEOID => collect_array_attribute_array_from_tuples_helper::<Date>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        TIMEOID => collect_array_attribute_array_from_tuples_helper::<Time>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
+        BOOLOID => {
+            collect_array_attribute_array_from_tuples_helper::<bool>(tuples, attribute_context)
+        }
+        DATEOID => {
+            collect_array_attribute_array_from_tuples_helper::<Date>(tuples, attribute_context)
+        }
+        TIMEOID => {
+            collect_array_attribute_array_from_tuples_helper::<Time>(tuples, attribute_context)
+        }
         TIMETZOID => collect_array_attribute_array_from_tuples_helper::<TimeWithTimeZone>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
-        INTERVALOID => collect_array_attribute_array_from_tuples_helper::<Interval>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        UUIDOID => collect_array_attribute_array_from_tuples_helper::<Uuid>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        JSONOID => collect_array_attribute_array_from_tuples_helper::<Json>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        JSONBOID => collect_array_attribute_array_from_tuples_helper::<JsonB>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        TIMESTAMPOID => collect_array_attribute_array_from_tuples_helper::<Timestamp>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
+        INTERVALOID => {
+            collect_array_attribute_array_from_tuples_helper::<Interval>(tuples, attribute_context)
+        }
+        UUIDOID => {
+            collect_array_attribute_array_from_tuples_helper::<Uuid>(tuples, attribute_context)
+        }
+        JSONOID => {
+            collect_array_attribute_array_from_tuples_helper::<Json>(tuples, attribute_context)
+        }
+        JSONBOID => {
+            collect_array_attribute_array_from_tuples_helper::<JsonB>(tuples, attribute_context)
+        }
+        TIMESTAMPOID => {
+            collect_array_attribute_array_from_tuples_helper::<Timestamp>(tuples, attribute_context)
+        }
         TIMESTAMPTZOID => {
             collect_array_attribute_array_from_tuples_helper::<TimestampWithTimeZone>(
                 tuples,
-                attribute_name,
-                attribute_typoid,
-                attribute_typmod,
+                attribute_context,
             )
         }
-        CHAROID => collect_array_attribute_array_from_tuples_helper::<i8>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        TEXTOID => collect_array_attribute_array_from_tuples_helper::<String>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        BYTEAOID => collect_array_attribute_array_from_tuples_helper::<&[u8]>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
-        OIDOID => collect_array_attribute_array_from_tuples_helper::<Oid>(
-            tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-        ),
+        CHAROID => {
+            collect_array_attribute_array_from_tuples_helper::<i8>(tuples, attribute_context)
+        }
+        TEXTOID => {
+            collect_array_attribute_array_from_tuples_helper::<String>(tuples, attribute_context)
+        }
+        BYTEAOID => {
+            collect_array_attribute_array_from_tuples_helper::<&[u8]>(tuples, attribute_context)
+        }
+        OIDOID => {
+            collect_array_attribute_array_from_tuples_helper::<Oid>(tuples, attribute_context)
+        }
         _ => {
-            if is_postgis_geometry_type(attribute_typoid) {
-                set_geometry_typoid(attribute_typoid);
+            if is_postgis_geometry_type(attribute_context.typoid) {
+                set_geometry_typoid(attribute_context.typoid);
                 collect_array_attribute_array_from_tuples_helper::<Geometry>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
             } else {
-                set_fallback_typoid(attribute_typoid);
+                set_fallback_typoid(attribute_context.typoid);
                 collect_array_attribute_array_from_tuples_helper::<FallbackToText>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
             }
         }
@@ -267,174 +231,126 @@ fn collect_primitive_attribute_array_from_tuples<'a>(
 pub(crate) fn collect_array_attribute_array_from_tuples<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
     tupledesc: PgTupleDesc<'a>,
-    attribute_name: &str,
-    attribute_typoid: Oid,
-    attribute_typmod: i32,
+    attribute_context: PgTypeToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
     Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
 ) {
-    match attribute_typoid {
+    match attribute_context.typoid {
         FLOAT4OID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<f32>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         FLOAT8OID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<f64>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         INT2OID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<i16>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         INT4OID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<i32>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         INT8OID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<i64>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         NUMERICOID => {
-            let precision = extract_precision_from_numeric_typmod(attribute_typmod);
+            let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
             if precision > MAX_DECIMAL_PRECISION {
-                set_fallback_typoid(attribute_typoid);
+                set_fallback_typoid(attribute_context.typoid);
                 collect_array_attribute_array_from_tuples_helper::<Vec<Option<FallbackToText>>>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
             } else {
                 collect_array_attribute_array_from_tuples_helper::<Vec<Option<AnyNumeric>>>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
             }
         }
         BOOLOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<bool>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         DATEOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Date>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         TIMEOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Time>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         TIMETZOID => collect_array_attribute_array_from_tuples_helper::<
             Vec<Option<TimeWithTimeZone>>,
-        >(tuples, attribute_name, attribute_typoid, attribute_typmod),
+        >(tuples, attribute_context),
         INTERVALOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Interval>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         UUIDOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Uuid>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         JSONOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Json>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         JSONBOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<JsonB>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         TIMESTAMPOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Timestamp>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         TIMESTAMPTZOID => collect_array_attribute_array_from_tuples_helper::<
             Vec<Option<TimestampWithTimeZone>>,
-        >(tuples, attribute_name, attribute_typoid, attribute_typmod),
+        >(tuples, attribute_context),
         CHAROID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<i8>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         TEXTOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<String>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         BYTEAOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<&[u8]>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         OIDOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Oid>>>(
             tuples,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
+            attribute_context,
         ),
         _ => {
-            if is_composite_type(attribute_typoid) {
+            if is_composite_type(attribute_context.typoid) {
                 collect_array_of_tuple_attribute_array_from_tuples_helper(
                     tuples,
                     tupledesc,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
-            } else if is_crunchy_map_type(attribute_typoid) {
-                set_crunchy_map_typoid(attribute_typoid);
+            } else if is_crunchy_map_type(attribute_context.typoid) {
+                set_crunchy_map_typoid(attribute_context.typoid);
                 collect_array_attribute_array_from_tuples_helper::<Vec<Option<PGMap<'_>>>>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
-            } else if is_postgis_geometry_type(attribute_typoid) {
-                set_geometry_typoid(attribute_typoid);
+            } else if is_postgis_geometry_type(attribute_context.typoid) {
+                set_geometry_typoid(attribute_context.typoid);
                 collect_array_attribute_array_from_tuples_helper::<Vec<Option<Geometry>>>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
             } else {
-                set_fallback_typoid(attribute_typoid);
+                set_fallback_typoid(attribute_context.typoid);
                 collect_array_attribute_array_from_tuples_helper::<Vec<Option<FallbackToText>>>(
                     tuples,
-                    attribute_name,
-                    attribute_typoid,
-                    attribute_typmod,
+                    attribute_context,
                 )
             }
         }
@@ -443,9 +359,7 @@ pub(crate) fn collect_array_attribute_array_from_tuples<'a>(
 
 fn collect_array_attribute_array_from_tuples_helper<'a, T>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
-    attribute_name: &str,
-    attribute_typoid: Oid,
-    attribute_typmod: i32,
+    attribute_context: PgTypeToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
@@ -461,24 +375,21 @@ where
         pgrx::pg_sys::check_for_interrupts!();
 
         if let Some(record) = record {
-            let attribute_val: Option<T> = record.get_by_name(attribute_name).unwrap();
+            let attribute_val: Option<T> = record.get_by_name(attribute_context.name).unwrap();
             attribute_values.push(attribute_val);
         } else {
             attribute_values.push(None);
         }
     }
 
-    let (field, array) =
-        attribute_values.to_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
+    let (field, array) = attribute_values.to_arrow_array(attribute_context);
     (field, array, tuples)
 }
 
 fn collect_tuple_attribute_array_from_tuples_helper<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
     tuple_tupledesc: PgTupleDesc<'a>,
-    attribute_name: &str,
-    attribute_typoid: Oid,
-    attribute_typmod: i32,
+    attribute_context: PgTypeToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
@@ -486,11 +397,14 @@ fn collect_tuple_attribute_array_from_tuples_helper<'a>(
 ) {
     let mut attribute_values = vec![];
 
-    let att_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
+    let att_tupledesc = attribute_context
+        .tupledesc
+        .clone()
+        .expect("Expected tuple descriptor");
 
     let attnum = tuple_tupledesc
         .iter()
-        .find(|attr| attr.name() == attribute_name)
+        .find(|attr| attr.name() == attribute_context.name)
         .unwrap()
         .attnum;
 
@@ -522,17 +436,14 @@ fn collect_tuple_attribute_array_from_tuples_helper<'a>(
         }
     }
 
-    let (field, array) =
-        attribute_values.to_arrow_array(attribute_name, attribute_typoid, attribute_typmod);
+    let (field, array) = attribute_values.to_arrow_array(attribute_context);
     (field, array, tuples_restored)
 }
 
 fn collect_array_of_tuple_attribute_array_from_tuples_helper<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
     tuple_tupledesc: PgTupleDesc<'a>,
-    attribute_name: &str,
-    attribute_typoid: Oid,
-    attribute_typmod: i32,
+    attribute_context: PgTypeToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
@@ -542,11 +453,14 @@ fn collect_array_of_tuple_attribute_array_from_tuples_helper<'a>(
 
     let attnum = tuple_tupledesc
         .iter()
-        .find(|attr| attr.name() == attribute_name)
+        .find(|attr| attr.name() == attribute_context.name)
         .unwrap()
         .attnum;
 
-    let att_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
+    let att_tupledesc = attribute_context
+        .tupledesc
+        .clone()
+        .expect("Expected tuple descriptor");
 
     let mut tuples_restored = vec![];
 
@@ -577,11 +491,8 @@ fn collect_array_of_tuple_attribute_array_from_tuples_helper<'a>(
         }
     }
 
-    let (field, array) = attribute_values.to_arrow_array(
-        attribute_name,
-        att_tupledesc.oid(),
-        att_tupledesc.typmod(),
-    );
+    let (field, array) = attribute_values.to_arrow_array(attribute_context);
+
     (field, array, tuples_restored)
 }
 

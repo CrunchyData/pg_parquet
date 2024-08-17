@@ -101,7 +101,7 @@ fn create_list_field_from_struct_field(array_name: &str, struct_field: Arc<Field
     list_field.into()
 }
 
-pub(crate) fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
+fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
     let mut child_fields: Vec<Arc<Field>> = vec![];
@@ -144,7 +144,7 @@ pub(crate) fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Ar
     field.into()
 }
 
-pub(crate) fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str) -> Arc<Field> {
+fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
     if is_composite_type(typoid) {
@@ -161,7 +161,7 @@ pub(crate) fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str) -> A
     }
 }
 
-pub(crate) fn visit_map_schema(typoid: Oid, typmod: i32, map_name: &str) -> Arc<Field> {
+fn visit_map_schema(typoid: Oid, typmod: i32, map_name: &str) -> Arc<Field> {
     let tupledesc = tuple_desc(typoid, typmod);
     let struct_field = visit_struct_schema(tupledesc, map_name);
     let struct_field = to_not_nullable_field(struct_field);
@@ -174,7 +174,7 @@ pub(crate) fn visit_map_schema(typoid: Oid, typmod: i32, map_name: &str) -> Arc<
     .into()
 }
 
-pub(crate) fn visit_primitive_schema(typoid: Oid, typmod: i32, elem_name: &str) -> Arc<Field> {
+fn visit_primitive_schema(typoid: Oid, typmod: i32, elem_name: &str) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
     match typoid {
