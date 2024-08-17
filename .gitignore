@@ -7,3 +7,7 @@ Cargo.lock
 *.parquet
 **/*.code-workspace
 *.csv
+*.profraw
+*.profdata
+*.gcov
+*.lcov

@@ -20,7 +20,16 @@ jobs:
         with:
           toolchain: 1.79.0
           target: x86_64-unknown-linux-gnu
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "18.1.7"
+
+      - name: Install grcov
+        run: |
+          cargo install grcov
 
       - name: Install PostgreSQL dependencies
         run: |
@@ -42,4 +51,25 @@ jobs:
 
       - name: Test
         run: |
-          RUST_TEST_THREADS=1 cargo pgrx test pg16 --runas postgres --pgdata /tmp/pgdata
+          cargo pgrx test pg16 --runas postgres --pgdata /tmp/pgdata
+        env:
+          RUSTFLAGS: "-C instrument-coverage"
+          RUST_TEST_THREADS: 1
+
+      - name: Generate coverage report
+        run: |
+          grcov . \
+            -s . \
+            --binary-path ./target/debug/ \
+            -t lcov \
+            --ignore-not-existing \
+            --keep-only 'src/**' \
+            -o pg_parquet.lcov
+
+      - name: Upload coverage report to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          fail_ci_if_error: true
+          files: ./pg_parquet.lcov
+          flags: pgrxtests
+          token: ${{ secrets.CODECOV_TOKEN }}
