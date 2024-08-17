@@ -126,7 +126,7 @@ pub(crate) async fn parquet_writer_from_uri(
     if uri_format == UriFormat::File {
         let uri = uri.strip_prefix("file://").unwrap();
 
-        // create if not exists
+        // we overwrite the local file if it exists
         std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)

@@ -1,25 +1,11 @@
 use std::{ops::Deref, sync::Arc};
 
 use arrow::{
-    array::{make_array, ArrayRef, ListArray},
     buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
-    datatypes::{DataType, Field, FieldRef},
+    datatypes::{Field, FieldRef},
 };
 
 use crate::type_compat::map::PGMap;
-
-pub(crate) fn create_arrow_list_array(
-    name: &str,
-    field: FieldRef,
-    array: ArrayRef,
-    offsets: OffsetBuffer<i32>,
-    nulls: NullBuffer,
-) -> (FieldRef, ArrayRef) {
-    let list_array = ListArray::new(field.clone(), offsets, array, Some(nulls));
-    let list_array = make_array(list_array.into());
-    let list_field = Arc::new(Field::new(name, DataType::List(field), true));
-    (list_field, list_array)
-}
 
 pub(crate) fn to_not_nullable_field(field: FieldRef) -> FieldRef {
     let name = field.deref().name();

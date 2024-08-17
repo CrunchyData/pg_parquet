@@ -1,48 +1,54 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, StringArray},
-    datatypes::{DataType, Field, FieldRef},
+    array::{make_array, ArrayRef, ListArray, StringArray},
+    datatypes::FieldRef,
 };
 use pgrx::pg_sys::Oid;
 
 use crate::{
     arrow_parquet::{
-        arrow_utils::{arrow_array_offsets, create_arrow_list_array},
+        arrow_utils::arrow_array_offsets,
         pg_to_arrow::PgTypeToArrowArray,
+        schema_visitor::{visit_list_schema, visit_primitive_schema},
     },
     type_compat::fallback_to_text::FallbackToText,
 };
 
 // Text representation of any type
 impl PgTypeToArrowArray<FallbackToText> for Vec<Option<FallbackToText>> {
-    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
-        let field = Field::new(name, DataType::Utf8, true);
-        let array = self
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+        let text_field = visit_primitive_schema(typoid, typmod, name);
+
+        let texts = self
             .into_iter()
             .map(|val| val.map(String::from))
             .collect::<Vec<_>>();
-        let array = StringArray::from(array);
-        (Arc::new(field), Arc::new(array))
+
+        let text_array = StringArray::from(texts);
+
+        (text_field, Arc::new(text_array))
     }
 }
 
 // Text[] representation of any type
 impl PgTypeToArrowArray<Vec<Option<FallbackToText>>> for Vec<Option<Vec<Option<FallbackToText>>>> {
-    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let field = Field::new(name, DataType::Utf8, true);
+        let text_field = visit_primitive_schema(typoid, typmod, name);
 
-        let array = self.into_iter().flatten().flatten().collect::<Vec<_>>();
-        let array = array
+        let texts = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+
+        let texts = texts
             .into_iter()
             .map(|val| val.map(String::from))
             .collect::<Vec<_>>();
 
-        let array = StringArray::from(array);
-        let (field, primitive_array) = (Arc::new(field), Arc::new(array));
+        let text_array = StringArray::from(texts);
 
-        create_arrow_list_array(name, field, primitive_array, offsets, nulls)
+        let list_field = visit_list_schema(typoid, typmod, name);
+        let list_array = ListArray::new(text_field, offsets, Arc::new(text_array), Some(nulls));
+        (list_field, make_array(list_array.into()))
     }
 }

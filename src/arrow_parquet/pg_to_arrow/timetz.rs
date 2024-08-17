@@ -1,33 +1,33 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, Time64MicrosecondArray},
-    datatypes::{DataType, Field, FieldRef, TimeUnit},
+    array::{make_array, ArrayRef, ListArray, Time64MicrosecondArray},
+    datatypes::FieldRef,
 };
 use pgrx::{pg_sys::Oid, TimeWithTimeZone};
 
 use crate::{
     arrow_parquet::{
-        arrow_utils::{arrow_array_offsets, create_arrow_list_array},
+        arrow_utils::arrow_array_offsets,
         pg_to_arrow::PgTypeToArrowArray,
+        schema_visitor::{visit_list_schema, visit_primitive_schema},
     },
     type_compat::pg_arrow_type_conversions::timetz_to_i64,
 };
 
 // TimeTz
 impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
-    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
-        let timetz_array = self
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+        let timetz_field = visit_primitive_schema(typoid, typmod, name);
+
+        let timetzs = self
             .into_iter()
             .map(|timetz| timetz.and_then(timetz_to_i64))
             .collect::<Vec<_>>();
 
-        let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true).with_metadata(
-            HashMap::from_iter(vec![("adjusted_to_utc".into(), "true".into())]),
-        );
+        let timetz_array = Time64MicrosecondArray::from(timetzs);
 
-        let array = Time64MicrosecondArray::from(timetz_array);
-        (Arc::new(field), Arc::new(array))
+        (timetz_field, Arc::new(timetz_array))
     }
 }
 
@@ -35,22 +35,22 @@ impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
 impl PgTypeToArrowArray<Vec<Option<TimeWithTimeZone>>>
     for Vec<Option<Vec<Option<TimeWithTimeZone>>>>
 {
-    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let field = Field::new(name, DataType::Time64(TimeUnit::Microsecond), true).with_metadata(
-            HashMap::from_iter(vec![("adjusted_to_utc".into(), "true".into())]),
-        );
+        let timetz_field = visit_primitive_schema(typoid, typmod, name);
 
-        let array = self
+        let timetzs = self
             .into_iter()
             .flatten()
             .flatten()
             .map(|timetz| timetz.and_then(timetz_to_i64))
             .collect::<Vec<_>>();
-        let array = Time64MicrosecondArray::from(array);
-        let (field, primitive_array) = (Arc::new(field), Arc::new(array));
 
-        create_arrow_list_array(name, field, primitive_array, offsets, nulls)
+        let timetz_array = Time64MicrosecondArray::from(timetzs);
+
+        let list_field = visit_list_schema(typoid, typmod, name);
+        let list_array = ListArray::new(timetz_field, offsets, Arc::new(timetz_array), Some(nulls));
+        (list_field, make_array(list_array.into()))
     }
 }

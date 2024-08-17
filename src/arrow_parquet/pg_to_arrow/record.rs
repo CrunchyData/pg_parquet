@@ -1,16 +1,15 @@
-use std::sync::Arc;
-
 use arrow::{
-    array::{make_array, ArrayRef, StructArray},
+    array::{make_array, ArrayRef, ListArray, StructArray},
     buffer::{BooleanBuffer, NullBuffer},
-    datatypes::{DataType, Field, FieldRef, Fields},
+    datatypes::{FieldRef, Fields},
 };
 use pgrx::{heap_tuple::PgHeapTuple, pg_sys::Oid, AllocatedByRust};
 
 use crate::{
     arrow_parquet::{
-        arrow_utils::{arrow_array_offsets, create_arrow_list_array},
+        arrow_utils::arrow_array_offsets,
         pg_to_arrow::PgTypeToArrowArray,
+        schema_visitor::{visit_list_schema, visit_struct_schema},
     },
     pgrx_utils::{collect_valid_attributes, tuple_desc},
 };
@@ -50,11 +49,7 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
             struct_attribute_arrays.push(array);
         }
 
-        let struct_field = Arc::new(Field::new(
-            name,
-            DataType::Struct(Fields::from(struct_attribute_fields.clone())),
-            true,
-        ));
+        let struct_field = visit_struct_schema(tupledesc, name);
 
         // determines which structs in the array are null
         let is_null_buffer =
@@ -79,9 +74,11 @@ impl PgTypeToArrowArray<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>
     fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let array = self.into_iter().flatten().flatten().collect::<Vec<_>>();
-        let (field, primitive_array) = array.to_arrow_array(name, typoid, typmod);
+        let tuples = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let (struct_field, struct_array) = tuples.to_arrow_array(name, typoid, typmod);
 
-        create_arrow_list_array(name, field, primitive_array, offsets, nulls)
+        let list_field = visit_list_schema(typoid, typmod, name);
+        let list_array = ListArray::new(struct_field, offsets, struct_array, Some(nulls));
+        (list_field, make_array(list_array.into()))
     }
 }

@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, Decimal128Array},
-    datatypes::{DataType, Field, FieldRef},
+    array::{make_array, ArrayRef, Decimal128Array, ListArray},
+    datatypes::FieldRef,
 };
 use pgrx::{pg_sys::Oid, AnyNumeric};
 
 use crate::{
     arrow_parquet::{
-        arrow_utils::{arrow_array_offsets, create_arrow_list_array},
+        arrow_utils::arrow_array_offsets,
         pg_to_arrow::PgTypeToArrowArray,
+        schema_visitor::{visit_list_schema, visit_primitive_schema},
     },
     type_compat::pg_arrow_type_conversions::{
         extract_precision_from_numeric_typmod, extract_scale_from_numeric_typmod, numeric_to_i128,
@@ -18,43 +19,49 @@ use crate::{
 
 // Numeric
 impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
-    fn to_arrow_array(self, name: &str, _typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+        let numeric_field = visit_primitive_schema(typoid, typmod, name);
+
         let precision = extract_precision_from_numeric_typmod(typmod);
         let scale = extract_scale_from_numeric_typmod(typmod);
 
-        let numeric_array = self
+        let numerics = self
             .into_iter()
             .map(|numeric| numeric.and_then(|v| numeric_to_i128(v, scale)))
             .collect::<Vec<_>>();
-        let field = Field::new(name, DataType::Decimal128(precision as _, scale as _), true);
-        let array = Decimal128Array::from(numeric_array)
+
+        let numeric_array = Decimal128Array::from(numerics)
             .with_precision_and_scale(precision as _, scale as _)
             .unwrap();
-        (Arc::new(field), Arc::new(array))
+
+        (numeric_field, Arc::new(numeric_array))
     }
 }
 
 // Int64[]
 impl PgTypeToArrowArray<Vec<Option<AnyNumeric>>> for Vec<Option<Vec<Option<AnyNumeric>>>> {
-    fn to_arrow_array(self, name: &str, _typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+        let (offsets, nulls) = arrow_array_offsets(&self);
+
+        let numeric_field = visit_primitive_schema(typoid, typmod, name);
+
         let precision = extract_precision_from_numeric_typmod(typmod);
         let scale = extract_scale_from_numeric_typmod(typmod);
 
-        let (offsets, nulls) = arrow_array_offsets(&self);
-
-        let field = Field::new(name, DataType::Decimal128(precision as _, scale as _), true);
-
-        let array = self
+        let numerics = self
             .into_iter()
             .flatten()
             .flatten()
             .map(|time| time.and_then(|v| numeric_to_i128(v, scale)))
             .collect::<Vec<_>>();
-        let array = Decimal128Array::from(array)
+
+        let numeric_array = Decimal128Array::from(numerics)
             .with_precision_and_scale(precision as _, scale as _)
             .unwrap();
-        let (field, primitive_array) = (Arc::new(field), Arc::new(array));
 
-        create_arrow_list_array(name, field, primitive_array, offsets, nulls)
+        let list_field = visit_list_schema(typoid, typmod, name);
+        let list_array =
+            ListArray::new(numeric_field, offsets, Arc::new(numeric_array), Some(nulls));
+        (list_field, make_array(list_array.into()))
     }
 }

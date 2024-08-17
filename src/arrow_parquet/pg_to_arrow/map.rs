@@ -1,17 +1,16 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, AsArray, MapArray},
-    datatypes::{DataType, Field, FieldRef},
+    array::{make_array, ArrayRef, AsArray, ListArray, MapArray},
+    datatypes::FieldRef,
 };
 use pgrx::pg_sys::Oid;
 
 use crate::{
     arrow_parquet::{
-        arrow_utils::{
-            arrow_array_offsets, arrow_map_offsets, create_arrow_list_array, to_not_nullable_field,
-        },
+        arrow_utils::{arrow_array_offsets, arrow_map_offsets, to_not_nullable_field},
         pg_to_arrow::PgTypeToArrowArray,
+        schema_visitor::{visit_list_schema, visit_map_schema},
     },
     pgrx_utils::domain_array_base_elem_typoid,
     type_compat::map::PGMap,
@@ -42,7 +41,7 @@ impl<'a> PgTypeToArrowArray<PGMap<'a>> for Vec<Option<PGMap<'a>>> {
 
         let entries_array = entries_array.as_struct().to_owned();
 
-        let array = MapArray::new(
+        let map_array = MapArray::new(
             entries_field.clone(),
             offsets,
             entries_array,
@@ -50,9 +49,9 @@ impl<'a> PgTypeToArrowArray<PGMap<'a>> for Vec<Option<PGMap<'a>>> {
             false,
         );
 
-        let map_field = Field::new(name, DataType::Map(entries_field, false), true);
+        let map_field = visit_map_schema(typoid, typmod, name);
 
-        (map_field.into(), Arc::new(array))
+        (map_field, Arc::new(map_array))
     }
 }
 
@@ -85,11 +84,7 @@ impl<'a> PgTypeToArrowArray<Vec<Option<PGMap<'a>>>> for Vec<Option<Vec<Option<PG
 
         let entries_array = entries_array.as_struct().to_owned();
 
-        let map_field = Arc::new(Field::new(
-            name,
-            DataType::Map(entries_field.clone(), false),
-            true,
-        ));
+        let map_field = visit_map_schema(typoid, typmod, name);
 
         let map_array = MapArray::new(
             entries_field,
@@ -98,8 +93,14 @@ impl<'a> PgTypeToArrowArray<Vec<Option<PGMap<'a>>>> for Vec<Option<Vec<Option<PG
             Some(map_nulls),
             false,
         );
-        let map_array = Arc::new(map_array);
 
-        create_arrow_list_array(name, map_field, map_array, list_offsets, list_nulls)
+        let list_field = visit_list_schema(typoid, typmod, name);
+        let list_array = ListArray::new(
+            map_field,
+            list_offsets,
+            Arc::new(map_array),
+            Some(list_nulls),
+        );
+        (list_field, make_array(list_array.into()))
     }
 }

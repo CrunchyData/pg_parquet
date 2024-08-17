@@ -1,36 +1,40 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{ArrayRef, BooleanArray},
-    datatypes::{DataType, Field, FieldRef},
+    array::{make_array, ArrayRef, BooleanArray, ListArray},
+    datatypes::FieldRef,
 };
 use pgrx::pg_sys::Oid;
 
 use crate::arrow_parquet::{
-    arrow_utils::{arrow_array_offsets, create_arrow_list_array},
+    arrow_utils::arrow_array_offsets,
     pg_to_arrow::PgTypeToArrowArray,
+    schema_visitor::{visit_list_schema, visit_primitive_schema},
 };
 
 // Bool
 impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
-    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
-        let field = Field::new(name, DataType::Boolean, true);
-        let array = BooleanArray::from(self);
-        (Arc::new(field), Arc::new(array))
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
+        let bool_field = visit_primitive_schema(typoid, typmod, name);
+
+        let bool_array = BooleanArray::from(self);
+
+        (bool_field, Arc::new(bool_array))
     }
 }
 
 // Bool[]
 impl PgTypeToArrowArray<Vec<Option<bool>>> for Vec<Option<Vec<Option<bool>>>> {
-    fn to_arrow_array(self, name: &str, _typoid: Oid, _typmod: i32) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, name: &str, typoid: Oid, typmod: i32) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let field = Field::new(name, DataType::Boolean, true);
+        let bool_field = visit_primitive_schema(typoid, typmod, name);
 
-        let array = self.into_iter().flatten().flatten().collect::<Vec<_>>();
-        let array = BooleanArray::from(array);
-        let (field, primitive_array) = (Arc::new(field), Arc::new(array));
+        let bools = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let bool_array = BooleanArray::from(bools);
 
-        create_arrow_list_array(name, field, primitive_array, offsets, nulls)
+        let list_field = visit_list_schema(typoid, typmod, name);
+        let list_array = ListArray::new(bool_field, offsets, Arc::new(bool_array), Some(nulls));
+        (list_field, make_array(list_array.into()))
     }
 }
