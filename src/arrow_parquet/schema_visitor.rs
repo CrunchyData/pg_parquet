@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use arrow::datatypes::{Field, Fields, Schema};
 use arrow_schema::ExtensionType;
-use parquet::arrow::arrow_to_parquet_schema;
+use parquet::arrow::{arrow_to_parquet_schema, PARQUET_FIELD_ID_META_KEY};
 use pg_sys::{
     Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
     INTERVALOID, JSONBOID, JSONOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID,
@@ -40,6 +40,8 @@ pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> St
 pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schema {
     debug_assert!(tupledesc.oid() == RECORDOID);
 
+    let mut field_id = 0;
+
     let mut struct_attribute_fields = vec![];
 
     let include_generated_columns = true;
@@ -52,16 +54,31 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
 
         let field = if is_composite_type(attribute_typoid) {
             let attribute_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
-            visit_struct_schema(attribute_tupledesc, attribute_name)
+            visit_struct_schema(attribute_tupledesc, attribute_name, &mut field_id)
         } else if is_crunchy_map_type(attribute_typoid) {
             set_crunchy_map_typoid(attribute_typoid);
             let attribute_base_elem_typoid = domain_array_base_elem_typoid(attribute_typoid);
-            visit_map_schema(attribute_base_elem_typoid, attribute_typmod, attribute_name)
+            visit_map_schema(
+                attribute_base_elem_typoid,
+                attribute_typmod,
+                attribute_name,
+                &mut field_id,
+            )
         } else if is_array_type(attribute_typoid) {
             let attribute_element_typoid = array_element_typoid(attribute_typoid);
-            visit_list_schema(attribute_element_typoid, attribute_typmod, attribute_name)
+            visit_list_schema(
+                attribute_element_typoid,
+                attribute_typmod,
+                attribute_name,
+                &mut field_id,
+            )
         } else {
-            visit_primitive_schema(attribute_typoid, attribute_typmod, attribute_name)
+            visit_primitive_schema(
+                attribute_typoid,
+                attribute_typmod,
+                attribute_name,
+                &mut field_id,
+            )
         };
 
         struct_attribute_fields.push(field);
@@ -70,39 +87,15 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
     Schema::new(Fields::from(struct_attribute_fields))
 }
 
-fn create_list_field_from_primitive_field(
-    array_name: &str,
-    typoid: Oid,
-    typmod: i32,
-) -> Arc<Field> {
-    let field = visit_primitive_schema(typoid, typmod, array_name);
-    let list_field = Field::new(array_name, arrow::datatypes::DataType::List(field), true);
-
-    list_field.into()
-}
-
-fn create_list_field_from_map_field(array_name: &str, map_field: Arc<Field>) -> Arc<Field> {
-    let list_field = Field::new(
-        array_name,
-        arrow::datatypes::DataType::List(map_field),
-        true,
-    );
-
-    list_field.into()
-}
-
-fn create_list_field_from_struct_field(array_name: &str, struct_field: Arc<Field>) -> Arc<Field> {
-    let list_field = Field::new(
-        array_name,
-        arrow::datatypes::DataType::List(struct_field),
-        true,
-    );
-
-    list_field.into()
-}
-
-fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
+fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str, field_id: &mut i32) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
+
+    let metadata = HashMap::from_iter(vec![(
+        PARQUET_FIELD_ID_META_KEY.into(),
+        field_id.to_string(),
+    )]);
+
+    *field_id += 1;
 
     let mut child_fields: Vec<Arc<Field>> = vec![];
 
@@ -120,93 +113,134 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str) -> Arc<Field> {
 
         let child_field = if is_composite_type(attribute_oid) {
             let attribute_tupledesc = tuple_desc(attribute_oid, attribute_typmod);
-            visit_struct_schema(attribute_tupledesc, attribute_name)
+            visit_struct_schema(attribute_tupledesc, attribute_name, field_id)
         } else if is_crunchy_map_type(attribute_oid) {
             set_crunchy_map_typoid(attribute_oid);
             let attribute_base_elem_typoid = domain_array_base_elem_typoid(attribute_oid);
-            visit_map_schema(attribute_base_elem_typoid, attribute_typmod, attribute_name)
+            visit_map_schema(
+                attribute_base_elem_typoid,
+                attribute_typmod,
+                attribute_name,
+                field_id,
+            )
         } else if is_array_type(attribute_oid) {
             let attribute_element_typoid = array_element_typoid(attribute_oid);
-            visit_list_schema(attribute_element_typoid, attribute_typmod, attribute_name)
+            visit_list_schema(
+                attribute_element_typoid,
+                attribute_typmod,
+                attribute_name,
+                field_id,
+            )
         } else {
-            visit_primitive_schema(attribute_oid, attribute_typmod, attribute_name)
+            visit_primitive_schema(attribute_oid, attribute_typmod, attribute_name, field_id)
         };
 
         child_fields.push(child_field);
     }
 
-    let field = Field::new(
+    Field::new(
         elem_name,
         arrow::datatypes::DataType::Struct(Fields::from(child_fields)),
         true,
-    );
-
-    field.into()
-}
-
-fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str) -> Arc<Field> {
-    pgrx::pg_sys::check_for_interrupts!();
-
-    if is_composite_type(typoid) {
-        let tupledesc = tuple_desc(typoid, typmod);
-        let struct_field = visit_struct_schema(tupledesc, array_name);
-        create_list_field_from_struct_field(array_name, struct_field)
-    } else if is_crunchy_map_type(typoid) {
-        set_crunchy_map_typoid(typoid);
-        let base_elem_typoid = domain_array_base_elem_typoid(typoid);
-        let map_field = visit_map_schema(base_elem_typoid, typmod, array_name);
-        create_list_field_from_map_field(array_name, map_field)
-    } else {
-        create_list_field_from_primitive_field(array_name, typoid, typmod)
-    }
-}
-
-fn visit_map_schema(typoid: Oid, typmod: i32, map_name: &str) -> Arc<Field> {
-    let tupledesc = tuple_desc(typoid, typmod);
-    let struct_field = visit_struct_schema(tupledesc, map_name);
-    let struct_field = to_not_nullable_field(struct_field);
-
-    Field::new(
-        map_name,
-        arrow::datatypes::DataType::Map(struct_field, false),
-        true,
     )
+    .with_metadata(metadata)
     .into()
 }
 
-fn visit_primitive_schema(typoid: Oid, typmod: i32, elem_name: &str) -> Arc<Field> {
+fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str, field_id: &mut i32) -> Arc<Field> {
     pgrx::pg_sys::check_for_interrupts!();
 
-    match typoid {
-        FLOAT4OID => Field::new(elem_name, arrow::datatypes::DataType::Float32, true).into(),
-        FLOAT8OID => Field::new(elem_name, arrow::datatypes::DataType::Float64, true).into(),
-        BOOLOID => Field::new(elem_name, arrow::datatypes::DataType::Boolean, true).into(),
-        INT2OID => Field::new(elem_name, arrow::datatypes::DataType::Int16, true).into(),
-        INT4OID => Field::new(elem_name, arrow::datatypes::DataType::Int32, true).into(),
-        INT8OID => Field::new(elem_name, arrow::datatypes::DataType::Int64, true).into(),
+    let list_metadata = HashMap::from_iter(vec![(
+        PARQUET_FIELD_ID_META_KEY.into(),
+        field_id.to_string(),
+    )]);
+
+    *field_id += 1;
+
+    let elem_field = if is_composite_type(typoid) {
+        let tupledesc = tuple_desc(typoid, typmod);
+        visit_struct_schema(tupledesc, array_name, field_id)
+    } else if is_crunchy_map_type(typoid) {
+        set_crunchy_map_typoid(typoid);
+        let base_elem_typoid = domain_array_base_elem_typoid(typoid);
+        visit_map_schema(base_elem_typoid, typmod, array_name, field_id)
+    } else {
+        visit_primitive_schema(typoid, typmod, array_name, field_id)
+    };
+
+    Field::new(
+        array_name,
+        arrow::datatypes::DataType::List(elem_field),
+        true,
+    )
+    .with_metadata(list_metadata)
+    .into()
+}
+
+fn visit_map_schema(typoid: Oid, typmod: i32, map_name: &str, field_id: &mut i32) -> Arc<Field> {
+    let map_metadata = HashMap::from_iter(vec![(
+        PARQUET_FIELD_ID_META_KEY.into(),
+        field_id.to_string(),
+    )]);
+
+    *field_id += 1;
+
+    let tupledesc = tuple_desc(typoid, typmod);
+    let entries_field = visit_struct_schema(tupledesc, map_name, field_id);
+    let entries_field = to_not_nullable_field(entries_field);
+
+    Field::new(
+        map_name,
+        arrow::datatypes::DataType::Map(entries_field, false),
+        true,
+    )
+    .with_metadata(map_metadata)
+    .into()
+}
+
+fn visit_primitive_schema(
+    typoid: Oid,
+    typmod: i32,
+    elem_name: &str,
+    field_id: &mut i32,
+) -> Arc<Field> {
+    pgrx::pg_sys::check_for_interrupts!();
+
+    let primitive_metadata = HashMap::<String, String>::from_iter(vec![(
+        PARQUET_FIELD_ID_META_KEY.into(),
+        field_id.to_string(),
+    )]);
+
+    *field_id += 1;
+
+    let field = match typoid {
+        FLOAT4OID => Field::new(elem_name, arrow::datatypes::DataType::Float32, true),
+        FLOAT8OID => Field::new(elem_name, arrow::datatypes::DataType::Float64, true),
+        BOOLOID => Field::new(elem_name, arrow::datatypes::DataType::Boolean, true),
+        INT2OID => Field::new(elem_name, arrow::datatypes::DataType::Int16, true),
+        INT4OID => Field::new(elem_name, arrow::datatypes::DataType::Int32, true),
+        INT8OID => Field::new(elem_name, arrow::datatypes::DataType::Int64, true),
         NUMERICOID => {
             let precision = extract_precision_from_numeric_typmod(typmod);
             let scale = extract_scale_from_numeric_typmod(typmod);
 
             if precision > MAX_DECIMAL_PRECISION {
                 set_fallback_typoid(typoid);
-                Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
+                Field::new(elem_name, arrow::datatypes::DataType::Utf8, true)
             } else {
                 Field::new(
                     elem_name,
                     arrow::datatypes::DataType::Decimal128(precision as _, scale as _),
                     true,
                 )
-                .into()
             }
         }
-        DATEOID => Field::new(elem_name, arrow::datatypes::DataType::Date32, true).into(),
+        DATEOID => Field::new(elem_name, arrow::datatypes::DataType::Date32, true),
         TIMESTAMPOID => Field::new(
             elem_name,
             arrow::datatypes::DataType::Timestamp(arrow::datatypes::TimeUnit::Microsecond, None),
             true,
-        )
-        .into(),
+        ),
         TIMESTAMPTZOID => Field::new(
             elem_name,
             arrow::datatypes::DataType::Timestamp(
@@ -214,14 +248,12 @@ fn visit_primitive_schema(typoid: Oid, typmod: i32, elem_name: &str) -> Arc<Fiel
                 Some("+00:00".into()),
             ),
             true,
-        )
-        .into(),
+        ),
         TIMEOID => Field::new(
             elem_name,
             arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
             true,
-        )
-        .into(),
+        ),
         TIMETZOID => Field::new(
             elem_name,
             arrow::datatypes::DataType::Time64(arrow::datatypes::TimeUnit::Microsecond),
@@ -230,36 +262,42 @@ fn visit_primitive_schema(typoid: Oid, typmod: i32, elem_name: &str) -> Arc<Fiel
         .with_metadata(HashMap::from_iter(vec![(
             "adjusted_to_utc".into(),
             "true".into(),
-        )]))
-        .into(),
+        )])),
         INTERVALOID => Field::new(
             elem_name,
             arrow::datatypes::DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
             true,
-        )
-        .into(),
+        ),
         UUIDOID => Field::new(
             elem_name,
             arrow::datatypes::DataType::FixedSizeBinary(16),
             true,
         )
-        .with_extension_type(ExtensionType::Uuid)
-        .into(),
+        .with_extension_type(ExtensionType::Uuid),
         JSONOID | JSONBOID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true)
-            .with_extension_type(ExtensionType::Json)
-            .into(),
-        CHAROID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into(),
-        TEXTOID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into(),
-        BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into(),
-        OIDOID => Field::new(elem_name, arrow::datatypes::DataType::UInt32, true).into(),
+            .with_extension_type(ExtensionType::Json),
+        CHAROID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true),
+        TEXTOID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true),
+        BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true),
+        OIDOID => Field::new(elem_name, arrow::datatypes::DataType::UInt32, true),
         _ => {
             if is_postgis_geometry_type(typoid) {
                 set_geometry_typoid(typoid);
-                Field::new(elem_name, arrow::datatypes::DataType::Binary, true).into()
+                Field::new(elem_name, arrow::datatypes::DataType::Binary, true)
             } else {
                 set_fallback_typoid(typoid);
-                Field::new(elem_name, arrow::datatypes::DataType::Utf8, true).into()
+                Field::new(elem_name, arrow::datatypes::DataType::Utf8, true)
             }
         }
-    }
+    };
+
+    // Combine the field metadata with the field metadata from the schema visitor
+    let primitive_metadata = field
+        .metadata()
+        .iter()
+        .chain(primitive_metadata.iter())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    field.with_metadata(primitive_metadata).into()
 }
