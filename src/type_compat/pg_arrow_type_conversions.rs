@@ -153,14 +153,14 @@ pub(crate) fn i64_to_timetz(i64_timetz: i64) -> Option<TimeWithTimeZone> {
 pub(crate) fn interval_to_nano(interval: Interval) -> Option<IntervalMonthDayNano> {
     let months = interval.months();
     let days = interval.days();
-    let microseconds = interval.micros();
-    Some(IntervalMonthDayNano::new(months, days, microseconds))
+    let millisecs = interval.micros() / 1000; // parquet has millisec precision
+    Some(IntervalMonthDayNano::new(months, days, millisecs))
 }
 
 pub(crate) fn nano_to_interval(nano: IntervalMonthDayNano) -> Option<Interval> {
     let months = nano.months;
     let days = nano.days;
-    let microseconds = nano.nanoseconds;
+    let microseconds = nano.nanoseconds * 1000; // parquet has millisec precision
     Some(Interval::new(months, days, microseconds).unwrap())
 }
 

@@ -645,14 +645,14 @@ mod tests {
     #[pg_test]
     fn test_interval() {
         let test_table = TestTable::<Interval>::new("interval".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('15 years 10 moths 1 day 10:00:00'), ('5 days 4 minutes 10 seconds'), (null);");
+        test_table.insert("INSERT INTO test (a) VALUES ('15 years 10 months 1 day 10:00:00'), ('5 days 4 minutes 10 seconds'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_interval_array() {
         let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['15 years 10 moths 1 day 10:00:00','5 days 4 minutes 10 seconds',null]), (null);");
+        test_table.insert("INSERT INTO test (a) VALUES (array['15 years 10 months 1 day 10:00:00','5 days 4 minutes 10 seconds',null]::interval[]), (null);");
         test_helper(test_table);
     }
 
