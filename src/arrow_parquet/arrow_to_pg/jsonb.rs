@@ -18,7 +18,10 @@ impl ArrowArrayToPgType<'_, StringArray, JsonB> for JsonB {
 
 // Jsonb[]
 impl ArrowArrayToPgType<'_, StringArray, Vec<Option<JsonB>>> for Vec<Option<JsonB>> {
-    fn to_pg_type(arr: StringArray, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Vec<Option<JsonB>>> {
+    fn to_pg_type(
+        arr: StringArray,
+        _context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Vec<Option<JsonB>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.map(|val| JsonB(serde_json::from_str(val).unwrap()));

@@ -16,7 +16,10 @@ impl ArrowArrayToPgType<'_, Int64Array, i64> for i64 {
 
 // Int8[]
 impl ArrowArrayToPgType<'_, Int64Array, Vec<Option<i64>>> for Vec<Option<i64>> {
-    fn to_pg_type(arr: Int64Array, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Vec<Option<i64>>> {
+    fn to_pg_type(
+        arr: Int64Array,
+        _context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Vec<Option<i64>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             vals.push(val);

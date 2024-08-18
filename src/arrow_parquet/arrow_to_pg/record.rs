@@ -31,11 +31,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
 
             let column_data = arr.column_by_name(name).unwrap();
 
-            let datum = to_pg_datum(
-                column_data.into_data(),
-                typoid,
-                typmod,
-            );
+            let datum = to_pg_datum(column_data.into_data(), typoid, typmod);
             datums.push(datum);
         }
 

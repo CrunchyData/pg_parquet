@@ -70,7 +70,9 @@ impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
 }
 
 // crunchy_map.key_<type1>_val_<type2>[]
-impl<'b> PgTypeToArrowArray<Vec<Option<CrunchyMap<'b>>>> for Vec<Option<Vec<Option<CrunchyMap<'b>>>>> {
+impl<'b> PgTypeToArrowArray<Vec<Option<CrunchyMap<'b>>>>
+    for Vec<Option<Vec<Option<CrunchyMap<'b>>>>>
+{
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (list_offsets, list_nulls) = arrow_array_offsets(&self);
 

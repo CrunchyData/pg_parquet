@@ -17,7 +17,10 @@ impl ArrowArrayToPgType<'_, StringArray, i8> for i8 {
 
 // Char[]
 impl ArrowArrayToPgType<'_, StringArray, Vec<Option<i8>>> for Vec<Option<i8>> {
-    fn to_pg_type(arr: StringArray, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Vec<Option<i8>>> {
+    fn to_pg_type(
+        arr: StringArray,
+        _context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Vec<Option<i8>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.map(|val| {

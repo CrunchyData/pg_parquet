@@ -17,7 +17,10 @@ impl ArrowArrayToPgType<'_, UInt32Array, Oid> for Oid {
 
 // Oid[]
 impl ArrowArrayToPgType<'_, UInt32Array, Vec<Option<Oid>>> for Vec<Option<Oid>> {
-    fn to_pg_type(arr: UInt32Array, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Vec<Option<Oid>>> {
+    fn to_pg_type(
+        arr: UInt32Array,
+        _context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Vec<Option<Oid>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.map(|val| val.into());

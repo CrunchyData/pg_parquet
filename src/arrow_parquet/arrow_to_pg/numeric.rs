@@ -7,7 +7,10 @@ use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Numeric
 impl ArrowArrayToPgType<'_, Decimal128Array, AnyNumeric> for AnyNumeric {
-    fn to_pg_type(arr: Decimal128Array, context: ArrowToPgPerAttributeContext<'_>) -> Option<AnyNumeric> {
+    fn to_pg_type(
+        arr: Decimal128Array,
+        context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<AnyNumeric> {
         if arr.is_null(0) {
             None
         } else {

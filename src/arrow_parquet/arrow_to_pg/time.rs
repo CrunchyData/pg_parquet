@@ -7,7 +7,10 @@ use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Time
 impl ArrowArrayToPgType<'_, Time64MicrosecondArray, Time> for Time {
-    fn to_pg_type(arr: Time64MicrosecondArray, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Time> {
+    fn to_pg_type(
+        arr: Time64MicrosecondArray,
+        _context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Time> {
         if arr.is_null(0) {
             None
         } else {

@@ -6,7 +6,10 @@ use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Geometry
 impl ArrowArrayToPgType<'_, BinaryArray, Geometry> for Geometry {
-    fn to_pg_type(arr: BinaryArray, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Geometry> {
+    fn to_pg_type(
+        arr: BinaryArray,
+        _context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Geometry> {
         if arr.is_null(0) {
             None
         } else {

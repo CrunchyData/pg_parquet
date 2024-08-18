@@ -5,7 +5,10 @@ use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Uuid
 impl ArrowArrayToPgType<'_, FixedSizeBinaryArray, Uuid> for Uuid {
-    fn to_pg_type(arr: FixedSizeBinaryArray, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Uuid> {
+    fn to_pg_type(
+        arr: FixedSizeBinaryArray,
+        _context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Uuid> {
         if arr.is_null(0) {
             None
         } else {

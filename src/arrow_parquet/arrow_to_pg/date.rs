@@ -20,7 +20,10 @@ impl ArrowArrayToPgType<'_, Date32Array, Date> for Date {
 
 // Date[]
 impl ArrowArrayToPgType<'_, Date32Array, Vec<Option<Date>>> for Vec<Option<Date>> {
-    fn to_pg_type(arr: Date32Array, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Vec<Option<Date>>> {
+    fn to_pg_type(
+        arr: Date32Array,
+        _context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Vec<Option<Date>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.and_then(i32_to_date);
