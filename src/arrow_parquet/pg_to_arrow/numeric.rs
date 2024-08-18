@@ -24,7 +24,7 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
 
         let numerics = self
             .into_iter()
-            .map(|numeric| numeric.and_then(|v| numeric_to_i128(v, scale)))
+            .map(|numeric| numeric.and_then(numeric_to_i128))
             .collect::<Vec<_>>();
 
         let numeric_array = Decimal128Array::from(numerics)
@@ -35,7 +35,7 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
     }
 }
 
-// Int64[]
+// Numeric[]
 impl PgTypeToArrowArray<Vec<Option<AnyNumeric>>> for Vec<Option<Vec<Option<AnyNumeric>>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
@@ -47,7 +47,7 @@ impl PgTypeToArrowArray<Vec<Option<AnyNumeric>>> for Vec<Option<Vec<Option<AnyNu
             .into_iter()
             .flatten()
             .flatten()
-            .map(|time| time.and_then(|v| numeric_to_i128(v, scale)))
+            .map(|time| time.and_then(numeric_to_i128))
             .collect::<Vec<_>>();
 
         let numeric_array = Decimal128Array::from(numerics)

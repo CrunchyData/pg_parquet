@@ -164,55 +164,22 @@ pub(crate) fn nano_to_interval(nano: IntervalMonthDayNano) -> Option<Interval> {
     Some(Interval::new(months, days, microseconds).unwrap())
 }
 
-pub(crate) fn numeric_to_i128(numeric: AnyNumeric, scale: usize) -> Option<i128> {
+pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
+    // obtain numeric's string representation
     let numeric_str: &CStr =
         unsafe { direct_function_call(pg_sys::numeric_out, &[numeric.into_datum()]).unwrap() };
     let numeric_str = numeric_str.to_str().unwrap();
 
     let sign = if numeric_str.starts_with('-') { -1 } else { 1 };
-    let numeric_str = numeric_str.trim_start_matches('-');
 
-    let integral = numeric_str.split('.').next().unwrap();
-    let mut integral = integral.parse::<i128>().unwrap();
-    let fraction = if let Some(fraction) = numeric_str.split('.').nth(1) {
-        fraction
-    } else {
-        "0"
-    };
-    let fraction_len = fraction.len();
-    let mut fraction = fraction.parse::<i128>().unwrap();
-    let zeros_needed = if fraction == 0 {
-        scale
-    } else {
-        scale - fraction_len
-    };
+    let numeric_str = numeric_str.replace(['-', '+', '.'], "");
 
-    let mut integral_digits = vec![];
-    while integral > 0 {
-        let digit = (integral % 10) as i8;
-        integral_digits.push(digit);
-        integral /= 10;
-    }
+    let numeric_digits = numeric_str.chars().map(|c| c.to_digit(10).unwrap() as i8);
 
-    let mut fraction_digits = vec![];
-    if zeros_needed > 0 {
-        fraction_digits = vec![0; zeros_needed];
-    }
-    while fraction > 0 {
-        let digit = (fraction % 10) as i8;
-        fraction_digits.push(digit);
-        fraction /= 10;
-    }
-
-    let digits_ordered_and_merged = integral_digits
-        .into_iter()
-        .rev()
-        .chain(fraction_digits.into_iter().rev())
-        .collect::<Vec<_>>();
-
+    // convert digits into arrow decimal
     let mut decimal: i128 = 0;
-    for (i, digit) in digits_ordered_and_merged.iter().rev().enumerate() {
-        decimal += *digit as i128 * 10_i128.pow(i as u32);
+    for digit in numeric_digits.into_iter() {
+        decimal = decimal * 10 + digit as i128;
     }
     decimal *= sign;
 
@@ -223,6 +190,7 @@ pub(crate) fn i128_to_numeric(i128_decimal: i128, scale: usize) -> Option<AnyNum
     let sign = if i128_decimal < 0 { "-" } else { "" };
     let i128_decimal = i128_decimal.abs();
 
+    // calculate decimal digits
     let mut decimal_digits = vec![];
     let mut decimal = i128_decimal;
     while decimal > 0 {
@@ -231,6 +199,7 @@ pub(crate) fn i128_to_numeric(i128_decimal: i128, scale: usize) -> Option<AnyNum
         decimal /= 10;
     }
 
+    // get fraction as string
     let fraction = decimal_digits
         .iter()
         .take(scale)
@@ -239,6 +208,7 @@ pub(crate) fn i128_to_numeric(i128_decimal: i128, scale: usize) -> Option<AnyNum
         .reduce(|acc, v| acc + &v)
         .unwrap_or_default();
 
+    // get integral as string
     let integral = decimal_digits
         .iter()
         .skip(scale)
@@ -247,9 +217,15 @@ pub(crate) fn i128_to_numeric(i128_decimal: i128, scale: usize) -> Option<AnyNum
         .reduce(|acc, v| acc + &v)
         .unwrap_or_default();
 
-    let numeric_str = format!("{}{}.{}", sign, integral, fraction);
+    // create numeric string representation
+    let numeric_str = if integral.is_empty() && fraction.is_empty() {
+        "0".into()
+    } else {
+        format!("{}{}.{}", sign, integral, fraction)
+    };
     let numeric_str = std::ffi::CString::new(numeric_str).unwrap();
 
+    // compute numeric from string representation
     let numeric: AnyNumeric = unsafe {
         direct_function_call(
             pg_sys::numeric_in,

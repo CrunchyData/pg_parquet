@@ -33,8 +33,8 @@ mod tests {
     use crate::type_compat::geometry::Geometry;
     use pgrx::pg_sys::Oid;
     use pgrx::{
-        composite_type, pg_test, Date, FromDatum, Interval, IntoDatum, Json, JsonB, Numeric, Spi,
-        Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
+        composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB,
+        Spi, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
     };
     enum CopyOptionValue {
         StringOption(String),
@@ -788,29 +788,35 @@ mod tests {
 
     #[pg_test]
     fn test_numeric() {
-        let test_table = TestTable::<Numeric<10, 4>>::new("numeric(10,4)".into());
-        test_table.insert("INSERT INTO test (a) VALUES (2.12313), (2.12313), (3), (null);");
+        let test_table = TestTable::<AnyNumeric>::new("numeric(10,4)".into());
+        test_table
+            .insert("INSERT INTO test (a) VALUES (0.0), (.0), (1.), (+1.020), (-2.12313), (.3), (4), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_numeric_array() {
-        let test_table = TestTable::<Vec<Option<Numeric<10, 4>>>>::new("numeric(10,4)[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[2.12313,2.12313,3,null]), (null);");
+        let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric(10,4)[]".into());
+        test_table.insert(
+            "INSERT INTO test (a) VALUES (array[0.0,.0,1.,+1.020,-2.12313,.3,4,null]), (null);",
+        );
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_huge_numeric() {
         let test_table = TestTable::<FallbackToText>::new("numeric(100,4)".into());
-        test_table.insert("INSERT INTO test (a) VALUES (1.020), (2.12313), (3), (null);");
+        test_table.insert(
+            "INSERT INTO test (a) VALUES (0.0), (.0), (1.), (+1.020), (2.12313), (3), (null);",
+        );
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_huge_numeric_array() {
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("numeric(100,4)[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[1.020,2.12313,3,null]), (null);");
+        test_table
+            .insert("INSERT INTO test (a) VALUES (array[0.0,.0,1.,1.020,2.12313,3,null]), (null);");
         test_helper(test_table);
     }
 

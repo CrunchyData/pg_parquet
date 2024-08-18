@@ -131,7 +131,9 @@ impl ParquetReaderContext {
             let typoid = attribute.type_oid().value();
             let typmod = attribute.type_mod();
 
-            let column = record_batch.column_by_name(name).unwrap();
+            let column = record_batch
+                .column_by_name(name)
+                .unwrap_or_else(|| panic!("column {} not found", name));
 
             let datum = to_pg_datum(column.to_data(), typoid, typmod);
             datums.push(datum);
