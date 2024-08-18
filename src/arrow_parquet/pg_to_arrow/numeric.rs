@@ -14,11 +14,11 @@ use crate::{
     },
 };
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Numeric
 impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let precision = extract_precision_from_numeric_typmod(context.typmod);
         let scale = extract_scale_from_numeric_typmod(context.typmod);
 
@@ -37,7 +37,7 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
 
 // Int64[]
 impl PgTypeToArrowArray<Vec<Option<AnyNumeric>>> for Vec<Option<Vec<Option<AnyNumeric>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let precision = extract_precision_from_numeric_typmod(context.typmod);

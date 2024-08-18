@@ -9,11 +9,11 @@ use pgrx::JsonB;
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Jsonb
 impl PgTypeToArrowArray<JsonB> for Vec<Option<JsonB>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let jsonbs = self
             .into_iter()
             .map(|val| val.map(|val| serde_json::to_string(&val.0).unwrap()))
@@ -27,7 +27,7 @@ impl PgTypeToArrowArray<JsonB> for Vec<Option<JsonB>> {
 
 // Jsonb[]
 impl PgTypeToArrowArray<Vec<Option<JsonB>>> for Vec<Option<Vec<Option<JsonB>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let jsonbs = self

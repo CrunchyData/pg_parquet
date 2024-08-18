@@ -1,17 +1,15 @@
 use arrow::array::{Array, IntervalMonthDayNanoArray};
-use pgrx::{pg_sys::Oid, Interval, PgTupleDesc};
+use pgrx::Interval;
 
 use crate::type_compat::pg_arrow_type_conversions::nano_to_interval;
 
-use super::ArrowArrayToPgType;
+use super::{ArrowArrayToPgType, ArrowToPgContext};
 
 // Interval
 impl ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Interval> for Interval {
     fn to_pg_type(
         arr: IntervalMonthDayNanoArray,
-        _typoid: Oid,
-        _typmod: i32,
-        _tupledesc: Option<PgTupleDesc<'_>>,
+        _context: ArrowToPgContext<'_>,
     ) -> Option<Interval> {
         if arr.is_null(0) {
             None
@@ -29,9 +27,7 @@ impl ArrowArrayToPgType<'_, IntervalMonthDayNanoArray, Vec<Option<Interval>>>
 {
     fn to_pg_type(
         arr: IntervalMonthDayNanoArray,
-        _typoid: Oid,
-        _typmod: i32,
-        _tupledesc: Option<PgTupleDesc<'_>>,
+        _context: ArrowToPgContext<'_>,
     ) -> Option<Vec<Option<Interval>>> {
         let mut vals = vec![];
         for val in arr.iter() {

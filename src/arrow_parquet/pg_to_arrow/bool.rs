@@ -8,11 +8,11 @@ use arrow_schema::DataType;
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Bool
 impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let bool_array = BooleanArray::from(self);
         (context.field, Arc::new(bool_array))
     }
@@ -20,7 +20,7 @@ impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
 
 // Bool[]
 impl PgTypeToArrowArray<Vec<Option<bool>>> for Vec<Option<Vec<Option<bool>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let bools = self.into_iter().flatten().flatten().collect::<Vec<_>>();

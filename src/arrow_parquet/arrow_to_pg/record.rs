@@ -1,9 +1,9 @@
 use arrow::array::{Array, StructArray};
-use pgrx::{pg_sys::Oid, prelude::PgHeapTuple, AllocatedByRust, PgTupleDesc};
+use pgrx::{prelude::PgHeapTuple, AllocatedByRust};
 
 use crate::pgrx_utils::collect_valid_attributes;
 
-use super::{to_pg_datum, ArrowArrayToPgType};
+use super::{to_pg_datum, ArrowArrayToPgType, ArrowToPgContext};
 
 // PgHeapTuple
 impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
@@ -11,15 +11,13 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
 {
     fn to_pg_type(
         arr: StructArray,
-        _typoid: Oid,
-        _typmod: i32,
-        tupledesc: Option<PgTupleDesc<'a>>,
+        context: ArrowToPgContext<'a>,
     ) -> Option<PgHeapTuple<'a, AllocatedByRust>> {
         if arr.is_null(0) {
             return None;
         }
 
-        let tupledesc = tupledesc.unwrap();
+        let tupledesc = context.tupledesc.expect("Expected tupledesc");
 
         let mut datums = vec![];
 
@@ -47,9 +45,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, Vec<Option<PgHeapTuple<'a, Allocate
 {
     fn to_pg_type(
         arr: StructArray,
-        _typoid: Oid,
-        _typmod: i32,
-        tupledesc: Option<PgTupleDesc<'a>>,
+        context: ArrowToPgContext<'a>,
     ) -> Option<Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>> {
         let len = arr.len();
         let mut values = Vec::with_capacity(len);
@@ -60,7 +56,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, Vec<Option<PgHeapTuple<'a, Allocate
             let tuple = <PgHeapTuple<AllocatedByRust> as ArrowArrayToPgType<
                 StructArray,
                 PgHeapTuple<AllocatedByRust>,
-            >>::to_pg_type(tuple, _typoid, _typmod, tupledesc.clone());
+            >>::to_pg_type(tuple, context.clone());
 
             values.push(tuple);
         }

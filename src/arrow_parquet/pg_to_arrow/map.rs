@@ -15,11 +15,11 @@ use crate::{
     type_compat::map::PGMap,
 };
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // crunchy_map.key_<type1>_val_<type2>
 impl<'b> PgTypeToArrowArray<PGMap<'b>> for Vec<Option<PGMap<'b>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (map_offsets, map_nulls) = arrow_map_offsets(&self);
 
         let map_field = context.field;
@@ -45,13 +45,13 @@ impl<'b> PgTypeToArrowArray<PGMap<'b>> for Vec<Option<PGMap<'b>>> {
 
         let entries_tupledesc = tuple_desc(entries_typoid, -1);
 
-        let entries_context = PgTypeToArrowContext {
-            typoid: entries_typoid,
-            typmod: context.typmod,
-            field: entries_field.clone(),
-            name: context.name,
-            tupledesc: Some(entries_tupledesc),
-        };
+        let entries_context = PgToArrowContext::new(
+            context.name,
+            entries_typoid,
+            context.typmod,
+            entries_field.clone(),
+        )
+        .with_tupledesc(entries_tupledesc);
 
         let (_, entries_array) = entries.to_arrow_array(entries_context);
 
@@ -71,7 +71,7 @@ impl<'b> PgTypeToArrowArray<PGMap<'b>> for Vec<Option<PGMap<'b>>> {
 
 // crunchy_map.key_<type1>_val_<type2>[]
 impl<'b> PgTypeToArrowArray<Vec<Option<PGMap<'b>>>> for Vec<Option<Vec<Option<PGMap<'b>>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (list_offsets, list_nulls) = arrow_array_offsets(&self);
 
         let list_field = context.field;
@@ -106,13 +106,13 @@ impl<'b> PgTypeToArrowArray<Vec<Option<PGMap<'b>>>> for Vec<Option<Vec<Option<PG
 
         let entries_tupledesc = tuple_desc(entries_typoid, -1);
 
-        let entries_context = PgTypeToArrowContext {
-            typoid: entries_typoid,
-            typmod: context.typmod,
-            field: entries_field.clone(),
-            name: context.name,
-            tupledesc: Some(entries_tupledesc),
-        };
+        let entries_context = PgToArrowContext::new(
+            context.name,
+            entries_typoid,
+            context.typmod,
+            entries_field.clone(),
+        )
+        .with_tupledesc(entries_tupledesc);
 
         let (_, entries_array) = entries.to_arrow_array(entries_context);
 

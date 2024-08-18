@@ -1,18 +1,13 @@
 use arrow::array::{Array, Date32Array};
-use pgrx::{pg_sys::Oid, Date, PgTupleDesc};
+use pgrx::Date;
 
 use crate::type_compat::pg_arrow_type_conversions::i32_to_date;
 
-use super::ArrowArrayToPgType;
+use super::{ArrowArrayToPgType, ArrowToPgContext};
 
 // Date
 impl ArrowArrayToPgType<'_, Date32Array, Date> for Date {
-    fn to_pg_type(
-        arr: Date32Array,
-        _typoid: Oid,
-        _typmod: i32,
-        _tupledesc: Option<PgTupleDesc<'_>>,
-    ) -> Option<Date> {
+    fn to_pg_type(arr: Date32Array, _context: ArrowToPgContext<'_>) -> Option<Date> {
         if arr.is_null(0) {
             None
         } else {
@@ -25,12 +20,7 @@ impl ArrowArrayToPgType<'_, Date32Array, Date> for Date {
 
 // Date[]
 impl ArrowArrayToPgType<'_, Date32Array, Vec<Option<Date>>> for Vec<Option<Date>> {
-    fn to_pg_type(
-        arr: Date32Array,
-        _typoid: Oid,
-        _typmod: i32,
-        _tupledesc: Option<PgTupleDesc<'_>>,
-    ) -> Option<Vec<Option<Date>>> {
+    fn to_pg_type(arr: Date32Array, _context: ArrowToPgContext<'_>) -> Option<Vec<Option<Date>>> {
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.and_then(i32_to_date);

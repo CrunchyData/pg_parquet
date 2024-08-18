@@ -8,11 +8,11 @@ use arrow_schema::DataType;
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Bytea
 impl PgTypeToArrowArray<&[u8]> for Vec<Option<&[u8]>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let byte_array = BinaryArray::from(self);
         (context.field, Arc::new(byte_array))
     }
@@ -20,7 +20,7 @@ impl PgTypeToArrowArray<&[u8]> for Vec<Option<&[u8]>> {
 
 // Bytea[]
 impl PgTypeToArrowArray<Vec<Option<&[u8]>>> for Vec<Option<Vec<Option<&[u8]>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let byteas = self.into_iter().flatten().flatten().collect::<Vec<_>>();

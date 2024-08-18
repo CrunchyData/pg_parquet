@@ -11,11 +11,11 @@ use crate::{
     type_compat::geometry::Geometry,
 };
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Geometry
 impl PgTypeToArrowArray<Geometry> for Vec<Option<Geometry>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let wkbs = self
             .iter()
             .map(|geometry| geometry.as_deref())
@@ -29,7 +29,7 @@ impl PgTypeToArrowArray<Geometry> for Vec<Option<Geometry>> {
 
 // Geometry[]
 impl PgTypeToArrowArray<Vec<Option<Geometry>>> for Vec<Option<Vec<Option<Geometry>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let wkbs = self.into_iter().flatten().flatten().collect::<Vec<_>>();

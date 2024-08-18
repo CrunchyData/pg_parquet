@@ -16,7 +16,10 @@ use crate::{
         fallback_to_text::{set_fallback_typoid, FallbackToText},
         geometry::{is_postgis_geometry_type, set_geometry_typoid, Geometry},
         map::{is_crunchy_map_type, set_crunchy_map_typoid, PGMap},
-        pg_arrow_type_conversions::{extract_precision_from_numeric_typmod, MAX_DECIMAL_PRECISION},
+        pg_arrow_type_conversions::{
+            extract_precision_from_numeric_typmod, extract_scale_from_numeric_typmod,
+            MAX_DECIMAL_PRECISION,
+        },
     },
 };
 
@@ -46,15 +49,46 @@ pub(crate) mod timetz;
 pub(crate) mod uuid;
 
 pub(crate) trait PgTypeToArrowArray<T: IntoDatum + FromDatum> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef);
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef);
 }
 
-pub(crate) struct PgTypeToArrowContext<'a> {
+pub(crate) struct PgToArrowContext<'a> {
     name: &'a str,
-    field: FieldRef,
     typoid: Oid,
     typmod: i32,
+    field: FieldRef,
+    scale: Option<usize>,
+    precision: Option<usize>,
     tupledesc: Option<PgTupleDesc<'a>>,
+}
+
+impl<'a> PgToArrowContext<'a> {
+    fn new(name: &'a str, typoid: Oid, typmod: i32, field: FieldRef) -> Self {
+        Self {
+            name,
+            field,
+            typoid,
+            typmod,
+            scale: None,
+            precision: None,
+            tupledesc: None,
+        }
+    }
+
+    fn with_tupledesc(mut self, tupledesc: PgTupleDesc<'a>) -> Self {
+        self.tupledesc = Some(tupledesc);
+        self
+    }
+
+    fn with_scale(mut self, scale: usize) -> Self {
+        self.scale = Some(scale);
+        self
+    }
+
+    fn with_precision(mut self, precision: usize) -> Self {
+        self.precision = Some(precision);
+        self
+    }
 }
 
 pub(crate) fn collect_attribute_array_from_tuples<'a>(
@@ -72,54 +106,44 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
     if is_composite_type(attribute_typoid) {
         let attribute_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
 
-        let attribute_context = PgTypeToArrowContext {
-            name: attribute_name,
-            field: attribute_field,
-            typoid: attribute_typoid,
-            typmod: attribute_typmod,
-            tupledesc: Some(attribute_tupledesc),
-        };
+        let attribute_context = PgToArrowContext::new(
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+            attribute_field,
+        )
+        .with_tupledesc(attribute_tupledesc);
 
         collect_tuple_attribute_array_from_tuples_helper(tuples, tupledesc, attribute_context)
     } else if is_array_type(attribute_typoid) {
         let attribute_element_typoid = array_element_typoid(attribute_typoid);
 
-        let is_composite_element = is_composite_type(attribute_element_typoid);
-
-        let attribute_element_tupledesc = if is_composite_element {
-            Some(tuple_desc(attribute_element_typoid, attribute_typmod))
-        } else {
-            None
-        };
-
-        let attribute_context = PgTypeToArrowContext {
-            name: attribute_name,
-            field: attribute_field,
-            typoid: attribute_element_typoid,
-            typmod: attribute_typmod,
-            tupledesc: attribute_element_tupledesc,
-        };
+        let attribute_context = PgToArrowContext::new(
+            attribute_name,
+            attribute_element_typoid,
+            attribute_typmod,
+            attribute_field,
+        );
 
         collect_array_attribute_array_from_tuples(tuples, tupledesc, attribute_context)
     } else if is_crunchy_map_type(attribute_typoid) {
-        let attribute_context = PgTypeToArrowContext {
-            name: attribute_name,
-            field: attribute_field,
-            typoid: attribute_typoid,
-            typmod: attribute_typmod,
-            tupledesc: None,
-        };
-
         set_crunchy_map_typoid(attribute_typoid);
+
+        let attribute_context = PgToArrowContext::new(
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+            attribute_field,
+        );
+
         collect_array_attribute_array_from_tuples_helper::<PGMap<'_>>(tuples, attribute_context)
     } else {
-        let attribute_context = PgTypeToArrowContext {
-            name: attribute_name,
-            field: attribute_field,
-            typoid: attribute_typoid,
-            typmod: attribute_typmod,
-            tupledesc: None,
-        };
+        let attribute_context = PgToArrowContext::new(
+            attribute_name,
+            attribute_typoid,
+            attribute_typmod,
+            attribute_field,
+        );
 
         collect_primitive_attribute_array_from_tuples(tuples, attribute_context)
     }
@@ -127,7 +151,7 @@ pub(crate) fn collect_attribute_array_from_tuples<'a>(
 
 fn collect_primitive_attribute_array_from_tuples<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
-    attribute_context: PgTypeToArrowContext<'a>,
+    attribute_context: PgToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
@@ -231,7 +255,7 @@ fn collect_primitive_attribute_array_from_tuples<'a>(
 pub(crate) fn collect_array_attribute_array_from_tuples<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
     tupledesc: PgTupleDesc<'a>,
-    attribute_context: PgTypeToArrowContext<'a>,
+    attribute_context: PgToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
@@ -260,16 +284,22 @@ pub(crate) fn collect_array_attribute_array_from_tuples<'a>(
         ),
         NUMERICOID => {
             let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
+
             if precision > MAX_DECIMAL_PRECISION {
                 set_fallback_typoid(attribute_context.typoid);
+
                 collect_array_attribute_array_from_tuples_helper::<Vec<Option<FallbackToText>>>(
                     tuples,
                     attribute_context,
                 )
             } else {
+                let scale = extract_scale_from_numeric_typmod(attribute_context.typmod);
+
                 collect_array_attribute_array_from_tuples_helper::<Vec<Option<AnyNumeric>>>(
                     tuples,
-                    attribute_context,
+                    attribute_context
+                        .with_precision(precision)
+                        .with_scale(scale),
                 )
             }
         }
@@ -329,10 +359,13 @@ pub(crate) fn collect_array_attribute_array_from_tuples<'a>(
         ),
         _ => {
             if is_composite_type(attribute_context.typoid) {
+                let attribute_tupledesc =
+                    tuple_desc(attribute_context.typoid, attribute_context.typmod);
+
                 collect_array_of_tuple_attribute_array_from_tuples_helper(
                     tuples,
                     tupledesc,
-                    attribute_context,
+                    attribute_context.with_tupledesc(attribute_tupledesc),
                 )
             } else if is_crunchy_map_type(attribute_context.typoid) {
                 set_crunchy_map_typoid(attribute_context.typoid);
@@ -359,7 +392,7 @@ pub(crate) fn collect_array_attribute_array_from_tuples<'a>(
 
 fn collect_array_attribute_array_from_tuples_helper<'a, T>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
-    attribute_context: PgTypeToArrowContext<'a>,
+    attribute_context: PgToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
@@ -389,7 +422,7 @@ where
 fn collect_tuple_attribute_array_from_tuples_helper<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
     tuple_tupledesc: PgTupleDesc<'a>,
-    attribute_context: PgTypeToArrowContext<'a>,
+    attribute_context: PgToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,
@@ -443,7 +476,7 @@ fn collect_tuple_attribute_array_from_tuples_helper<'a>(
 fn collect_array_of_tuple_attribute_array_from_tuples_helper<'a>(
     tuples: Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>,
     tuple_tupledesc: PgTupleDesc<'a>,
-    attribute_context: PgTypeToArrowContext<'a>,
+    attribute_context: PgToArrowContext<'a>,
 ) -> (
     FieldRef,
     ArrayRef,

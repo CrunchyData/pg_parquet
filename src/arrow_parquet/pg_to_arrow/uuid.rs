@@ -9,11 +9,11 @@ use pgrx::Uuid;
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Uuid
 impl PgTypeToArrowArray<Uuid> for Vec<Option<Uuid>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let uuids = self
             .iter()
             .map(|uuid| uuid.map(|uuid| uuid.to_vec()))
@@ -31,7 +31,7 @@ impl PgTypeToArrowArray<Uuid> for Vec<Option<Uuid>> {
 
 // Uuid[]
 impl PgTypeToArrowArray<Vec<Option<Uuid>>> for Vec<Option<Vec<Option<Uuid>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let uuids = self

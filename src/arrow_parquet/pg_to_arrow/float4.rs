@@ -8,11 +8,11 @@ use arrow_schema::DataType;
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Float32
 impl PgTypeToArrowArray<f32> for Vec<Option<f32>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let float_array = Float32Array::from(self);
         (context.field, Arc::new(float_array))
     }
@@ -20,7 +20,7 @@ impl PgTypeToArrowArray<f32> for Vec<Option<f32>> {
 
 // Float32[]
 impl PgTypeToArrowArray<Vec<Option<f32>>> for Vec<Option<Vec<Option<f32>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let floats = self.into_iter().flatten().flatten().collect::<Vec<_>>();

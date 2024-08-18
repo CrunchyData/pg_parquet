@@ -12,11 +12,11 @@ use crate::{
     type_compat::pg_arrow_type_conversions::time_to_i64,
 };
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Time
 impl PgTypeToArrowArray<Time> for Vec<Option<Time>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let times = self
             .into_iter()
             .map(|time| time.and_then(time_to_i64))
@@ -30,7 +30,7 @@ impl PgTypeToArrowArray<Time> for Vec<Option<Time>> {
 
 // Time[]
 impl PgTypeToArrowArray<Vec<Option<Time>>> for Vec<Option<Vec<Option<Time>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let times = self

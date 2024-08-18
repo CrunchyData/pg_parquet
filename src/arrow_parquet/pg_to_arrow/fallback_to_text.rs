@@ -11,11 +11,11 @@ use crate::{
     type_compat::fallback_to_text::FallbackToText,
 };
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Text representation of any type
 impl PgTypeToArrowArray<FallbackToText> for Vec<Option<FallbackToText>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let texts = self
             .into_iter()
             .map(|val| val.map(String::from))
@@ -29,7 +29,7 @@ impl PgTypeToArrowArray<FallbackToText> for Vec<Option<FallbackToText>> {
 
 // Text[] representation of any type
 impl PgTypeToArrowArray<Vec<Option<FallbackToText>>> for Vec<Option<Vec<Option<FallbackToText>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let texts = self.into_iter().flatten().flatten().collect::<Vec<_>>();

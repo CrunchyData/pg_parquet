@@ -8,11 +8,11 @@ use arrow_schema::DataType;
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
-use super::PgTypeToArrowContext;
+use super::PgToArrowContext;
 
 // Char
 impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let chars = self
             .into_iter()
             .map(|c| c.map(|c| (c as u8 as char).to_string()))
@@ -26,7 +26,7 @@ impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
 
 // "Char"[]
 impl PgTypeToArrowArray<Vec<Option<i8>>> for Vec<Option<Vec<Option<i8>>>> {
-    fn to_arrow_array(self, context: PgTypeToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let chars = self

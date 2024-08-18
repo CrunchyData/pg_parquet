@@ -1,18 +1,12 @@
 use arrow::array::{Array, BinaryArray};
-use pgrx::{pg_sys::Oid, PgTupleDesc};
 
 use crate::type_compat::geometry::Geometry;
 
-use super::ArrowArrayToPgType;
+use super::{ArrowArrayToPgType, ArrowToPgContext};
 
 // Geometry
 impl ArrowArrayToPgType<'_, BinaryArray, Geometry> for Geometry {
-    fn to_pg_type(
-        arr: BinaryArray,
-        _typoid: Oid,
-        _typmod: i32,
-        _tupledesc: Option<PgTupleDesc<'_>>,
-    ) -> Option<Geometry> {
+    fn to_pg_type(arr: BinaryArray, _context: ArrowToPgContext<'_>) -> Option<Geometry> {
         if arr.is_null(0) {
             None
         } else {
@@ -25,9 +19,7 @@ impl ArrowArrayToPgType<'_, BinaryArray, Geometry> for Geometry {
 impl ArrowArrayToPgType<'_, BinaryArray, Vec<Option<Geometry>>> for Vec<Option<Geometry>> {
     fn to_pg_type(
         arr: BinaryArray,
-        _typoid: Oid,
-        _typmod: i32,
-        _tupledesc: Option<PgTupleDesc<'_>>,
+        _context: ArrowToPgContext<'_>,
     ) -> Option<Vec<Option<Geometry>>> {
         let mut vals = vec![];
         for val in arr.iter() {
