@@ -1,3 +1,5 @@
+use std::borrow::BorrowMut;
+
 use once_cell::sync::OnceCell;
 use pgrx::{
     pg_sys::{
@@ -28,55 +30,50 @@ pub(crate) fn reset_fallback_to_text_context(typoid: Oid, typmod: i32) {
     };
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct FallbackToTextContext {
     typoid: Oid,
     typmod: i32,
-    input_func: PgBox<FmgrInfo>,
+    input_func: FmgrInfo,
     input_ioparam: Oid,
-    output_func: PgBox<FmgrInfo>,
+    output_func: FmgrInfo,
 }
 
 impl FallbackToTextContext {
     fn new(typoid: Oid, typmod: i32) -> Self {
-        let current_fallback_to_text_typoid = typoid;
+        let (input_func, input_ioparam) = Self::get_input_function_for_typoid(typoid);
 
-        let current_fallback_to_text_typmod = typmod;
-
-        let (current_fallback_to_text_input_func, current_fallback_to_text_input_ioparam) =
-            Self::get_input_function_for_typoid(typoid);
-
-        let current_fallback_to_text_output_func = Self::get_output_function_for_typoid(typoid);
+        let output_func = Self::get_output_function_for_typoid(typoid);
 
         Self {
-            typoid: current_fallback_to_text_typoid,
-            typmod: current_fallback_to_text_typmod,
-            input_func: current_fallback_to_text_input_func,
-            input_ioparam: current_fallback_to_text_input_ioparam,
-            output_func: current_fallback_to_text_output_func,
+            typoid,
+            typmod,
+            input_func,
+            input_ioparam,
+            output_func,
         }
     }
 
-    fn get_input_function_for_typoid(typoid: Oid) -> (PgBox<FmgrInfo>, Oid) {
+    fn get_input_function_for_typoid(typoid: Oid) -> (FmgrInfo, Oid) {
         let mut input_func_oid = InvalidOid;
         let mut typio_param = InvalidOid;
 
         unsafe { getTypeInputInfo(typoid, &mut input_func_oid, &mut typio_param) };
 
-        let input_func = unsafe { PgBox::<FmgrInfo>::alloc0().into_pg_boxed() };
-        unsafe { fmgr_info(input_func_oid, input_func.as_ptr()) };
+        let mut input_func = unsafe { PgBox::<FmgrInfo>::alloc0().to_owned() };
+        unsafe { fmgr_info(input_func_oid, input_func.borrow_mut()) };
 
         (input_func, typio_param)
     }
 
-    fn get_output_function_for_typoid(typoid: Oid) -> PgBox<FmgrInfo> {
+    fn get_output_function_for_typoid(typoid: Oid) -> FmgrInfo {
         let mut out_func_oid = InvalidOid;
         let mut is_varlena = false;
 
         unsafe { getTypeOutputInfo(typoid, &mut out_func_oid, &mut is_varlena) };
 
-        let out_func = unsafe { PgBox::<FmgrInfo>::alloc0().into_pg_boxed() };
-        unsafe { fmgr_info(out_func_oid, out_func.as_ptr()) };
+        let mut out_func = unsafe { PgBox::<FmgrInfo>::alloc0().to_owned() };
+        unsafe { fmgr_info(out_func_oid, out_func.borrow_mut()) };
 
         out_func
     }
@@ -97,7 +94,7 @@ impl IntoDatum for FallbackToText {
 
         let datum = unsafe {
             InputFunctionCall(
-                fallback_to_text_context.input_func.as_ptr(),
+                fallback_to_text_context.input_func.borrow_mut(),
                 self.0.as_pg_cstr(),
                 fallback_to_text_context.input_ioparam,
                 fallback_to_text_context.typmod,
@@ -124,8 +121,10 @@ impl FromDatum for FallbackToText {
         if is_null {
             None
         } else {
-            let att_cstr =
-                OutputFunctionCall(get_fallback_to_text_context().output_func.as_ptr(), datum);
+            let att_cstr = OutputFunctionCall(
+                get_fallback_to_text_context().output_func.borrow_mut(),
+                datum,
+            );
             let att_val = std::ffi::CStr::from_ptr(att_cstr)
                 .to_str()
                 .unwrap()

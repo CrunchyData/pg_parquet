@@ -1,6 +1,6 @@
 use arrow::array::{Array, StringArray};
 
-use crate::type_compat::fallback_to_text::{reset_fallback_to_text_context, FallbackToText};
+use crate::type_compat::fallback_to_text::FallbackToText;
 
 use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
@@ -8,10 +8,8 @@ use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 impl ArrowArrayToPgType<'_, StringArray, FallbackToText> for FallbackToText {
     fn to_pg_type(
         arr: StringArray,
-        context: ArrowToPgPerAttributeContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<FallbackToText> {
-        reset_fallback_to_text_context(context.typoid, context.typmod);
-
         if arr.is_null(0) {
             None
         } else {
@@ -28,10 +26,8 @@ impl ArrowArrayToPgType<'_, StringArray, Vec<Option<FallbackToText>>>
 {
     fn to_pg_type(
         arr: StringArray,
-        context: ArrowToPgPerAttributeContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Vec<Option<FallbackToText>>> {
-        reset_fallback_to_text_context(context.typoid, context.typmod);
-
         let mut vals = vec![];
         for val in arr.iter() {
             let val = val.map(|val| FallbackToText(val.to_string()));

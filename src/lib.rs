@@ -72,9 +72,12 @@ mod tests {
 
     impl<T: IntoDatum + FromDatum> TestTable<T> {
         fn new(typename: String) -> Self {
-            Spi::run("DROP TABLE IF EXISTS test;").unwrap();
+            Spi::run("DROP TABLE IF EXISTS test_expected, test_result;").unwrap();
 
-            let create_table_command = format!("CREATE TABLE test (a {});", &typename);
+            let create_table_command = format!("CREATE TABLE test_expected (a {});", &typename);
+            Spi::run(create_table_command.as_str()).unwrap();
+
+            let create_table_command = format!("CREATE TABLE test_result (a {});", &typename);
             Spi::run(create_table_command.as_str()).unwrap();
 
             let mut copy_to_options = HashMap::new();
@@ -136,16 +139,15 @@ mod tests {
             self
         }
 
-        fn truncate(&self) {
-            Spi::run("TRUNCATE test;").unwrap();
-        }
-
         fn insert(&self, insert_command: &str) {
             Spi::run(insert_command).unwrap();
         }
 
-        fn select_all(&self) -> Vec<(Option<T>,)> {
-            let select_command = format!("SELECT a FROM test ORDER BY {};", self.order_by_col);
+        fn select_all(&self, table_name: &str) -> Vec<(Option<T>,)> {
+            let select_command = format!(
+                "SELECT a FROM {} ORDER BY {};",
+                table_name, self.order_by_col
+            );
 
             Spi::connect(|client| {
                 let mut results = Vec::new();
@@ -153,7 +155,7 @@ mod tests {
 
                 for row in tup_table {
                     let val = row["a"].value::<T>();
-                    results.push((val.unwrap(),));
+                    results.push((val.expect("could not select"),));
                 }
 
                 results
@@ -161,7 +163,7 @@ mod tests {
         }
 
         fn copy_to_parquet(&self) {
-            let mut copy_to_query = format!("COPY (SELECT a FROM test) TO '{}'", self.uri);
+            let mut copy_to_query = format!("COPY (SELECT a FROM test_expected) TO '{}'", self.uri);
 
             if !self.copy_to_options.is_empty() {
                 copy_to_query.push_str(" WITH (");
@@ -178,7 +180,7 @@ mod tests {
         }
 
         fn copy_from_parquet(&self) {
-            let mut copy_from_query = format!("COPY test FROM '{}'", self.uri);
+            let mut copy_from_query = format!("COPY test_result FROM '{}'", self.uri);
 
             if !self.copy_from_options.is_empty() {
                 copy_from_query.push_str(" WITH (");
@@ -228,15 +230,11 @@ mod tests {
     }
 
     fn test_common<T: IntoDatum + FromDatum>(test_table: TestTable<T>) -> TestResult<T> {
-        let expected = test_table.select_all();
-
         test_table.copy_to_parquet();
-
-        test_table.truncate();
-
         test_table.copy_from_parquet();
 
-        let result = test_table.select_all();
+        let expected = test_table.select_all("test_expected");
+        let result = test_table.select_all("test_result");
 
         TestResult { expected, result }
     }
@@ -258,21 +256,22 @@ mod tests {
     #[pg_test]
     fn test_int2() {
         let test_table = TestTable::<i16>::new("int2".into());
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_int2_array() {
         let test_table = TestTable::<Vec<Option<i16>>>::new("int2[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[1,2,null]), (null), (array[1]);");
+        test_table
+            .insert("INSERT INTO test_expected (a) VALUES (array[1,2,null]), (null), (array[1]);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_int4() {
         let test_table = TestTable::<i32>::new("int4".into());
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
@@ -280,125 +279,133 @@ mod tests {
     fn test_int4_array() {
         let test_table: TestTable<Vec<Option<i32>>> =
             TestTable::<Vec<Option<i32>>>::new("int4[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[1,2,null]), (null), (array[1]);");
+        test_table
+            .insert("INSERT INTO test_expected (a) VALUES (array[1,2,null]), (null), (array[1]);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_int8() {
         let test_table = TestTable::<i64>::new("int8".into());
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_int8_array() {
         let test_table = TestTable::<Vec<Option<i64>>>::new("int8[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[1,2,null]), (null), (array[1]);");
+        test_table
+            .insert("INSERT INTO test_expected (a) VALUES (array[1,2,null]), (null), (array[1]);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_flaot4() {
         let test_table = TestTable::<f32>::new("float4".into());
-        test_table.insert("INSERT INTO test (a) VALUES (1.0), (2.23213123), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1.0), (2.23213123), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_float4_array() {
         let test_table = TestTable::<Vec<Option<f32>>>::new("float4[]".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (array[1.123,2.2,null]), (null), (array[1]);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array[1.123,2.2,null]), (null), (array[1]);",
+        );
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_flaot8() {
         let test_table = TestTable::<f64>::new("float8".into());
-        test_table.insert("INSERT INTO test (a) VALUES (1.0), (2.23213123), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1.0), (2.23213123), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_float8_array() {
         let test_table = TestTable::<Vec<Option<f64>>>::new("float8[]".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (array[1.123,2.2,null]), (null), (array[1]);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array[1.123,2.2,null]), (null), (array[1]);",
+        );
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_bool() {
         let test_table = TestTable::<bool>::new("bool".into());
-        test_table.insert("INSERT INTO test (a) VALUES (false), (true), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (false), (true), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_bool_array() {
         let test_table = TestTable::<Vec<Option<bool>>>::new("bool[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[false,true,false]), (array[true,false,null]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array[false,true,false]), (array[true,false,null]), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_text() {
         let test_table = TestTable::<String>::new("text".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('asd'), ('e'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('asd'), ('e'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_text_array() {
         let test_table = TestTable::<Vec<Option<String>>>::new("text[]".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (array['asd','efg',null]), (array['e']), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['asd','efg',null]), (array['e']), (null);",
+        );
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_varchar() {
         let test_table = TestTable::<FallbackToText>::new("varchar".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('asd'), ('e'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('asd'), ('e'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_varchar_array() {
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("varchar[]".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (array['asd','efg',null]), (array['e']), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['asd','efg',null]), (array['e']), (null);",
+        );
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_bpchar() {
         let test_table = TestTable::<FallbackToText>::new("bpchar".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('asd'), ('e'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('asd'), ('e'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_bpchar_array() {
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("bpchar[]".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (array['asd','efg',null]), (array['e']), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['asd','efg',null]), (array['e']), (null);",
+        );
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_name() {
         let test_table = TestTable::<FallbackToText>::new("name".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('asd'), ('e'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('asd'), ('e'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_name_array() {
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("name[]".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (array['asd','efg',null]), (array['e']), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['asd','efg',null]), (array['e']), (null);",
+        );
         test_helper(test_table);
     }
 
@@ -408,7 +415,8 @@ mod tests {
         Spi::run(create_enum_query).unwrap();
 
         let test_table = TestTable::<FallbackToText>::new("color".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('red'), ('blue'), ('green'), (null);");
+        test_table
+            .insert("INSERT INTO test_expected (a) VALUES ('red'), ('blue'), ('green'), (null);");
         test_helper(test_table);
 
         let drop_enum_query = "DROP TYPE color CASCADE;";
@@ -421,7 +429,7 @@ mod tests {
         Spi::run(create_enum_query).unwrap();
 
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("color[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['red','blue','green',null]::color[]), (array['blue']::color[]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array['red','blue','green',null]::color[]), (array['blue']::color[]), (null);");
         test_helper(test_table);
 
         let drop_enum_query = "DROP TYPE color CASCADE;";
@@ -435,7 +443,7 @@ mod tests {
         Spi::run(create_enum_query).unwrap();
 
         let test_table = TestTable::<FallbackToText>::new("color".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('red');");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('red');");
         test_helper(test_table);
 
         let drop_enum_query = "DROP TYPE color CASCADE;";
@@ -445,15 +453,16 @@ mod tests {
     #[pg_test]
     fn test_bit() {
         let test_table = TestTable::<FallbackToText>::new("bit".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('1'), ('1'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('1'), ('1'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_bit_array() {
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("bit[]".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (array['1','0','1']), (array['1']), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['1','0','1']::bit[]), (array['1']::bit[]), (null);",
+        );
         test_helper(test_table);
     }
 
@@ -461,7 +470,7 @@ mod tests {
     #[should_panic(expected = "\"a\" is not a valid binary digit")]
     fn test_bit_invalid_value() {
         let test_table = TestTable::<FallbackToText>::new("bit".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('a');");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('a');");
         test_helper(test_table);
     }
 
@@ -469,15 +478,16 @@ mod tests {
     #[should_panic(expected = "bit string length 2 does not match type bit(1)")]
     fn test_bit_invalid_length() {
         let test_table = TestTable::<FallbackToText>::new("bit".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('01');");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('01');");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_varbit() {
         let test_table = TestTable::<FallbackToText>::new("varbit".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES ('0101'), ('1'), ('1111110010101'), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('0101'), ('1'), ('1111110010101'), (null);",
+        );
         test_helper(test_table);
     }
 
@@ -485,7 +495,7 @@ mod tests {
     fn test_varbit_array() {
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("varbit[]".into());
         test_table.insert(
-            "INSERT INTO test (a) VALUES (array['0101','1','1111110010101',null]), (null);",
+            "INSERT INTO test_expected (a) VALUES (array['0101','1','1111110010101',null]::varbit[]), (null);",
         );
         test_helper(test_table);
     }
@@ -493,22 +503,24 @@ mod tests {
     #[pg_test]
     fn test_char() {
         let test_table = TestTable::<i8>::new("\"char\"".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('a'), ('b'), ('c'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('a'), ('b'), ('c'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_char_array() {
         let test_table = TestTable::<Vec<Option<i8>>>::new("\"char\"[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['a','b','c',null]), (null);");
+        test_table
+            .insert("INSERT INTO test_expected (a) VALUES (array['a','b','c',null]), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_bytea() {
         let test_table = TestTable::<Vec<u8>>::new("bytea".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (E'\\\\x010203'), (E'\\\\x040506'), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (E'\\\\x010203'), (E'\\\\x040506'), (null);",
+        );
         test_helper(test_table);
     }
 
@@ -516,7 +528,7 @@ mod tests {
     fn test_bytea_array() {
         let test_table = TestTable::<Vec<Option<Vec<u8>>>>::new("bytea[]".into());
         test_table.insert(
-            "INSERT INTO test (a) VALUES (array[E'\\\\x010203',E'\\\\x040506',null]::bytea[]), (null);",
+            "INSERT INTO test_expected (a) VALUES (array[E'\\\\x010203',E'\\\\x040506',null]::bytea[]), (null);",
         );
         test_helper(test_table);
     }
@@ -524,21 +536,22 @@ mod tests {
     #[pg_test]
     fn test_oid() {
         let test_table = TestTable::<Oid>::new("oid".into());
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_oid_array() {
         let test_table = TestTable::<Vec<Option<Oid>>>::new("oid[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[1,2,null]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array[1,2,null]), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_date() {
         let test_table = TestTable::<Date>::new("date".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('2022-05-01'), ('2022-05-02'), (null);");
+        test_table
+            .insert("INSERT INTO test_expected (a) VALUES ('2022-05-01'), ('2022-05-02'), (null);");
         test_helper(test_table);
     }
 
@@ -546,7 +559,7 @@ mod tests {
     fn test_date_array() {
         let test_table = TestTable::<Vec<Option<Date>>>::new("date[]".into());
         test_table.insert(
-            "INSERT INTO test (a) VALUES (array['2022-05-01','2022-05-02',null]::date[]), (null);",
+            "INSERT INTO test_expected (a) VALUES (array['2022-05-01','2022-05-02',null]::date[]), (null);",
         );
         test_helper(test_table);
     }
@@ -554,7 +567,8 @@ mod tests {
     #[pg_test]
     fn test_time() {
         let test_table = TestTable::<Time>::new("time".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('15:00:00'), ('15:30:12'), (null);");
+        test_table
+            .insert("INSERT INTO test_expected (a) VALUES ('15:00:00'), ('15:30:12'), (null);");
         test_helper(test_table);
     }
 
@@ -562,7 +576,7 @@ mod tests {
     fn test_time_array() {
         let test_table = TestTable::<Vec<Option<Time>>>::new("time[]".into());
         test_table.insert(
-            "INSERT INTO test (a) VALUES (array['15:00:00','15:30:12',null]::time[]), (null);",
+            "INSERT INTO test_expected (a) VALUES (array['15:00:00','15:30:12',null]::time[]), (null);",
         );
         test_helper(test_table);
     }
@@ -570,7 +584,9 @@ mod tests {
     #[pg_test]
     fn test_timetz() {
         let test_table = TestTable::<TimeWithTimeZone>::new("timetz".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('15:00:00+03'), ('15:30:12-03'), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('15:00:00+03'), ('15:30:12-03'), (null);",
+        );
         let TestResult { expected, result } = test_common(test_table);
 
         // timetz is converted to utc timetz after copying to parquet,
@@ -592,7 +608,7 @@ mod tests {
     fn test_timetz_array() {
         let test_table = TestTable::<Vec<Option<TimeWithTimeZone>>>::new("timetz[]".into());
         test_table.insert(
-            "INSERT INTO test (a) VALUES (array['15:00:00+03','15:30:12-03',null]::timetz[]), (null);",
+            "INSERT INTO test_expected (a) VALUES (array['15:00:00+03','15:30:12-03',null]::timetz[]), (null);",
         );
         let TestResult { expected, result } = test_common(test_table);
 
@@ -615,7 +631,7 @@ mod tests {
     fn test_timestamp() {
         let test_table = TestTable::<Timestamp>::new("timestamp".into());
         test_table.insert(
-            "INSERT INTO test (a) VALUES ('2022-05-01 15:00:00'), ('2022-05-02 15:30:12'), (null);",
+            "INSERT INTO test_expected (a) VALUES ('2022-05-01 15:00:00'), ('2022-05-02 15:30:12'), (null);",
         );
         test_helper(test_table);
     }
@@ -623,14 +639,14 @@ mod tests {
     #[pg_test]
     fn test_timestamp_array() {
         let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['2022-05-01 15:00:00','2022-05-02 15:30:12',null]::timestamp[]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array['2022-05-01 15:00:00','2022-05-02 15:30:12',null]::timestamp[]), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_timestamptz() {
         let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('2022-05-01 15:00:00+03'), ('2022-05-02 15:30:12-03'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('2022-05-01 15:00:00+03'), ('2022-05-02 15:30:12-03'), (null);");
         test_helper(test_table);
     }
 
@@ -638,42 +654,42 @@ mod tests {
     fn test_timestamptz_array() {
         let test_table =
             TestTable::<Vec<Option<TimestampWithTimeZone>>>::new("timestamptz[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['2022-05-01 15:00:00+03','2022-05-02 15:30:12-03',null]::timestamptz[]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array['2022-05-01 15:00:00+03','2022-05-02 15:30:12-03',null]::timestamptz[]), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_interval() {
         let test_table = TestTable::<Interval>::new("interval".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('15 years 10 months 1 day 10:00:00'), ('5 days 4 minutes 10 seconds'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('15 years 10 months 1 day 10:00:00'), ('5 days 4 minutes 10 seconds'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_interval_array() {
         let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['15 years 10 months 1 day 10:00:00','5 days 4 minutes 10 seconds',null]::interval[]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array['15 years 10 months 1 day 10:00:00','5 days 4 minutes 10 seconds',null]::interval[]), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_uuid() {
         let test_table = TestTable::<Uuid>::new("uuid".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('00000000-0000-0000-0000-000000000001'), ('00000000-0000-0000-0000-000000000002'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('00000000-0000-0000-0000-000000000001'), ('00000000-0000-0000-0000-000000000002'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_uuid_array() {
         let test_table = TestTable::<Vec<Option<Uuid>>>::new("uuid[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',null]::uuid[]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array['00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',null]::uuid[]), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_json() {
         let test_table = TestTable::<Json>::new("json".into()).with_order_by_col("a->>'a'".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('{\"a\":\"test_json_1\"}'), ('{\"a\":\"test_json_2\"}'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('{\"a\":\"test_json_1\"}'), ('{\"a\":\"test_json_2\"}'), (null);");
         let TestResult { expected, result } = test_common(test_table);
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
@@ -696,7 +712,7 @@ mod tests {
     fn test_json_array() {
         let test_table = TestTable::<Vec<Option<Json>>>::new("json[]".into())
             .with_order_by_col("a::text[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['{\"a\":\"test_json_1\"}','{\"a\":\"test_json_2\"}',null]::json[]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array['{\"a\":\"test_json_1\"}','{\"a\":\"test_json_2\"}',null]::json[]), (null);");
         let TestResult { expected, result } = test_common(test_table);
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
@@ -732,7 +748,7 @@ mod tests {
     fn test_jsonb() {
         let test_table =
             TestTable::<JsonB>::new("jsonb".into()).with_order_by_col("a->>'a'".into());
-        test_table.insert("INSERT INTO test (a) VALUES ('{\"a\":\"test_jsonb_1\"}'), ('{\"a\":\"test_jsonb_2\"}'), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('{\"a\":\"test_jsonb_1\"}'), ('{\"a\":\"test_jsonb_2\"}'), (null);");
         let TestResult { expected, result } = test_common(test_table);
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
@@ -754,7 +770,7 @@ mod tests {
     #[pg_test]
     fn test_jsonb_array() {
         let test_table = TestTable::<Vec<Option<JsonB>>>::new("jsonb[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array['{\"a\":\"test_jsonb_1\"}','{\"a\":\"test_jsonb_2\"}',null]::jsonb[]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array['{\"a\":\"test_jsonb_1\"}','{\"a\":\"test_jsonb_2\"}',null]::jsonb[]), (null);");
         let TestResult { expected, result } = test_common(test_table);
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
@@ -790,7 +806,7 @@ mod tests {
     fn test_numeric() {
         let test_table = TestTable::<AnyNumeric>::new("numeric(10,4)".into());
         test_table
-            .insert("INSERT INTO test (a) VALUES (0.0), (.0), (1.), (+1.020), (-2.12313), (.3), (4), (null);");
+            .insert("INSERT INTO test_expected (a) VALUES (0.0), (.0), (1.), (+1.020), (-2.12313), (.3), (4), (null);");
         test_helper(test_table);
     }
 
@@ -798,7 +814,7 @@ mod tests {
     fn test_numeric_array() {
         let test_table = TestTable::<Vec<Option<AnyNumeric>>>::new("numeric(10,4)[]".into());
         test_table.insert(
-            "INSERT INTO test (a) VALUES (array[0.0,.0,1.,+1.020,-2.12313,.3,4,null]), (null);",
+            "INSERT INTO test_expected (a) VALUES (array[0.0,.0,1.,+1.020,-2.12313,.3,4,null]), (null);",
         );
         test_helper(test_table);
     }
@@ -807,7 +823,7 @@ mod tests {
     fn test_huge_numeric() {
         let test_table = TestTable::<FallbackToText>::new("numeric(100,4)".into());
         test_table.insert(
-            "INSERT INTO test (a) VALUES (0.0), (.0), (1.), (+1.020), (2.12313), (3), (null);",
+            "INSERT INTO test_expected (a) VALUES (0.0), (.0), (1.), (+1.020), (2.12313), (3), (null);",
         );
         test_helper(test_table);
     }
@@ -815,8 +831,9 @@ mod tests {
     #[pg_test]
     fn test_huge_numeric_array() {
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("numeric(100,4)[]".into());
-        test_table
-            .insert("INSERT INTO test (a) VALUES (array[0.0,.0,1.,1.020,2.12313,3,null]), (null);");
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array[0.0,.0,1.,1.020,2.12313,3,null]), (null);",
+        );
         test_helper(test_table);
     }
 
@@ -826,13 +843,11 @@ mod tests {
         Spi::run(query).unwrap();
 
         let test_table = TestTable::<Geometry>::new("geometry".into());
-        test_table.insert("INSERT INTO test (a) VALUES (ST_GeomFromText('POINT(1 1)')),
+        test_table.insert("INSERT INTO test_expected (a) VALUES (ST_GeomFromText('POINT(1 1)')),
                                                        (ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')),
                                                        (ST_GeomFromText('LINESTRING(0 0, 1 1)')),
                                                        (null);");
         test_helper(test_table);
-
-        Spi::run("DROP EXTENSION postgis;").unwrap();
     }
 
     #[pg_test]
@@ -841,16 +856,14 @@ mod tests {
         Spi::run(query).unwrap();
 
         let test_table = TestTable::<Vec<Option<Geometry>>>::new("geometry[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[ST_GeomFromText('POINT(1 1)'), ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array[ST_GeomFromText('POINT(1 1)'), ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null);");
         test_helper(test_table);
-
-        Spi::run("DROP EXTENSION postgis;").unwrap();
     }
 
     #[pg_test]
     fn test_empty_array() {
         let test_table = TestTable::<Vec<Option<i32>>>::new("int4[]".into());
-        test_table.insert("INSERT INTO test (a) VALUES (array[]::int4[]), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array[]::int4[]), (null);");
         test_helper(test_table);
     }
 
@@ -980,7 +993,7 @@ mod tests {
         let test_table = TestTable::<i32>::new("int4".into())
             .with_copy_to_options(HashMap::new())
             .with_copy_from_options(HashMap::new());
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
@@ -1051,7 +1064,7 @@ mod tests {
 
             let test_table =
                 TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-            test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+            test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
             test_helper(test_table);
         }
     }
@@ -1066,7 +1079,7 @@ mod tests {
     #[should_panic(expected = "unsupported uri invalid_uri")]
     fn test_invalid_uri() {
         let test_table = TestTable::<i32>::new("int4".into()).with_uri("invalid_uri".to_string());
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
@@ -1080,7 +1093,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
@@ -1094,7 +1107,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
@@ -1108,7 +1121,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
@@ -1122,7 +1135,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
@@ -1136,7 +1149,7 @@ mod tests {
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
@@ -1147,7 +1160,7 @@ mod tests {
         copy_options.insert("row_group_size".to_string(), CopyOptionValue::IntOption(-1));
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
-        test_table.insert("INSERT INTO test (a) VALUES (1), (2), (null);");
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
