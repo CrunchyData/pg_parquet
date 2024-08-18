@@ -1,10 +1,10 @@
 use arrow::array::{Array, BinaryArray};
 
-use super::{ArrowArrayToPgType, ArrowToPgContext};
+use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Bytea
 impl ArrowArrayToPgType<'_, BinaryArray, Vec<u8>> for Vec<u8> {
-    fn to_pg_type(arr: BinaryArray, _context: ArrowToPgContext<'_>) -> Option<Vec<u8>> {
+    fn to_pg_type(arr: BinaryArray, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Vec<u8>> {
         if arr.is_null(0) {
             None
         } else {
@@ -17,7 +17,7 @@ impl ArrowArrayToPgType<'_, BinaryArray, Vec<u8>> for Vec<u8> {
 impl ArrowArrayToPgType<'_, BinaryArray, Vec<Option<Vec<u8>>>> for Vec<Option<Vec<u8>>> {
     fn to_pg_type(
         arr: BinaryArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Vec<Option<Vec<u8>>>> {
         let mut vals = vec![];
         for val in arr.iter() {

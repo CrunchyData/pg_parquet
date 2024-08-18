@@ -2,11 +2,11 @@ use arrow::array::{Array, BinaryArray};
 
 use crate::type_compat::geometry::Geometry;
 
-use super::{ArrowArrayToPgType, ArrowToPgContext};
+use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Geometry
 impl ArrowArrayToPgType<'_, BinaryArray, Geometry> for Geometry {
-    fn to_pg_type(arr: BinaryArray, _context: ArrowToPgContext<'_>) -> Option<Geometry> {
+    fn to_pg_type(arr: BinaryArray, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Geometry> {
         if arr.is_null(0) {
             None
         } else {
@@ -19,7 +19,7 @@ impl ArrowArrayToPgType<'_, BinaryArray, Geometry> for Geometry {
 impl ArrowArrayToPgType<'_, BinaryArray, Vec<Option<Geometry>>> for Vec<Option<Geometry>> {
     fn to_pg_type(
         arr: BinaryArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Vec<Option<Geometry>>> {
         let mut vals = vec![];
         for val in arr.iter() {

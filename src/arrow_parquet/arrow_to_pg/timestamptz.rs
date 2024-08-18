@@ -3,7 +3,7 @@ use pgrx::TimestampWithTimeZone;
 
 use crate::type_compat::pg_arrow_type_conversions::i64_to_timestamptz;
 
-use super::{ArrowArrayToPgType, ArrowToPgContext};
+use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Timestamptz
 impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, TimestampWithTimeZone>
@@ -11,7 +11,7 @@ impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, TimestampWithTimeZone>
 {
     fn to_pg_type(
         arr: TimestampMicrosecondArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<TimestampWithTimeZone> {
         if arr.is_null(0) {
             None
@@ -28,7 +28,7 @@ impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, Vec<Option<TimestampWithT
 {
     fn to_pg_type(
         arr: TimestampMicrosecondArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Vec<Option<TimestampWithTimeZone>>> {
         let mut vals = vec![];
         for val in arr.iter() {

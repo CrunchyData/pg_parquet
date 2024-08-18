@@ -3,13 +3,13 @@ use pgrx::Timestamp;
 
 use crate::type_compat::pg_arrow_type_conversions::i64_to_timestamp;
 
-use super::{ArrowArrayToPgType, ArrowToPgContext};
+use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Timestamp
 impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, Timestamp> for Timestamp {
     fn to_pg_type(
         arr: TimestampMicrosecondArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Timestamp> {
         if arr.is_null(0) {
             None
@@ -26,7 +26,7 @@ impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, Vec<Option<Timestamp>>>
 {
     fn to_pg_type(
         arr: TimestampMicrosecondArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Vec<Option<Timestamp>>> {
         let mut vals = vec![];
         for val in arr.iter() {

@@ -3,11 +3,11 @@ use pgrx::AnyNumeric;
 
 use crate::type_compat::pg_arrow_type_conversions::i128_to_numeric;
 
-use super::{ArrowArrayToPgType, ArrowToPgContext};
+use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Numeric
 impl ArrowArrayToPgType<'_, Decimal128Array, AnyNumeric> for AnyNumeric {
-    fn to_pg_type(arr: Decimal128Array, context: ArrowToPgContext<'_>) -> Option<AnyNumeric> {
+    fn to_pg_type(arr: Decimal128Array, context: ArrowToPgPerAttributeContext<'_>) -> Option<AnyNumeric> {
         if arr.is_null(0) {
             None
         } else {
@@ -23,7 +23,7 @@ impl ArrowArrayToPgType<'_, Decimal128Array, AnyNumeric> for AnyNumeric {
 impl ArrowArrayToPgType<'_, Decimal128Array, Vec<Option<AnyNumeric>>> for Vec<Option<AnyNumeric>> {
     fn to_pg_type(
         arr: Decimal128Array,
-        context: ArrowToPgContext<'_>,
+        context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Vec<Option<AnyNumeric>>> {
         let scale = context.scale.expect("Expected scale");
         let mut vals = vec![];

@@ -12,11 +12,11 @@ use crate::{
     type_compat::pg_arrow_type_conversions::interval_to_nano,
 };
 
-use super::PgToArrowContext;
+use super::PgToArrowPerAttributeContext;
 
 // Interval
 impl PgTypeToArrowArray<Interval> for Vec<Option<Interval>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let intervals = self
             .into_iter()
             .map(|interval| interval.and_then(interval_to_nano))
@@ -30,7 +30,7 @@ impl PgTypeToArrowArray<Interval> for Vec<Option<Interval>> {
 
 // Interval[]
 impl PgTypeToArrowArray<Vec<Option<Interval>>> for Vec<Option<Vec<Option<Interval>>>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let intervals = self

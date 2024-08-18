@@ -12,11 +12,11 @@ use crate::{
     type_compat::pg_arrow_type_conversions::timestamptz_to_i64,
 };
 
-use super::PgToArrowContext;
+use super::PgToArrowPerAttributeContext;
 
 // TimestampTz
 impl PgTypeToArrowArray<TimestampWithTimeZone> for Vec<Option<TimestampWithTimeZone>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let timestamptzs = self
             .into_iter()
             .map(|timestamptz| timestamptz.and_then(timestamptz_to_i64))
@@ -32,7 +32,7 @@ impl PgTypeToArrowArray<TimestampWithTimeZone> for Vec<Option<TimestampWithTimeZ
 impl PgTypeToArrowArray<Vec<Option<TimestampWithTimeZone>>>
     for Vec<Option<Vec<Option<TimestampWithTimeZone>>>>
 {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let timestamptzs = self

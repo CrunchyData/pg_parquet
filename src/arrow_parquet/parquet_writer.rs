@@ -18,6 +18,7 @@ use crate::{
         schema_visitor::parse_arrow_schema_from_tupledesc, uri_utils::parquet_writer_from_uri,
     },
     pgrx_utils::collect_valid_attributes,
+    type_compat::{geometry::reset_postgis_context, map::reset_crunchy_map_context},
 };
 
 pub(crate) struct ParquetWriterContext<'a> {
@@ -34,6 +35,9 @@ impl<'a> ParquetWriterContext<'a> {
         tupledesc: PgTupleDesc<'a>,
     ) -> ParquetWriterContext<'a> {
         debug_assert!(tupledesc.oid() == RECORDOID);
+
+        reset_postgis_context();
+        reset_crunchy_map_context();
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

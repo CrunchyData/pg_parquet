@@ -1,11 +1,11 @@
 use arrow::array::{Array, FixedSizeBinaryArray};
 use pgrx::Uuid;
 
-use super::{ArrowArrayToPgType, ArrowToPgContext};
+use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Uuid
 impl ArrowArrayToPgType<'_, FixedSizeBinaryArray, Uuid> for Uuid {
-    fn to_pg_type(arr: FixedSizeBinaryArray, _context: ArrowToPgContext<'_>) -> Option<Uuid> {
+    fn to_pg_type(arr: FixedSizeBinaryArray, _context: ArrowToPgPerAttributeContext<'_>) -> Option<Uuid> {
         if arr.is_null(0) {
             None
         } else {
@@ -20,7 +20,7 @@ impl ArrowArrayToPgType<'_, FixedSizeBinaryArray, Uuid> for Uuid {
 impl ArrowArrayToPgType<'_, FixedSizeBinaryArray, Vec<Option<Uuid>>> for Vec<Option<Uuid>> {
     fn to_pg_type(
         arr: FixedSizeBinaryArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Vec<Option<Uuid>>> {
         let mut vals = vec![];
         for val in arr.iter() {

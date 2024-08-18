@@ -5,7 +5,7 @@ use arrow::{
     datatypes::{Field, FieldRef},
 };
 
-use crate::type_compat::map::PGMap;
+use crate::type_compat::map::CrunchyMap;
 
 pub(crate) fn to_not_nullable_field(field: FieldRef) -> FieldRef {
     let name = field.deref().name();
@@ -24,7 +24,7 @@ pub(crate) fn to_not_nullable_field(field: FieldRef) -> FieldRef {
     Arc::new(field)
 }
 
-pub(crate) fn arrow_map_offsets(maps: &Vec<Option<PGMap>>) -> (OffsetBuffer<i32>, NullBuffer) {
+pub(crate) fn arrow_map_offsets(maps: &Vec<Option<CrunchyMap>>) -> (OffsetBuffer<i32>, NullBuffer) {
     let mut offsets = vec![0];
     let mut nulls = vec![];
 

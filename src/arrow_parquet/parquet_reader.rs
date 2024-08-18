@@ -11,7 +11,11 @@ use pgrx::{
 };
 use tokio::runtime::Runtime;
 
-use crate::{arrow_parquet::arrow_to_pg::to_pg_datum, pgrx_utils::collect_valid_attributes};
+use crate::{
+    arrow_parquet::arrow_to_pg::to_pg_datum,
+    pgrx_utils::collect_valid_attributes,
+    type_compat::{geometry::reset_postgis_context, map::reset_crunchy_map_context},
+};
 
 use super::uri_utils::parquet_reader_from_uri;
 
@@ -28,6 +32,9 @@ pub(crate) struct ParquetReaderContext {
 
 impl ParquetReaderContext {
     pub(crate) fn new(uri: String, tupledesc: TupleDesc) -> Self {
+        reset_postgis_context();
+        reset_crunchy_map_context();
+
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

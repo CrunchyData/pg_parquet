@@ -8,11 +8,11 @@ use arrow_schema::DataType;
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
-use super::PgToArrowContext;
+use super::PgToArrowPerAttributeContext;
 
 // Int16
 impl PgTypeToArrowArray<i16> for Vec<Option<i16>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let int16_array = Int16Array::from(self);
         (context.field, Arc::new(int16_array))
     }
@@ -20,7 +20,7 @@ impl PgTypeToArrowArray<i16> for Vec<Option<i16>> {
 
 // Int16[]
 impl PgTypeToArrowArray<Vec<Option<i16>>> for Vec<Option<Vec<Option<i16>>>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let int16s = self.into_iter().flatten().flatten().collect::<Vec<_>>();

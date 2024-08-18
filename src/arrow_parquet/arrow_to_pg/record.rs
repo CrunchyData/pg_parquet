@@ -3,7 +3,7 @@ use pgrx::{prelude::PgHeapTuple, AllocatedByRust};
 
 use crate::pgrx_utils::collect_valid_attributes;
 
-use super::{to_pg_datum, ArrowArrayToPgType, ArrowToPgContext};
+use super::{to_pg_datum, ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // PgHeapTuple
 impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
@@ -11,7 +11,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
 {
     fn to_pg_type(
         arr: StructArray,
-        context: ArrowToPgContext<'a>,
+        context: ArrowToPgPerAttributeContext<'a>,
     ) -> Option<PgHeapTuple<'a, AllocatedByRust>> {
         if arr.is_null(0) {
             return None;
@@ -31,7 +31,11 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
 
             let column_data = arr.column_by_name(name).unwrap();
 
-            let datum = to_pg_datum(column_data.into_data(), typoid, typmod);
+            let datum = to_pg_datum(
+                column_data.into_data(),
+                typoid,
+                typmod,
+            );
             datums.push(datum);
         }
 
@@ -45,7 +49,7 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, Vec<Option<PgHeapTuple<'a, Allocate
 {
     fn to_pg_type(
         arr: StructArray,
-        context: ArrowToPgContext<'a>,
+        context: ArrowToPgPerAttributeContext<'a>,
     ) -> Option<Vec<Option<PgHeapTuple<'a, AllocatedByRust>>>> {
         let len = arr.len();
         let mut values = Vec::with_capacity(len);

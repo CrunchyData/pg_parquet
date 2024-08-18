@@ -12,14 +12,14 @@ use crate::{
         pg_to_arrow::PgTypeToArrowArray,
     },
     pgrx_utils::{domain_array_base_elem_typoid, tuple_desc},
-    type_compat::map::PGMap,
+    type_compat::map::CrunchyMap,
 };
 
-use super::PgToArrowContext;
+use super::PgToArrowPerAttributeContext;
 
 // crunchy_map.key_<type1>_val_<type2>
-impl<'b> PgTypeToArrowArray<PGMap<'b>> for Vec<Option<PGMap<'b>>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (map_offsets, map_nulls) = arrow_map_offsets(&self);
 
         let map_field = context.field;
@@ -45,7 +45,7 @@ impl<'b> PgTypeToArrowArray<PGMap<'b>> for Vec<Option<PGMap<'b>>> {
 
         let entries_tupledesc = tuple_desc(entries_typoid, -1);
 
-        let entries_context = PgToArrowContext::new(
+        let entries_context = PgToArrowPerAttributeContext::new(
             context.name,
             entries_typoid,
             context.typmod,
@@ -70,8 +70,8 @@ impl<'b> PgTypeToArrowArray<PGMap<'b>> for Vec<Option<PGMap<'b>>> {
 }
 
 // crunchy_map.key_<type1>_val_<type2>[]
-impl<'b> PgTypeToArrowArray<Vec<Option<PGMap<'b>>>> for Vec<Option<Vec<Option<PGMap<'b>>>>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+impl<'b> PgTypeToArrowArray<Vec<Option<CrunchyMap<'b>>>> for Vec<Option<Vec<Option<CrunchyMap<'b>>>>> {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (list_offsets, list_nulls) = arrow_array_offsets(&self);
 
         let list_field = context.field;
@@ -106,7 +106,7 @@ impl<'b> PgTypeToArrowArray<Vec<Option<PGMap<'b>>>> for Vec<Option<Vec<Option<PG
 
         let entries_tupledesc = tuple_desc(entries_typoid, -1);
 
-        let entries_context = PgToArrowContext::new(
+        let entries_context = PgToArrowPerAttributeContext::new(
             context.name,
             entries_typoid,
             context.typmod,

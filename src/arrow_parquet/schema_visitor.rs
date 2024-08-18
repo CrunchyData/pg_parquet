@@ -16,9 +16,8 @@ use crate::{
         is_array_type, is_composite_type, tuple_desc,
     },
     type_compat::{
-        fallback_to_text::set_fallback_typoid,
-        geometry::{is_postgis_geometry_type, set_geometry_typoid},
-        map::{is_crunchy_map_type, set_crunchy_map_typoid},
+        geometry::is_postgis_geometry_typoid,
+        map::is_crunchy_map_typoid,
         pg_arrow_type_conversions::{
             extract_precision_from_numeric_typmod, extract_scale_from_numeric_typmod,
             MAX_DECIMAL_PRECISION,
@@ -55,8 +54,7 @@ pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schem
         let field = if is_composite_type(attribute_typoid) {
             let attribute_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
             visit_struct_schema(attribute_tupledesc, attribute_name, &mut field_id)
-        } else if is_crunchy_map_type(attribute_typoid) {
-            set_crunchy_map_typoid(attribute_typoid);
+        } else if is_crunchy_map_typoid(attribute_typoid) {
             let attribute_base_elem_typoid = domain_array_base_elem_typoid(attribute_typoid);
             visit_map_schema(
                 attribute_base_elem_typoid,
@@ -114,8 +112,7 @@ fn visit_struct_schema(tupledesc: PgTupleDesc, elem_name: &str, field_id: &mut i
         let child_field = if is_composite_type(attribute_oid) {
             let attribute_tupledesc = tuple_desc(attribute_oid, attribute_typmod);
             visit_struct_schema(attribute_tupledesc, attribute_name, field_id)
-        } else if is_crunchy_map_type(attribute_oid) {
-            set_crunchy_map_typoid(attribute_oid);
+        } else if is_crunchy_map_typoid(attribute_oid) {
             let attribute_base_elem_typoid = domain_array_base_elem_typoid(attribute_oid);
             visit_map_schema(
                 attribute_base_elem_typoid,
@@ -160,8 +157,7 @@ fn visit_list_schema(typoid: Oid, typmod: i32, array_name: &str, field_id: &mut 
     let elem_field = if is_composite_type(typoid) {
         let tupledesc = tuple_desc(typoid, typmod);
         visit_struct_schema(tupledesc, array_name, field_id)
-    } else if is_crunchy_map_type(typoid) {
-        set_crunchy_map_typoid(typoid);
+    } else if is_crunchy_map_typoid(typoid) {
         let base_elem_typoid = domain_array_base_elem_typoid(typoid);
         visit_map_schema(base_elem_typoid, typmod, array_name, field_id)
     } else {
@@ -225,7 +221,6 @@ fn visit_primitive_schema(
             let scale = extract_scale_from_numeric_typmod(typmod);
 
             if precision > MAX_DECIMAL_PRECISION {
-                set_fallback_typoid(typoid);
                 Field::new(elem_name, arrow::datatypes::DataType::Utf8, true)
             } else {
                 Field::new(
@@ -281,11 +276,9 @@ fn visit_primitive_schema(
         BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true),
         OIDOID => Field::new(elem_name, arrow::datatypes::DataType::UInt32, true),
         _ => {
-            if is_postgis_geometry_type(typoid) {
-                set_geometry_typoid(typoid);
+            if is_postgis_geometry_typoid(typoid) {
                 Field::new(elem_name, arrow::datatypes::DataType::Binary, true)
             } else {
-                set_fallback_typoid(typoid);
                 Field::new(elem_name, arrow::datatypes::DataType::Utf8, true)
             }
         }

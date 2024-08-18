@@ -3,13 +3,13 @@ use pgrx::TimeWithTimeZone;
 
 use crate::type_compat::pg_arrow_type_conversions::i64_to_timetz;
 
-use super::{ArrowArrayToPgType, ArrowToPgContext};
+use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // Timetz
 impl ArrowArrayToPgType<'_, Time64MicrosecondArray, TimeWithTimeZone> for TimeWithTimeZone {
     fn to_pg_type(
         arr: Time64MicrosecondArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<TimeWithTimeZone> {
         if arr.is_null(0) {
             None
@@ -26,7 +26,7 @@ impl ArrowArrayToPgType<'_, Time64MicrosecondArray, Vec<Option<TimeWithTimeZone>
 {
     fn to_pg_type(
         arr: Time64MicrosecondArray,
-        _context: ArrowToPgContext<'_>,
+        _context: ArrowToPgPerAttributeContext<'_>,
     ) -> Option<Vec<Option<TimeWithTimeZone>>> {
         let mut vals = vec![];
         for val in arr.iter() {

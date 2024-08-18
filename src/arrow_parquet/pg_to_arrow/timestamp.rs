@@ -12,11 +12,11 @@ use crate::{
     type_compat::pg_arrow_type_conversions::timestamp_to_i64,
 };
 
-use super::PgToArrowContext;
+use super::PgToArrowPerAttributeContext;
 
 // Timestamp
 impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let timestamps = self
             .into_iter()
             .map(|timstamp| timstamp.and_then(timestamp_to_i64))
@@ -30,7 +30,7 @@ impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
 
 // Timestamp[]
 impl PgTypeToArrowArray<Vec<Option<Timestamp>>> for Vec<Option<Vec<Option<Timestamp>>>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let timestamps = self

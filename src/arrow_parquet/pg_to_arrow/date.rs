@@ -12,11 +12,11 @@ use crate::{
     type_compat::pg_arrow_type_conversions::date_to_i32,
 };
 
-use super::PgToArrowContext;
+use super::PgToArrowPerAttributeContext;
 
 // Date
 impl PgTypeToArrowArray<Date> for Vec<Option<Date>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let dates = self
             .into_iter()
             .map(|date| date.and_then(date_to_i32))
@@ -30,7 +30,7 @@ impl PgTypeToArrowArray<Date> for Vec<Option<Date>> {
 
 // Date[]
 impl PgTypeToArrowArray<Vec<Option<Date>>> for Vec<Option<Vec<Option<Date>>>> {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let dates = self

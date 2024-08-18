@@ -3,14 +3,17 @@ use pgrx::{prelude::PgHeapTuple, AllocatedByRust};
 
 use crate::{
     pgrx_utils::{domain_array_base_elem_typoid, tuple_desc},
-    type_compat::map::PGMap,
+    type_compat::map::CrunchyMap,
 };
 
-use super::{ArrowArrayToPgType, ArrowToPgContext};
+use super::{ArrowArrayToPgType, ArrowToPgPerAttributeContext};
 
 // crunchy_map.key_<type1>_val_<type2>
-impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, PGMap<'a>> for PGMap<'a> {
-    fn to_pg_type(arr: MapArray, context: ArrowToPgContext<'_>) -> Option<PGMap<'a>> {
+impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, CrunchyMap<'a>> for CrunchyMap<'a> {
+    fn to_pg_type(
+        arr: MapArray,
+        context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<CrunchyMap<'a>> {
         if arr.is_null(0) {
             None
         } else {
@@ -20,7 +23,7 @@ impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, PGMap<'a>> for PGMap<'a> {
 
             let entries_tupledesc = tuple_desc(entries_typoid, context.typmod);
 
-            let entries_context = ArrowToPgContext::new(entries_typoid, context.typmod)
+            let entries_context = ArrowToPgPerAttributeContext::new(entries_typoid, context.typmod)
                 .with_tupledesc(entries_tupledesc);
 
             let entries = <Vec<Option<PgHeapTuple<AllocatedByRust>>> as ArrowArrayToPgType<
@@ -31,7 +34,7 @@ impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, PGMap<'a>> for PGMap<'a> {
             if let Some(entries) = entries {
                 // entries cannot be null if the map is not null (arrow does not allow it)
                 let entries = entries.into_iter().flatten().collect();
-                Some(PGMap { entries })
+                Some(CrunchyMap { entries })
             } else {
                 None
             }
@@ -40,21 +43,21 @@ impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, PGMap<'a>> for PGMap<'a> {
 }
 
 // crunchy_map.key_<type1>_val_<type2>[]
-impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, Vec<Option<PGMap<'a>>>>
-    for Vec<Option<PGMap<'a>>>
+impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, Vec<Option<CrunchyMap<'a>>>>
+    for Vec<Option<CrunchyMap<'a>>>
 {
     fn to_pg_type(
         array: MapArray,
-        context: ArrowToPgContext<'_>,
-    ) -> Option<Vec<Option<PGMap<'a>>>> {
+        context: ArrowToPgPerAttributeContext<'_>,
+    ) -> Option<Vec<Option<CrunchyMap<'a>>>> {
         let mut maps = vec![];
 
         let entries_typoid = domain_array_base_elem_typoid(context.typoid);
 
         let entries_tupledesc = tuple_desc(entries_typoid, context.typmod);
 
-        let entries_context =
-            ArrowToPgContext::new(entries_typoid, context.typmod).with_tupledesc(entries_tupledesc);
+        let entries_context = ArrowToPgPerAttributeContext::new(entries_typoid, context.typmod)
+            .with_tupledesc(entries_tupledesc);
 
         for entries_array in array.iter() {
             if let Some(entries_array) = entries_array {
@@ -66,7 +69,7 @@ impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, Vec<Option<PGMap<'a>>>>
                 if let Some(entries) = entries {
                     // entries cannot be null if the map is not null (arrow does not allow it)
                     let entries = entries.into_iter().flatten().collect();
-                    maps.push(Some(PGMap { entries }));
+                    maps.push(Some(CrunchyMap { entries }));
                 } else {
                     maps.push(None);
                 }

@@ -11,13 +11,13 @@ use crate::{
     pgrx_utils::collect_valid_attributes,
 };
 
-use super::{collect_attribute_array_from_tuples, PgToArrowContext};
+use super::{collect_attribute_array_from_tuples, PgToArrowPerAttributeContext};
 
 // PgHeapTuple
 impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
     for Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>
 {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let struct_field = context.field;
 
         let fields = match struct_field.data_type() {
@@ -73,7 +73,7 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 impl PgTypeToArrowArray<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>
     for Vec<Option<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>>
 {
-    fn to_arrow_array(self, context: PgToArrowContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let list_field = context.field;
@@ -85,7 +85,7 @@ impl PgTypeToArrowArray<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>
 
         let tuples = self.into_iter().flatten().flatten().collect::<Vec<_>>();
 
-        let tuples_context = PgToArrowContext::new(
+        let tuples_context = PgToArrowPerAttributeContext::new(
             context.name,
             context.typoid,
             context.typmod,
