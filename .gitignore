@@ -11,3 +11,4 @@ Cargo.lock
 *.profdata
 *.gcov
 *.lcov
+*.xml

@@ -20,16 +20,16 @@ jobs:
         with:
           toolchain: 1.79.0
           target: x86_64-unknown-linux-gnu
-          components: rustfmt, clippy, llvm-tools-preview
+          components: rustfmt, clippy
+
+      - name: Extract rustc LLVM version
+        id: rustc-llvm-version
+        run: echo "version=$(rustc --version --verbose | grep 'LLVM version' | cut -d ' ' -f 3)" >> $GITHUB_OUTPUT
 
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v2
         with:
-          version: "18.1.7"
-
-      - name: Install grcov
-        run: |
-          cargo install grcov
+          version: ${{ steps.rustc-llvm-version.outputs.version }}
 
       - name: Install PostgreSQL dependencies
         run: |
@@ -58,13 +58,15 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          grcov . \
-            -s . \
-            --binary-path ./target/debug/ \
-            -t lcov \
-            --ignore-not-existing \
-            --keep-only 'src/**' \
-            -o pg_parquet.lcov
+          llvm-profdata merge *.profraw -output pg_parquet.profdata
+          llvm-cov export \
+            --object=./target/debug/libpg_parquet.so \
+            --ignore-filename-regex=.cargo/registry \
+            --ignore-filename-regex=.cargo/git \
+            --ignore-filename-regex=pg_parquet/target \
+            --ignore-filename-regex=rustc \
+            --instr-profile=pg_parquet.profdata \
+            --format=lcov > pg_parquet.lcov
 
       - name: Upload coverage report to Codecov
         uses: codecov/codecov-action@v4
