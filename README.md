@@ -16,6 +16,7 @@
 - [Object Store Support](#object-store-support)
 - [Copy Options](#copy-options)
 - [Supported Types](#supported-types)
+  - [Nested Types](#nested-types)
 
 ## Installation From Source
 After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build the extension.

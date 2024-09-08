@@ -1549,7 +1549,7 @@ mod tests {
                 5,
                 "id".into(),
                 "INT32".into(),
-                None,
+                Some(0),
                 None,
             ),
             (
@@ -1619,7 +1619,7 @@ mod tests {
                 5,
                 "id".into(),
                 "INT32".into(),
-                None,
+                Some(0),
                 None,
             ),
             (
@@ -1847,7 +1847,7 @@ mod tests {
 
         let expected_file_metadata = vec![(
             "file:///tmp/test.parquet".into(),
-            Some("parquet-rs version 52.2.0".into()),
+            Some("parquet-rs version 53.0.0".into()),
             total_rows,
             total_row_groups,
             "1".into(),

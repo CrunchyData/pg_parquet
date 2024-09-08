@@ -66,16 +66,13 @@ mod pgparquet {
                 let mut stats_distinct_count = None;
 
                 if let Some(statistics) = column.statistics() {
-                    if statistics.has_min_max_set() {
-                        stats_min = Some(stats_min_value_to_str(statistics));
-                        stats_max = Some(stats_max_value_to_str(statistics));
-                    }
+                    stats_min = stats_min_value_to_str(statistics);
 
-                    if statistics.has_nulls() {
-                        stats_null_count = Some(statistics.null_count() as i64);
-                    }
+                    stats_max = stats_max_value_to_str(statistics);
 
-                    stats_distinct_count = statistics.distinct_count().map(|v| v as i64);
+                    stats_null_count = statistics.null_count_opt().map(|v| v as i64);
+
+                    stats_distinct_count = statistics.distinct_count_opt().map(|v| v as i64);
                 }
 
                 let compression = column.compression().to_string();
@@ -212,34 +209,44 @@ mod pgparquet {
     }
 }
 
-fn stats_min_value_to_str(statistics: &Statistics) -> String {
-    match statistics {
-        Statistics::Boolean(statistics) => statistics.min().to_string(),
-        Statistics::Int32(statistics) => statistics.min().to_string(),
-        Statistics::Int64(statistics) => statistics.min().to_string(),
-        Statistics::Int96(statistics) => statistics.min().to_string(),
-        Statistics::Float(statistics) => statistics.min().to_string(),
-        Statistics::Double(statistics) => statistics.min().to_string(),
-        Statistics::ByteArray(statistics) => match statistics.min().as_utf8() {
+fn stats_min_value_to_str(statistics: &Statistics) -> Option<String> {
+    match &statistics {
+        Statistics::Boolean(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
+        Statistics::Int32(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
+        Statistics::Int64(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
+        Statistics::Int96(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
+        Statistics::Float(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
+        Statistics::Double(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
+        Statistics::ByteArray(val_stats) => val_stats.min_opt().map(|v| match v.as_utf8() {
             Ok(v) => v.to_string(),
-            Err(_) => statistics.min().to_string(),
-        },
-        Statistics::FixedLenByteArray(statistics) => statistics.min().to_string(),
+            Err(_) => v.to_string(),
+        }),
+        Statistics::FixedLenByteArray(val_stats) => {
+            val_stats.min_opt().map(|v| match v.as_utf8() {
+                Ok(v) => v.to_string(),
+                Err(_) => v.to_string(),
+            })
+        }
     }
 }
 
-fn stats_max_value_to_str(statistics: &Statistics) -> String {
+fn stats_max_value_to_str(statistics: &Statistics) -> Option<String> {
     match statistics {
-        Statistics::Boolean(statistics) => statistics.max().to_string(),
-        Statistics::Int32(statistics) => statistics.max().to_string(),
-        Statistics::Int64(statistics) => statistics.max().to_string(),
-        Statistics::Int96(statistics) => statistics.max().to_string(),
-        Statistics::Float(statistics) => statistics.max().to_string(),
-        Statistics::Double(statistics) => statistics.max().to_string(),
-        Statistics::ByteArray(statistics) => match statistics.max().as_utf8() {
+        Statistics::Boolean(statistics) => statistics.max_opt().map(|v| v.to_string()),
+        Statistics::Int32(statistics) => statistics.max_opt().map(|v| v.to_string()),
+        Statistics::Int64(statistics) => statistics.max_opt().map(|v| v.to_string()),
+        Statistics::Int96(statistics) => statistics.max_opt().map(|v| v.to_string()),
+        Statistics::Float(statistics) => statistics.max_opt().map(|v| v.to_string()),
+        Statistics::Double(statistics) => statistics.max_opt().map(|v| v.to_string()),
+        Statistics::ByteArray(statistics) => statistics.max_opt().map(|v| match v.as_utf8() {
             Ok(v) => v.to_string(),
-            Err(_) => statistics.max().to_string(),
-        },
-        Statistics::FixedLenByteArray(statistics) => statistics.max().to_string(),
+            Err(_) => v.to_string(),
+        }),
+        Statistics::FixedLenByteArray(statistics) => {
+            statistics.max_opt().map(|v| match v.as_utf8() {
+                Ok(v) => v.to_string(),
+                Err(_) => v.to_string(),
+            })
+        }
     }
 }
