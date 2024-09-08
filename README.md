@@ -118,8 +118,8 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `numeric`(1)      | FIXED_LEN_BYTE_ARRAY(16)  | DECIMAL(128)     |
 | `"char"`          | BYTE_ARRAY                | STRING           |
 | `text`            | BYTE_ARRAY                | STRING           |
-| `json`            | BYTE_ARRAY                | JSON             |
-| `jsonb`           | BYTE_ARRAY                | JSON             |
+| `json`            | BYTE_ARRAY                | STRING           |
+| `jsonb`           | BYTE_ARRAY                | STRING           |
 | `bytea`           | BYTE_ARRAY                |                  |
 | `date` (2)        | INT32                     | DATE             |
 | `timestamp`       | INT64                     | TIMESTAMP_MICROS |
@@ -127,7 +127,7 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `time`            | INT64                     | TIME_MICROS      |
 | `timetz`(3)       | INT64                     | TIME_MICROS      |
 | `interval`        | FIXED_LEN_BYTE_ARRAY(12)  | INTERVAL         |
-| `uuid`            | FIXED_LEN_BYTE_ARRAY(16)  | UUID             |
+| `uuid`            | FIXED_LEN_BYTE_ARRAY(16)  | STRING           |
 | `geometry`(4)     | BYTE_ARRAY                |                  |
 | `composite`       | GROUP                     | STRUCT           |
 | `map`(5)          | GROUP                     | MAP              |

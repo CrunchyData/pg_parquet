@@ -11,16 +11,8 @@ pub(crate) fn to_not_nullable_field(field: FieldRef) -> FieldRef {
     let name = field.deref().name();
     let data_type = field.deref().data_type();
     let metadata = field.deref().metadata().clone();
-    let extension_type = field.deref().extension_type().clone();
 
     let field = Field::new(name, data_type.clone(), false).with_metadata(metadata);
-
-    let field = if let Some(extension_type) = extension_type {
-        field.with_extension_type(extension_type)
-    } else {
-        field
-    };
-
     Arc::new(field)
 }
 

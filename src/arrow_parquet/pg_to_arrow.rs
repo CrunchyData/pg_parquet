@@ -3,11 +3,11 @@ use pgrx::{
     heap_tuple::PgHeapTuple,
     pg_sys::{
         self, deconstruct_array, heap_getattr, Datum, Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID,
-        FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID, JSONBOID, JSONOID,
-        NUMERICOID, OIDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, UUIDOID,
+        FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID, NUMERICOID, OIDOID, TEXTOID,
+        TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID,
     },
-    AllocatedByRust, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB, PgBox,
-    PgTupleDesc, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
+    AllocatedByRust, AnyNumeric, Date, FromDatum, Interval, IntoDatum, PgBox, PgTupleDesc, Time,
+    TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
 };
 
 use crate::{
@@ -35,8 +35,6 @@ pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
 pub(crate) mod interval;
-pub(crate) mod json;
-pub(crate) mod jsonb;
 pub(crate) mod map;
 pub(crate) mod numeric;
 pub(crate) mod oid;
@@ -46,7 +44,6 @@ pub(crate) mod time;
 pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
-pub(crate) mod uuid;
 
 pub(crate) trait PgTypeToArrowArray<T: IntoDatum + FromDatum> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef);
@@ -205,15 +202,6 @@ fn collect_primitive_attribute_array_from_tuples<'a>(
         INTERVALOID => {
             collect_array_attribute_array_from_tuples_helper::<Interval>(tuples, attribute_context)
         }
-        UUIDOID => {
-            collect_array_attribute_array_from_tuples_helper::<Uuid>(tuples, attribute_context)
-        }
-        JSONOID => {
-            collect_array_attribute_array_from_tuples_helper::<Json>(tuples, attribute_context)
-        }
-        JSONBOID => {
-            collect_array_attribute_array_from_tuples_helper::<JsonB>(tuples, attribute_context)
-        }
         TIMESTAMPOID => {
             collect_array_attribute_array_from_tuples_helper::<Timestamp>(tuples, attribute_context)
         }
@@ -319,18 +307,6 @@ pub(crate) fn collect_array_attribute_array_from_tuples<'a>(
             Vec<Option<TimeWithTimeZone>>,
         >(tuples, attribute_context),
         INTERVALOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Interval>>>(
-            tuples,
-            attribute_context,
-        ),
-        UUIDOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Uuid>>>(
-            tuples,
-            attribute_context,
-        ),
-        JSONOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Json>>>(
-            tuples,
-            attribute_context,
-        ),
-        JSONBOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<JsonB>>>(
             tuples,
             attribute_context,
         ),

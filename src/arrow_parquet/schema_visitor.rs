@@ -1,12 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow::datatypes::{Field, Fields, Schema};
-use arrow_schema::ExtensionType;
 use parquet::arrow::{arrow_to_parquet_schema, PARQUET_FIELD_ID_META_KEY};
 use pg_sys::{
     Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
-    INTERVALOID, JSONBOID, JSONOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID,
-    TIMESTAMPTZOID, TIMETZOID, UUIDOID,
+    INTERVALOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID,
+    TIMETZOID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -263,14 +262,6 @@ fn visit_primitive_schema(
             arrow::datatypes::DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
             true,
         ),
-        UUIDOID => Field::new(
-            elem_name,
-            arrow::datatypes::DataType::FixedSizeBinary(16),
-            true,
-        )
-        .with_extension_type(ExtensionType::Uuid),
-        JSONOID | JSONBOID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true)
-            .with_extension_type(ExtensionType::Json),
         CHAROID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true),
         TEXTOID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true),
         BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true),

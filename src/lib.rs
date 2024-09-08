@@ -33,8 +33,8 @@ mod tests {
     use crate::type_compat::geometry::Geometry;
     use pgrx::pg_sys::Oid;
     use pgrx::{
-        composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Json, JsonB,
-        Spi, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
+        composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Spi, Time,
+        TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
     };
     enum CopyOptionValue {
         StringOption(String),
@@ -674,21 +674,22 @@ mod tests {
 
     #[pg_test]
     fn test_uuid() {
-        let test_table = TestTable::<Uuid>::new("uuid".into());
+        let test_table = TestTable::<FallbackToText>::new("uuid".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES ('00000000-0000-0000-0000-000000000001'), ('00000000-0000-0000-0000-000000000002'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_uuid_array() {
-        let test_table = TestTable::<Vec<Option<Uuid>>>::new("uuid[]".into());
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("uuid[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array['00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',null]::uuid[]), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_json() {
-        let test_table = TestTable::<Json>::new("json".into()).with_order_by_col("a->>'a'".into());
+        let test_table =
+            TestTable::<FallbackToText>::new("json".into()).with_order_by_col("a->>'a'".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES ('{\"a\":\"test_json_1\"}'), ('{\"a\":\"test_json_2\"}'), (null);");
         let TestResult { expected, result } = test_common(test_table);
 
@@ -710,7 +711,7 @@ mod tests {
 
     #[pg_test]
     fn test_json_array() {
-        let test_table = TestTable::<Vec<Option<Json>>>::new("json[]".into())
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("json[]".into())
             .with_order_by_col("a::text[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array['{\"a\":\"test_json_1\"}','{\"a\":\"test_json_2\"}',null]::json[]), (null);");
         let TestResult { expected, result } = test_common(test_table);
@@ -747,7 +748,7 @@ mod tests {
     #[pg_test]
     fn test_jsonb() {
         let test_table =
-            TestTable::<JsonB>::new("jsonb".into()).with_order_by_col("a->>'a'".into());
+            TestTable::<FallbackToText>::new("jsonb".into()).with_order_by_col("a->>'a'".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES ('{\"a\":\"test_jsonb_1\"}'), ('{\"a\":\"test_jsonb_2\"}'), (null);");
         let TestResult { expected, result } = test_common(test_table);
 
@@ -769,7 +770,7 @@ mod tests {
 
     #[pg_test]
     fn test_jsonb_array() {
-        let test_table = TestTable::<Vec<Option<JsonB>>>::new("jsonb[]".into());
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("jsonb[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array['{\"a\":\"test_jsonb_1\"}','{\"a\":\"test_jsonb_2\"}',null]::jsonb[]), (null);");
         let TestResult { expected, result } = test_common(test_table);
 

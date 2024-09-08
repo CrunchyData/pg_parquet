@@ -1,18 +1,18 @@
 use arrow::array::{
-    Array, ArrayData, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
-    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    IntervalMonthDayNanoArray, ListArray, MapArray, StringArray, StructArray,
-    Time64MicrosecondArray, TimestampMicrosecondArray, UInt32Array,
+    Array, ArrayData, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+    Float64Array, Int16Array, Int32Array, Int64Array, IntervalMonthDayNanoArray, ListArray,
+    MapArray, StringArray, StructArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+    UInt32Array,
 };
 use pgrx::{
     pg_sys::{
         Datum, Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID,
-        INT8OID, INTERVALOID, JSONBOID, JSONOID, NUMERICOID, OIDOID, TEXTOID, TIMEOID,
-        TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, UUIDOID,
+        INT8OID, INTERVALOID, NUMERICOID, OIDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID,
+        TIMETZOID,
     },
     prelude::PgHeapTuple,
-    AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, Json, JsonB, PgTupleDesc, Time,
-    TimeWithTimeZone, Timestamp, TimestampWithTimeZone, Uuid,
+    AllocatedByRust, AnyNumeric, Date, Interval, IntoDatum, PgTupleDesc, Time, TimeWithTimeZone,
+    Timestamp, TimestampWithTimeZone,
 };
 
 use crate::{
@@ -40,8 +40,6 @@ pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
 pub(crate) mod interval;
-pub(crate) mod json;
-pub(crate) mod jsonb;
 pub(crate) mod map;
 pub(crate) mod numeric;
 pub(crate) mod oid;
@@ -51,7 +49,6 @@ pub(crate) mod time;
 pub(crate) mod timestamp;
 pub(crate) mod timestamptz;
 pub(crate) mod timetz;
-pub(crate) mod uuid;
 
 pub(crate) trait ArrowArrayToPgType<'a, A: From<ArrayData>, T: 'a + IntoDatum> {
     fn to_pg_type(array: A, context: ArrowToPgPerAttributeContext<'a>) -> Option<T>;
@@ -246,27 +243,6 @@ fn to_pg_primitive_datum(
                 );
             val.into_datum()
         }
-        UUIDOID => {
-            let val = <Uuid as ArrowArrayToPgType<FixedSizeBinaryArray, Uuid>>::to_pg_type(
-                primitive_array.into(),
-                attribute_context,
-            );
-            val.into_datum()
-        }
-        JSONOID => {
-            let val = <Json as ArrowArrayToPgType<StringArray, Json>>::to_pg_type(
-                primitive_array.into(),
-                attribute_context,
-            );
-            val.into_datum()
-        }
-        JSONBOID => {
-            let val = <JsonB as ArrowArrayToPgType<StringArray, JsonB>>::to_pg_type(
-                primitive_array.into(),
-                attribute_context,
-            );
-            val.into_datum()
-        }
         _ => {
             if is_postgis_geometry_typoid(attribute_context.typoid) {
                 to_pg_geometry_datum(primitive_array.into(), attribute_context)
@@ -408,29 +384,6 @@ fn to_pg_array_datum(
                 IntervalMonthDayNanoArray,
                 Vec<Option<Interval>>,
             >>::to_pg_type(list_array.into(), attribute_context);
-            val.into_datum()
-        }
-        UUIDOID => {
-            let val = <Vec<Option<Uuid>> as ArrowArrayToPgType<
-                FixedSizeBinaryArray,
-                Vec<Option<Uuid>>,
-            >>::to_pg_type(list_array.into(), attribute_context);
-            val.into_datum()
-        }
-        JSONOID => {
-            let val =
-                <Vec<Option<Json>> as ArrowArrayToPgType<StringArray, Vec<Option<Json>>>>::to_pg_type(
-                    list_array.into(),
-                    attribute_context
-                );
-            val.into_datum()
-        }
-        JSONBOID => {
-            let val =
-                <Vec<Option<JsonB>> as ArrowArrayToPgType<StringArray, Vec<Option<JsonB>>>>::to_pg_type(
-                    list_array.into(),
-                    attribute_context
-                );
             val.into_datum()
         }
         _ => {
