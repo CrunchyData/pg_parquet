@@ -18,18 +18,24 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.79.0
+          toolchain: 1.81.0
           target: x86_64-unknown-linux-gnu
           components: rustfmt, clippy
 
       - name: Extract rustc LLVM version
         id: rustc-llvm-version
         run: echo "version=$(rustc --version --verbose | grep 'LLVM version' | cut -d ' ' -f 3)" >> $GITHUB_OUTPUT
-
+      
+      # we need to install exactly the same version of LLVM and Clang as Rust uses for the coverage report
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v2
         with:
           version: ${{ steps.rustc-llvm-version.outputs.version }}
+
+      - name: Print LLVM and Clang versions
+        run: |
+          llvm-config --version
+          clang --version
 
       - name: Install PostgreSQL dependencies
         run: |
@@ -54,19 +60,26 @@ jobs:
           cargo pgrx test pg16 --runas postgres --pgdata /tmp/pgdata
         env:
           RUSTFLAGS: "-C instrument-coverage"
+          CARGO_INCREMENTAL: 0
           RUST_TEST_THREADS: 1
 
       - name: Generate coverage report
         run: |
-          llvm-profdata merge *.profraw -output pg_parquet.profdata
+          llvm-profdata merge default_*.profraw \
+            --output=pg_parquet.profdata
+
+          test_binary=$(find ./target/debug/deps/ -type f -executable -iname 'pg_parquet-*')
+
           llvm-cov export \
-            --object=./target/debug/libpg_parquet.so \
+            --object=$test_binary \
+            --instr-profile=pg_parquet.profdata \
+            --format=lcov \
             --ignore-filename-regex=.cargo/registry \
             --ignore-filename-regex=.cargo/git \
             --ignore-filename-regex=pg_parquet/target \
             --ignore-filename-regex=rustc \
-            --instr-profile=pg_parquet.profdata \
-            --format=lcov > pg_parquet.lcov
+            --check-binary-ids \
+          > pg_parquet.lcov
 
       - name: Upload coverage report to Codecov
         uses: codecov/codecov-action@v4
