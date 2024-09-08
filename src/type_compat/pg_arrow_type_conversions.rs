@@ -1,6 +1,5 @@
 use std::ffi::CStr;
 
-use arrow::datatypes::IntervalMonthDayNano;
 use pgrx::{
     direct_function_call,
     pg_sys::{self, TimeTzADT},
@@ -148,20 +147,6 @@ pub(crate) fn i64_to_timetz(i64_timetz: i64) -> Option<TimeWithTimeZone> {
     };
     let adjusted_timetz: TimeWithTimeZone = adjusted_timetz.into();
     Some(adjusted_timetz)
-}
-
-pub(crate) fn interval_to_nano(interval: Interval) -> Option<IntervalMonthDayNano> {
-    let months = interval.months();
-    let days = interval.days();
-    let millisecs = interval.micros() / 1000; // parquet has millisec precision
-    Some(IntervalMonthDayNano::new(months, days, millisecs))
-}
-
-pub(crate) fn nano_to_interval(nano: IntervalMonthDayNano) -> Option<Interval> {
-    let months = nano.months;
-    let days = nano.days;
-    let microseconds = nano.nanoseconds * 1000; // parquet has millisec precision
-    Some(Interval::new(months, days, microseconds).unwrap())
 }
 
 pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {

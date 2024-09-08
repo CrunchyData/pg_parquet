@@ -3,10 +3,10 @@ use pgrx::{
     heap_tuple::PgHeapTuple,
     pg_sys::{
         self, deconstruct_array, heap_getattr, Datum, Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID,
-        FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, INTERVALOID, NUMERICOID, OIDOID, TEXTOID,
-        TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID,
+        FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID, NUMERICOID, OIDOID, TEXTOID, TIMEOID,
+        TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID,
     },
-    AllocatedByRust, AnyNumeric, Date, FromDatum, Interval, IntoDatum, PgBox, PgTupleDesc, Time,
+    AllocatedByRust, AnyNumeric, Date, FromDatum, IntoDatum, PgBox, PgTupleDesc, Time,
     TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
 };
 
@@ -34,7 +34,6 @@ pub(crate) mod geometry;
 pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
-pub(crate) mod interval;
 pub(crate) mod map;
 pub(crate) mod numeric;
 pub(crate) mod oid;
@@ -199,9 +198,6 @@ fn collect_primitive_attribute_array_from_tuples<'a>(
             tuples,
             attribute_context,
         ),
-        INTERVALOID => {
-            collect_array_attribute_array_from_tuples_helper::<Interval>(tuples, attribute_context)
-        }
         TIMESTAMPOID => {
             collect_array_attribute_array_from_tuples_helper::<Timestamp>(tuples, attribute_context)
         }
@@ -306,10 +302,6 @@ pub(crate) fn collect_array_attribute_array_from_tuples<'a>(
         TIMETZOID => collect_array_attribute_array_from_tuples_helper::<
             Vec<Option<TimeWithTimeZone>>,
         >(tuples, attribute_context),
-        INTERVALOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Interval>>>(
-            tuples,
-            attribute_context,
-        ),
         TIMESTAMPOID => collect_array_attribute_array_from_tuples_helper::<Vec<Option<Timestamp>>>(
             tuples,
             attribute_context,

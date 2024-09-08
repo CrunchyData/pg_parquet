@@ -4,8 +4,7 @@ use arrow::datatypes::{Field, Fields, Schema};
 use parquet::arrow::{arrow_to_parquet_schema, PARQUET_FIELD_ID_META_KEY};
 use pg_sys::{
     Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
-    INTERVALOID, NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID,
-    TIMETZOID,
+    NUMERICOID, OIDOID, RECORDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID,
 };
 use pgrx::{prelude::*, PgTupleDesc};
 
@@ -257,11 +256,6 @@ fn visit_primitive_schema(
             "adjusted_to_utc".into(),
             "true".into(),
         )])),
-        INTERVALOID => Field::new(
-            elem_name,
-            arrow::datatypes::DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
-            true,
-        ),
         CHAROID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true),
         TEXTOID => Field::new(elem_name, arrow::datatypes::DataType::Utf8, true),
         BYTEAOID => Field::new(elem_name, arrow::datatypes::DataType::Binary, true),

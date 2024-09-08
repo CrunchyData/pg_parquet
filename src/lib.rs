@@ -33,7 +33,7 @@ mod tests {
     use crate::type_compat::geometry::Geometry;
     use pgrx::pg_sys::Oid;
     use pgrx::{
-        composite_type, pg_test, AnyNumeric, Date, FromDatum, Interval, IntoDatum, Spi, Time,
+        composite_type, pg_test, AnyNumeric, Date, FromDatum, IntoDatum, Spi, Time,
         TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
     };
     enum CopyOptionValue {
@@ -660,14 +660,14 @@ mod tests {
 
     #[pg_test]
     fn test_interval() {
-        let test_table = TestTable::<Interval>::new("interval".into());
+        let test_table = TestTable::<FallbackToText>::new("interval".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES ('15 years 10 months 1 day 10:00:00'), ('5 days 4 minutes 10 seconds'), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
     fn test_interval_array() {
-        let test_table = TestTable::<Vec<Option<Interval>>>::new("interval[]".into());
+        let test_table = TestTable::<Vec<Option<FallbackToText>>>::new("interval[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array['15 years 10 months 1 day 10:00:00','5 days 4 minutes 10 seconds',null]::interval[]), (null);");
         test_helper(test_table);
     }
