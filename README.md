@@ -128,16 +128,18 @@ You can set the following `AWS S3` environment variables properly to access to t
 | `geometry`(4)     | BYTE_ARRAY                |                  |
 
 ### Nested Types
+| PostgreSQL Type   | Parquet Physical Type     | Logical Type     |
+|-------------------|---------------------------|------------------|
 | `composite`       | GROUP                     | STRUCT           |
 | `array`           | element's physical type   | LIST             |
-| `map`(5)          | GROUP                     | MAP              |
+| `crunchy_map`(5)          | GROUP                     | MAP              |
 
 > [!WARNING]
 > - (1) The `numeric` types with <= `38` precision is represented as `FIXED_LEN_BYTE_ARRAY(16)` with `DECIMAL(128)` logical type. The `numeric` types with > `38` precision is represented as `BYTE_ARRAY` with `STRING` logical type.
 > - (2) The `date` type is represented according to `Unix epoch` when writing to Parquet files. It is converted back according to `PostgreSQL epoch` when reading from Parquet files.
 > - (3) The `timestamptz` and `timetz` types are adjusted to `UTC` when writing to Parquet files. They are converted back with `UTC` timezone when reading from Parquet files.
 > - (4) The `geometry` type is represented as `BYTE_ARRAY` encoded as `WKB` when `postgis` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
-> - (5) The `map` type is represented as `GROUP` with `MAP` logical type when `crunchy_map` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
+> - (5) The `crunchy_map` type is represented as `GROUP` with `MAP` logical type when `crunchy_map` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
 
 > [!WARNING]
 > Any type that does not have a corresponding Parquet type will be represented, as a fallback mechanism, as `BYTE_ARRAY` with `STRING` logical type. e.g. `enum`
