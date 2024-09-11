@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 
 use pg_sys::{standard_ProcessUtility, CommandTag, ProcessUtility_hook, ProcessUtility_hook_type};
-use pgrx::prelude::*;
+use pgrx::{prelude::*, GucSetting};
 
 use crate::parquet_copy_hook::{
     copy_to_dest_receiver::create_copy_to_parquet_dest_receiver,
@@ -17,6 +17,8 @@ use super::{
     copy_to_dest_receiver::pop_parquet_writer_context,
     copy_utils::{copy_stmt_codec, validate_copy_from_options, validate_copy_to_options},
 };
+
+pub(crate) static ENABLE_PARQUET_COPY_HOOK: GucSetting<bool> = GucSetting::<bool>::new(true);
 
 static mut PREV_PROCESS_UTILITY_HOOK: ProcessUtility_hook_type = None;
 
@@ -49,7 +51,7 @@ extern "C" fn parquet_copy_hook(
     let params = unsafe { PgBox::from_pg(params) };
     let query_env = unsafe { PgBox::from_pg(query_env) };
 
-    if is_copy_to_parquet_stmt(&pstmt) {
+    if ENABLE_PARQUET_COPY_HOOK.get() && is_copy_to_parquet_stmt(&pstmt) {
         validate_copy_to_options(&pstmt);
 
         let filename = copy_stmt_filename(&pstmt);
@@ -86,7 +88,7 @@ extern "C" fn parquet_copy_hook(
         .execute();
 
         return;
-    } else if is_copy_from_parquet_stmt(&pstmt) {
+    } else if ENABLE_PARQUET_COPY_HOOK.get() && is_copy_from_parquet_stmt(&pstmt) {
         validate_copy_from_options(&pstmt);
 
         PgTryBuilder::new(|| {

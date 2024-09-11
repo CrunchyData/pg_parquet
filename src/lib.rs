@@ -1,5 +1,6 @@
-use parquet_copy_hook::hook::init_parquet_copy_hook;
-use pgrx::prelude::*;
+use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
+use pg_sys::MarkGUCPrefixReserved;
+use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry};
 
 mod arrow_parquet;
 mod parquet_copy_hook;
@@ -19,6 +20,17 @@ pgrx::pg_module_magic!();
 #[allow(static_mut_refs)]
 #[pg_guard]
 pub extern "C" fn _PG_init() {
+    GucRegistry::define_bool_guc(
+        "pg_parquet.enable_copy_hooks",
+        "Enable parquet copy hooks",
+        "Enable parquet copy hooks",
+        &ENABLE_PARQUET_COPY_HOOK,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    unsafe { MarkGUCPrefixReserved("pg_parquet".as_ptr() as _) };
+
     init_parquet_copy_hook();
 }
 
@@ -2003,6 +2015,13 @@ mod tests {
         assert_eq!(result_kv_metadata, expected_kv_metadata);
 
         Spi::run("DROP TABLE workers; DROP TYPE worker, person;").unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "relative path not allowed for COPY to file")]
+    fn test_disabled_hooks() {
+        Spi::run("SET pg_parquet.enable_copy_hooks TO false;").unwrap();
+        Spi::run("COPY (SELECT 1 as id) TO 'file:///tmp/test.parquet'").unwrap();
     }
 }
 

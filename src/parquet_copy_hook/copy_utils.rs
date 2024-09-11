@@ -220,11 +220,7 @@ pub(crate) fn is_copy_to_parquet_stmt(pstmt: &PgBox<pg_sys::PlannedStmt>) -> boo
         return false;
     }
 
-    if is_parquet_format(&copy_stmt) {
-        return true;
-    }
-
-    is_parquet_file(&copy_stmt)
+    is_parquet_format(&copy_stmt) || is_parquet_file(&copy_stmt)
 }
 
 pub(crate) fn is_copy_from_parquet_stmt(pstmt: &PgBox<pg_sys::PlannedStmt>) -> bool {
@@ -242,11 +238,7 @@ pub(crate) fn is_copy_from_parquet_stmt(pstmt: &PgBox<pg_sys::PlannedStmt>) -> b
         return false;
     }
 
-    if is_parquet_format(&copy_stmt) {
-        return true;
-    }
-
-    is_parquet_file(&copy_stmt)
+    is_parquet_format(&copy_stmt) || is_parquet_file(&copy_stmt)
 }
 
 pub(crate) fn copy_has_relation(pstmt: &PgBox<pg_sys::PlannedStmt>) -> bool {
