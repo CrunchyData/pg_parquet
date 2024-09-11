@@ -1896,7 +1896,7 @@ mod tests {
 
         let expected_file_metadata = vec![(
             "file:///tmp/test.parquet".into(),
-            Some("parquet-rs version 53.0.0".into()),
+            Some("pg_parquet".into()),
             total_rows,
             total_row_groups,
             "1".into(),

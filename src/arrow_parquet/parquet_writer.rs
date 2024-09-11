@@ -45,6 +45,7 @@ impl<'a> ParquetWriterContext<'a> {
         let writer_props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
             .set_compression(codec.into())
+            .set_created_by("pg_parquet".to_string())
             .build();
 
         let schema = parse_arrow_schema_from_tupledesc(tupledesc.clone());
