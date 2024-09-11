@@ -1,6 +1,5 @@
 use arrow::{
-    array::{make_array, ArrayRef, ListArray, StructArray},
-    buffer::{BooleanBuffer, NullBuffer},
+    array::{make_array, new_empty_array, ArrayRef, ListArray, StructArray},
     datatypes::FieldRef,
 };
 use arrow_schema::DataType;
@@ -11,11 +10,11 @@ use crate::{
     pgrx_utils::{collect_valid_attributes, tuple_desc},
 };
 
-use super::{collect_attribute_array_from_tuples, PgToArrowPerAttributeContext};
+use super::{to_arrow_array, PgToArrowPerAttributeContext};
 
 // PgHeapTuple
 impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
-    for Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>
+    for Option<PgHeapTuple<'_, AllocatedByRust>>
 {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let struct_field = context.field;
@@ -30,57 +29,52 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
         let include_generated_columns = true;
         let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
 
-        let mut struct_attribute_arrays = vec![];
+        if let Some(tuple) = &self {
+            let mut attribute_arrow_arrays = vec![];
 
-        let tuples = self;
+            for attribute in attributes {
+                let attribute_name = attribute.name();
+                let attribute_typoid = attribute.type_oid().value();
+                let attribute_typmod = attribute.type_mod();
 
-        for attribute in attributes {
-            let attribute_name = attribute.name();
-            let attribute_typoid = attribute.type_oid().value();
-            let attribute_typmod = attribute.type_mod();
+                let attribute_field = fields
+                    .iter()
+                    .find(|field| field.name() == attribute_name)
+                    .expect("Expected attribute field");
 
-            let attribute_field = fields
-                .iter()
-                .find(|field| field.name() == attribute_name)
-                .expect("Expected attribute field");
+                let (_field, array) = to_arrow_array(
+                    tuple,
+                    attribute_name,
+                    attribute_typoid,
+                    attribute_typmod,
+                    attribute_field.clone(),
+                );
 
-            let (_, array) = collect_attribute_array_from_tuples(
-                &tuples,
-                attribute_name,
-                attribute_typoid,
-                attribute_typmod,
-                attribute_field.clone(),
-            );
+                attribute_arrow_arrays.push(array);
+            }
 
-            struct_attribute_arrays.push(array);
+            let struct_array = StructArray::new(fields.clone(), attribute_arrow_arrays, None);
+
+            (struct_field, make_array(struct_array.into()))
+        } else {
+            let null_array = make_array(StructArray::new_null(fields.clone(), 1).into());
+            (struct_field, null_array)
         }
-
-        // determines which structs in the array are null
-        let is_null_buffer =
-            BooleanBuffer::collect_bool(tuples.len(), |idx| tuples.get(idx).unwrap().is_some());
-        let struct_null_buffer = NullBuffer::new(is_null_buffer);
-
-        let struct_array =
-            StructArray::new(fields, struct_attribute_arrays, Some(struct_null_buffer));
-
-        (struct_field, make_array(struct_array.into()))
     }
 }
 
 // PgHeapTuple[]
 impl PgTypeToArrowArray<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>
-    for Vec<Option<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>>
+    for Option<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>
 {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .iter()
-            .map(|v| {
-                v.as_ref()
-                    .map(|pg_array| pg_array.iter().collect::<Vec<_>>())
-            })
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = &self {
+            pg_array.iter().collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
         let list_field = context.field;
 
@@ -89,8 +83,6 @@ impl PgTypeToArrowArray<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>
             _ => panic!("Expected List field"),
         };
 
-        let tuples = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
-
         let tuples_context = PgToArrowPerAttributeContext::new(
             context.name,
             context.typoid,
@@ -98,7 +90,25 @@ impl PgTypeToArrowArray<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>
             struct_field.clone(),
         );
 
-        let (struct_field, struct_array) = tuples.to_arrow_array(tuples_context);
+        // collect struct arrays
+        let mut struct_arrays = vec![];
+
+        for tuple in pg_array {
+            let (_, struct_array) = tuple.to_arrow_array(tuples_context.clone());
+            struct_arrays.push(struct_array);
+        }
+
+        let struct_arrays = struct_arrays
+            .iter()
+            .map(|array| array.as_ref())
+            .collect::<Vec<_>>();
+
+        let struct_array = if struct_arrays.is_empty() {
+            new_empty_array(struct_field.data_type())
+        } else {
+            // concatenate struct arrays
+            arrow::compute::concat(&struct_arrays).unwrap()
+        };
 
         let list_array = ListArray::new(struct_field, offsets, struct_array, Some(nulls));
 

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{make_array, ArrayRef, AsArray, ListArray, MapArray},
+    array::{make_array, new_empty_array, ArrayRef, AsArray, ListArray, MapArray},
     datatypes::FieldRef,
 };
 use arrow_schema::DataType;
@@ -18,9 +18,11 @@ use crate::{
 use super::PgToArrowPerAttributeContext;
 
 // crunchy_map.key_<type1>_val_<type2>
-impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
+impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Option<CrunchyMap<'b>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (map_offsets, map_nulls) = arrow_map_offsets(&self);
+        let maps = vec![self];
+
+        let (map_offsets, map_nulls) = arrow_map_offsets(&maps);
 
         let map_field = context.field;
 
@@ -29,25 +31,13 @@ impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
             _ => panic!("Expected Map field"),
         };
 
-        let mut entries = vec![];
+        let map = maps.into_iter().flatten().next();
 
-        for map in self {
-            if let Some(map) = map {
-                entries.push(Some(map.entries));
-            } else {
-                entries.push(None);
-            }
-        }
-
-        let entries = entries
-            .iter()
-            .map(|v| {
-                v.as_ref()
-                    .map(|pg_array| pg_array.iter().collect::<Vec<_>>())
-            })
-            .collect::<Vec<_>>();
-
-        let entries = entries.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let entries = if let Some(map) = map {
+            Some(map.entries)
+        } else {
+            None
+        };
 
         let entries_typoid = domain_array_base_elem_typoid(context.typoid);
 
@@ -58,7 +48,28 @@ impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
             entries_field.clone(),
         );
 
-        let (_, entries_array) = entries.to_arrow_array(entries_context);
+        let entries_array = if let Some(entries) = entries {
+            let mut entries_arrays = vec![];
+
+            for entries in entries.iter() {
+                let (_, entries_array) = entries.to_arrow_array(entries_context.clone());
+                entries_arrays.push(entries_array);
+            }
+
+            let entries_arrays = entries_arrays
+                .iter()
+                .map(|array| array.as_ref())
+                .collect::<Vec<_>>();
+
+            if entries_arrays.is_empty() {
+                new_empty_array(entries_field.data_type())
+            } else {
+                // concatenate entries arrays
+                arrow::compute::concat(&entries_arrays).unwrap()
+            }
+        } else {
+            new_empty_array(entries_field.data_type())
+        };
 
         let entries_array = entries_array.as_struct().to_owned();
 
@@ -76,18 +87,16 @@ impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
 
 // crunchy_map.key_<type1>_val_<type2>[]
 impl<'b> PgTypeToArrowArray<pgrx::Array<'_, CrunchyMap<'b>>>
-    for Vec<Option<pgrx::Array<'_, CrunchyMap<'b>>>>
+    for Option<pgrx::Array<'_, CrunchyMap<'b>>>
 {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .iter()
-            .map(|v| {
-                v.as_ref()
-                    .map(|pg_array| pg_array.iter().collect::<Vec<_>>())
-            })
-            .collect::<Vec<_>>();
+        let (list_offsets, list_nulls) = arrow_array_offsets(&self);
 
-        let (list_offsets, list_nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = &self {
+            pg_array.iter().collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
         let list_field = context.field;
 
@@ -96,9 +105,7 @@ impl<'b> PgTypeToArrowArray<pgrx::Array<'_, CrunchyMap<'b>>>
             _ => panic!("Expected List field"),
         };
 
-        let maps = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
-
-        let (map_offsets, map_nulls) = arrow_map_offsets(&maps);
+        let (map_offsets, map_nulls) = arrow_map_offsets(&pg_array);
 
         let entries_field = match map_field.data_type() {
             DataType::Map(entries_field, false) => entries_field.clone(),
@@ -107,15 +114,15 @@ impl<'b> PgTypeToArrowArray<pgrx::Array<'_, CrunchyMap<'b>>>
 
         let mut entries = vec![];
 
-        for map in maps {
-            if let Some(map) = map {
-                entries.push(Some(map.entries));
+        for map in &pg_array {
+            if let Some(map) = &map {
+                entries.push(Some(map.entries.iter().collect::<Vec<_>>()));
             } else {
                 entries.push(None);
             }
         }
 
-        let entries = entries.into_iter().flatten().map(Some).collect::<Vec<_>>();
+        let entries = entries.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let entries_typoid = domain_array_base_elem_typoid(context.typoid);
 
@@ -126,7 +133,25 @@ impl<'b> PgTypeToArrowArray<pgrx::Array<'_, CrunchyMap<'b>>>
             entries_field.clone(),
         );
 
-        let (_, entries_array) = entries.to_arrow_array(entries_context);
+        // collect entries arrays
+        let mut entries_arrays = vec![];
+
+        for entries in entries {
+            let (_, entries_array) = entries.to_arrow_array(entries_context.clone());
+            entries_arrays.push(entries_array);
+        }
+
+        let entries_arrays = entries_arrays
+            .iter()
+            .map(|array| array.as_ref())
+            .collect::<Vec<_>>();
+
+        let entries_array = if entries_arrays.is_empty() {
+            new_empty_array(entries_field.data_type())
+        } else {
+            // concatenate entries arrays
+            arrow::compute::concat(&entries_arrays).unwrap()
+        };
 
         let entries_array = entries_array.as_struct().to_owned();
 

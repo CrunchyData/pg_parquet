@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use arrow::{
-    array::{ArrayRef, RecordBatch, StructArray},
-    datatypes::FieldRef,
-};
+use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use parquet::{
     arrow::{async_writer::ParquetObjectWriter, AsyncArrowWriter},
@@ -14,12 +11,14 @@ use tokio::runtime::Runtime;
 
 use crate::{
     arrow_parquet::{
-        codec::ParquetCodecOption, pg_to_arrow::collect_attribute_array_from_tuples,
-        schema_visitor::parse_arrow_schema_from_tupledesc, uri_utils::parquet_writer_from_uri,
+        codec::ParquetCodecOption, schema_visitor::parse_arrow_schema_from_tupledesc,
+        uri_utils::parquet_writer_from_uri,
     },
     pgrx_utils::collect_valid_attributes,
     type_compat::{geometry::reset_postgis_context, map::reset_crunchy_map_context},
 };
+
+use super::pg_to_arrow::to_arrow_array;
 
 pub(crate) struct ParquetWriterContext<'a> {
     runtime: Runtime,
@@ -67,17 +66,23 @@ impl<'a> ParquetWriterContext<'a> {
         &mut self,
         tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     ) {
-        pgrx::pg_sys::check_for_interrupts!();
+        let mut record_batches = vec![];
 
-        // collect arrow arrays for each attribute in the tuples
-        let tuple_attribute_arrow_arrays = collect_arrow_attribute_arrays_from_tupledesc(
-            tuples,
-            self.tupledesc.clone(),
-            self.schema.clone(),
-        );
+        for tuple in tuples {
+            pgrx::pg_sys::check_for_interrupts!();
 
-        let struct_array = StructArray::from(tuple_attribute_arrow_arrays);
-        let record_batch = RecordBatch::from(struct_array);
+            if let Some(tuple) = tuple {
+                let record_batch =
+                    pg_tuple_to_record_batch(tuple, &self.tupledesc, self.schema.clone());
+
+                record_batches.push(record_batch);
+            } else {
+                let null_record_batch = RecordBatch::new_empty(self.schema.clone());
+                record_batches.push(null_record_batch);
+            }
+        }
+
+        let record_batch = arrow::compute::concat_batches(&self.schema, &record_batches).unwrap();
 
         let parquet_writer = &mut self.parquet_writer;
 
@@ -92,15 +97,15 @@ impl<'a> ParquetWriterContext<'a> {
     }
 }
 
-fn collect_arrow_attribute_arrays_from_tupledesc(
-    tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
-    tupledesc: PgTupleDesc,
+fn pg_tuple_to_record_batch(
+    tuple: PgHeapTuple<AllocatedByRust>,
+    tupledesc: &PgTupleDesc,
     schema: SchemaRef,
-) -> Vec<(FieldRef, ArrayRef)> {
+) -> RecordBatch {
     let include_generated_columns = true;
-    let attributes = collect_valid_attributes(&tupledesc, include_generated_columns);
+    let attributes = collect_valid_attributes(tupledesc, include_generated_columns);
 
-    let mut tuple_attribute_arrow_arrays = vec![];
+    let mut attribute_arrow_arrays = vec![];
 
     for attribute in attributes {
         let attribute_name = attribute.name();
@@ -110,18 +115,16 @@ fn collect_arrow_attribute_arrays_from_tupledesc(
             .field_with_name(attribute_name)
             .expect("Expected attribute field");
 
-        let (field, array) = collect_attribute_array_from_tuples(
-            &tuples,
+        let (_field, array) = to_arrow_array(
+            &tuple,
             attribute_name,
             attribute_typoid,
             attribute_typmod,
             Arc::new(attribute_field.clone()),
         );
 
-        let tuple_attribute_arrow_array = (field, array);
-
-        tuple_attribute_arrow_arrays.push(tuple_attribute_arrow_array);
+        attribute_arrow_arrays.push(array);
     }
 
-    tuple_attribute_arrow_arrays
+    RecordBatch::try_new(schema, attribute_arrow_arrays).expect("Expected record batch")
 }

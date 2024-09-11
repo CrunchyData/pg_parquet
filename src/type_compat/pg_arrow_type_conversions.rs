@@ -7,7 +7,7 @@ use pgrx::{
 
 pub(crate) const MAX_DECIMAL_PRECISION: usize = 38;
 
-pub(crate) fn date_to_i32(date: Date) -> Option<i32> {
+pub(crate) fn date_to_i32(date: Date) -> i32 {
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
     let adjusted_date: Date = unsafe {
         direct_function_call(pg_sys::date_pli, &[date.into_datum(), 10957.into_datum()]).unwrap()
@@ -15,9 +15,7 @@ pub(crate) fn date_to_i32(date: Date) -> Option<i32> {
 
     let adjusted_date_as_bytes: Vec<u8> =
         unsafe { direct_function_call(pg_sys::date_send, &[adjusted_date.into_datum()]).unwrap() };
-    Some(i32::from_be_bytes(
-        adjusted_date_as_bytes[0..4].try_into().unwrap(),
-    ))
+    i32::from_be_bytes(adjusted_date_as_bytes[0..4].try_into().unwrap())
 }
 
 pub(crate) fn i32_to_date(i32_date: i32) -> Option<Date> {
@@ -26,7 +24,7 @@ pub(crate) fn i32_to_date(i32_date: i32) -> Option<Date> {
     Some(adjusted_date)
 }
 
-pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> Option<i64> {
+pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> i64 {
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
     let adjustment_interval = Interval::from_days(10957);
     let adjusted_timestamp: Timestamp = unsafe {
@@ -40,9 +38,7 @@ pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> Option<i64> {
     let adjusted_timestamp_as_bytes: Vec<u8> = unsafe {
         direct_function_call(pg_sys::time_send, &[adjusted_timestamp.into_datum()]).unwrap()
     };
-    Some(i64::from_be_bytes(
-        adjusted_timestamp_as_bytes[0..8].try_into().unwrap(),
-    ))
+    i64::from_be_bytes(adjusted_timestamp_as_bytes[0..8].try_into().unwrap())
 }
 
 pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Option<Timestamp> {
@@ -61,7 +57,7 @@ pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Option<Timestamp> {
     Some(adjusted_timestamp)
 }
 
-pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> Option<i64> {
+pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> i64 {
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
     let adjustment_interval = Interval::from_days(10957);
     let adjusted_timestamptz: TimestampWithTimeZone = unsafe {
@@ -79,9 +75,7 @@ pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> Option<i
         )
         .unwrap()
     };
-    Some(i64::from_be_bytes(
-        adjusted_timestamptz_as_bytes[0..8].try_into().unwrap(),
-    ))
+    i64::from_be_bytes(adjusted_timestamptz_as_bytes[0..8].try_into().unwrap())
 }
 
 pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64) -> Option<TimestampWithTimeZone> {
@@ -100,17 +94,17 @@ pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64) -> Option<TimestampWithTi
     Some(adjusted_timestamptz)
 }
 
-pub(crate) fn time_to_i64(time: Time) -> Option<i64> {
+pub(crate) fn time_to_i64(time: Time) -> i64 {
     let time_as_bytes: Vec<u8> =
         unsafe { direct_function_call(pg_sys::time_send, &[time.into_datum()]).unwrap() };
-    Some(i64::from_be_bytes(time_as_bytes[0..8].try_into().unwrap()))
+    i64::from_be_bytes(time_as_bytes[0..8].try_into().unwrap())
 }
 
 pub(crate) fn i64_to_time(i64_time: i64) -> Option<Time> {
     Some(i64_time.try_into().unwrap())
 }
 
-pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> Option<i64> {
+pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> i64 {
     let timezone_as_secs: AnyNumeric = unsafe {
         direct_function_call(
             pg_sys::extract_timetz,
@@ -132,16 +126,14 @@ pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> Option<i64> {
     let adjusted_timetz_as_bytes: Vec<u8> = unsafe {
         direct_function_call(pg_sys::timetz_send, &[adjusted_timetz.into_datum()]).unwrap()
     };
-    Some(i64::from_be_bytes(
-        adjusted_timetz_as_bytes[0..8].try_into().unwrap(),
-    ))
+    i64::from_be_bytes(adjusted_timetz_as_bytes[0..8].try_into().unwrap())
 }
 
 pub(crate) fn i64_to_timetz(i64_timetz: i64) -> Option<TimeWithTimeZone> {
     i64_to_time(i64_timetz).map(|time| time.into())
 }
 
-pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
+pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> i128 {
     // obtain numeric's string representation
     let numeric_str: &CStr =
         unsafe { direct_function_call(pg_sys::numeric_out, &[numeric.into_datum()]).unwrap() };
@@ -160,7 +152,7 @@ pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {
     }
     decimal *= sign;
 
-    Some(decimal)
+    decimal
 }
 
 pub(crate) fn i128_to_numeric(i128_decimal: i128, scale: usize) -> Option<AnyNumeric> {

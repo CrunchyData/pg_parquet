@@ -15,37 +15,31 @@ use crate::{
 use super::PgToArrowPerAttributeContext;
 
 // Timestamp
-impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
+impl PgTypeToArrowArray<Timestamp> for Option<Timestamp> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let timestamps = self
-            .into_iter()
-            .map(|timstamp| timstamp.and_then(timestamp_to_i64))
-            .collect::<Vec<_>>();
+        let timestamp = self.map(timestamp_to_i64);
 
-        let timestamp_array = TimestampMicrosecondArray::from(timestamps);
+        let timestamp_array = TimestampMicrosecondArray::from(vec![timestamp]);
 
         (context.field, Arc::new(timestamp_array))
     }
 }
 
 // Timestamp[]
-impl PgTypeToArrowArray<pgrx::Array<'_, Timestamp>> for Vec<Option<pgrx::Array<'_, Timestamp>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, Timestamp>> for Option<pgrx::Array<'_, Timestamp>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .into_iter()
-            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = self {
+            pg_array
+                .iter()
+                .map(|timestamp| timestamp.map(timestamp_to_i64))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
-        let timestamps = pg_array
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|timestamp| timestamp.and_then(timestamp_to_i64))
-            .collect::<Vec<_>>();
-
-        let timestamp_array = TimestampMicrosecondArray::from(timestamps);
+        let timestamp_array = TimestampMicrosecondArray::from(pg_array);
 
         let list_field = context.field;
 

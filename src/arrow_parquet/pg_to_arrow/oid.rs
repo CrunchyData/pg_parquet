@@ -12,36 +12,31 @@ use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgType
 use super::PgToArrowPerAttributeContext;
 
 // Oid
-impl PgTypeToArrowArray<Oid> for Vec<Option<Oid>> {
+impl PgTypeToArrowArray<Oid> for Option<Oid> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let oids = self
-            .into_iter()
-            .map(|x| x.map(|x| x.as_u32()))
-            .collect::<Vec<_>>();
+        let oid = self.map(|oid| oid.as_u32());
 
-        let oid_array = UInt32Array::from(oids);
+        let oid_array = UInt32Array::from(vec![oid]);
 
         (context.field, Arc::new(oid_array))
     }
 }
 
 // Oid[]
-impl PgTypeToArrowArray<pgrx::Array<'_, Oid>> for Vec<Option<pgrx::Array<'_, Oid>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, Oid>> for Option<pgrx::Array<'_, Oid>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .into_iter()
-            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = self {
+            pg_array
+                .iter()
+                .map(|oid| oid.map(|oid| oid.as_u32()))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
-        let oids = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
-        let oids = oids
-            .into_iter()
-            .map(|x| x.map(|x| x.as_u32()))
-            .collect::<Vec<_>>();
-
-        let oid_array = UInt32Array::from(oids);
+        let oid_array = UInt32Array::from(pg_array);
 
         let list_field = context.field;
 

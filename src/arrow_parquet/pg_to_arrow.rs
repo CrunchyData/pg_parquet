@@ -47,6 +47,7 @@ pub(crate) trait PgTypeToArrowArray<T: IntoDatum + FromDatum + UnboxDatum> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef);
 }
 
+#[derive(Clone)]
 pub(crate) struct PgToArrowPerAttributeContext<'a> {
     name: &'a str,
     field: FieldRef,
@@ -79,9 +80,9 @@ impl<'a> PgToArrowPerAttributeContext<'a> {
     }
 }
 
-pub(crate) fn collect_attribute_array_from_tuples<'tup>(
-    tuples: &'tup [Option<PgHeapTuple<'tup, AllocatedByRust>>],
-    attribute_name: &'tup str,
+pub(crate) fn to_arrow_array(
+    tuple: &PgHeapTuple<AllocatedByRust>,
+    attribute_name: &str,
     attribute_typoid: Oid,
     attribute_typmod: i32,
     attribute_field: FieldRef,
@@ -96,7 +97,7 @@ pub(crate) fn collect_attribute_array_from_tuples<'tup>(
             attribute_field,
         );
 
-        collect_array_attribute_array_from_tuples(tuples, attribute_context)
+        to_arrow_list_array(tuple, attribute_context)
     } else {
         let attribute_context = PgToArrowPerAttributeContext::new(
             attribute_name,
@@ -105,338 +106,43 @@ pub(crate) fn collect_attribute_array_from_tuples<'tup>(
             attribute_field,
         );
 
-        collect_nonarray_attribute_array_from_tuples(tuples, attribute_context)
+        to_arrow_primitive_array(tuple, attribute_context)
     }
 }
 
-fn collect_nonarray_attribute_array_from_tuples<'tup>(
-    tuples: &'tup [Option<PgHeapTuple<'tup, AllocatedByRust>>],
-    attribute_context: PgToArrowPerAttributeContext<'tup>,
+fn to_arrow_primitive_array(
+    tuple: &PgHeapTuple<AllocatedByRust>,
+    attribute_context: PgToArrowPerAttributeContext,
 ) -> (FieldRef, ArrayRef) {
     match attribute_context.typoid {
         FLOAT4OID => {
-            let mut attribute_values: Vec<Option<f32>> = Vec::new();
+            let attribute_val: Option<f32> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         FLOAT8OID => {
-            let mut attribute_values: Vec<Option<f64>> = Vec::new();
+            let attribute_val: Option<f64> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         INT2OID => {
-            let mut attribute_values: Vec<Option<i16>> = Vec::new();
+            let attribute_val: Option<i16> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         INT4OID => {
-            let mut attribute_values: Vec<Option<i32>> = Vec::new();
+            let attribute_val: Option<i32> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         INT8OID => {
-            let mut attribute_values: Vec<Option<i64>> = Vec::new();
+            let attribute_val: Option<i64> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        NUMERICOID => {
-            let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
-            if precision > MAX_DECIMAL_PRECISION {
-                reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
-
-                let mut attribute_values: Vec<Option<FallbackToText>> = Vec::new();
-
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
-                (field, array)
-            } else {
-                let mut attribute_values: Vec<Option<AnyNumeric>> = Vec::new();
-
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
-                (field, array)
-            }
-        }
-        BOOLOID => {
-            let mut attribute_values: Vec<Option<bool>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        DATEOID => {
-            let mut attribute_values: Vec<Option<Date>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        TIMEOID => {
-            let mut attribute_values: Vec<Option<Time>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        TIMETZOID => {
-            let mut attribute_values: Vec<Option<TimeWithTimeZone>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        TIMESTAMPOID => {
-            let mut attribute_values: Vec<Option<Timestamp>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        TIMESTAMPTZOID => {
-            let mut attribute_values: Vec<Option<TimestampWithTimeZone>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        CHAROID => {
-            let mut attribute_values: Vec<Option<i8>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        TEXTOID => {
-            let mut attribute_values: Vec<Option<String>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        BYTEAOID => {
-            let mut attribute_values: Vec<Option<&[u8]>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        OIDOID => {
-            let mut attribute_values: Vec<Option<Oid>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        _ => {
-            if is_composite_type(attribute_context.typoid) {
-                let mut attribute_values: Vec<Option<PgHeapTuple<AllocatedByRust>>> = Vec::new();
-
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
-                (field, array)
-            } else if is_crunchy_map_typoid(attribute_context.typoid) {
-                let mut attribute_values: Vec<Option<CrunchyMap>> = Vec::new();
-
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
-                (field, array)
-            } else if is_postgis_geometry_typoid(attribute_context.typoid) {
-                let mut attribute_values: Vec<Option<Geometry>> = Vec::new();
-
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
-                (field, array)
-            } else {
-                reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
-
-                let mut attribute_values: Vec<Option<FallbackToText>> = Vec::new();
-
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
-                (field, array)
-            }
-        }
-    }
-}
-
-pub(crate) fn collect_array_attribute_array_from_tuples<'tup>(
-    tuples: &'tup [Option<PgHeapTuple<'tup, AllocatedByRust>>],
-    attribute_context: PgToArrowPerAttributeContext<'tup>,
-) -> (FieldRef, ArrayRef) {
-    match attribute_context.typoid {
-        FLOAT4OID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<f32>>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        FLOAT8OID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<f64>>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        INT2OID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<i16>>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        INT4OID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<i32>>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
-            (field, array)
-        }
-        INT8OID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<i64>>> = Vec::new();
-
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         NUMERICOID => {
@@ -445,223 +151,283 @@ pub(crate) fn collect_array_attribute_array_from_tuples<'tup>(
             if precision > MAX_DECIMAL_PRECISION {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                let mut attribute_values: Vec<Option<pgrx::Array<FallbackToText>>> = Vec::new();
+                let attribute_val: Option<FallbackToText> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
 
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
                 (field, array)
             } else {
-                let mut attribute_values: Vec<Option<pgrx::Array<AnyNumeric>>> = Vec::new();
-
                 let scale = extract_scale_from_numeric_typmod(attribute_context.typmod);
 
                 let attribute_context = attribute_context
                     .with_scale(scale)
                     .with_precision(precision);
 
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
+                let attribute_val: Option<AnyNumeric> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
 
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
                 (field, array)
             }
         }
         BOOLOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<bool>>> = Vec::new();
+            let attribute_val: Option<bool> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         DATEOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<Date>>> = Vec::new();
+            let attribute_val: Option<Date> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         TIMEOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<Time>>> = Vec::new();
+            let attribute_val: Option<Time> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         TIMETZOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<TimeWithTimeZone>>> = Vec::new();
+            let attribute_val: Option<TimeWithTimeZone> =
+                tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         TIMESTAMPOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<Timestamp>>> = Vec::new();
+            let attribute_val: Option<Timestamp> =
+                tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         TIMESTAMPTZOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<TimestampWithTimeZone>>> = Vec::new();
+            let attribute_val: Option<TimestampWithTimeZone> =
+                tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         CHAROID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<i8>>> = Vec::new();
+            let attribute_val: Option<i8> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         TEXTOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<String>>> = Vec::new();
+            let attribute_val: Option<String> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         BYTEAOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<&[u8]>>> = Vec::new();
+            let attribute_val: Option<&[u8]> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         OIDOID => {
-            let mut attribute_values: Vec<Option<pgrx::Array<Oid>>> = Vec::new();
+            let attribute_val: Option<Oid> = tuple.get_by_name(attribute_context.name).unwrap();
 
-            collect_attribute_array_from_tuples_helper(
-                tuples,
-                &attribute_context,
-                &mut attribute_values,
-            );
-
-            let (field, array) = attribute_values.to_arrow_array(attribute_context);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
             (field, array)
         }
         _ => {
             if is_composite_type(attribute_context.typoid) {
-                let mut attribute_values: Vec<Option<pgrx::Array<PgHeapTuple<AllocatedByRust>>>> =
-                    Vec::new();
+                let attribute_val: Option<PgHeapTuple<AllocatedByRust>> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
 
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
                 (field, array)
             } else if is_crunchy_map_typoid(attribute_context.typoid) {
-                let mut attribute_values: Vec<Option<pgrx::Array<CrunchyMap>>> = Vec::new();
+                let attribute_val: Option<CrunchyMap> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
 
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
                 (field, array)
             } else if is_postgis_geometry_typoid(attribute_context.typoid) {
-                let mut attribute_values: Vec<Option<pgrx::Array<Geometry>>> = Vec::new();
+                let attribute_val: Option<Geometry> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
 
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
                 (field, array)
             } else {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                let mut attribute_values: Vec<Option<pgrx::Array<FallbackToText>>> = Vec::new();
+                let attribute_val: Option<FallbackToText> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
 
-                collect_attribute_array_from_tuples_helper(
-                    tuples,
-                    &attribute_context,
-                    &mut attribute_values,
-                );
-
-                let (field, array) = attribute_values.to_arrow_array(attribute_context);
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
                 (field, array)
             }
         }
     }
 }
 
-fn collect_attribute_array_from_tuples_helper<'tup, T>(
-    tuples: &'tup [Option<PgHeapTuple<'tup, AllocatedByRust>>],
-    attribute_context: &PgToArrowPerAttributeContext<'tup>,
-    attribute_values: &mut Vec<Option<T>>,
-) where
-    T: IntoDatum + FromDatum + UnboxDatum<As<'tup> = T> + 'tup,
-{
-    for record in tuples.iter() {
-        pgrx::pg_sys::check_for_interrupts!();
+pub(crate) fn to_arrow_list_array(
+    tuple: &PgHeapTuple<AllocatedByRust>,
+    attribute_context: PgToArrowPerAttributeContext,
+) -> (FieldRef, ArrayRef) {
+    match attribute_context.typoid {
+        FLOAT4OID => {
+            let attribute_val: Option<pgrx::Array<f32>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
 
-        if let Some(record) = record {
-            let attribute_val: Option<T> = record.get_by_name(attribute_context.name).unwrap();
-            attribute_values.push(attribute_val);
-        } else {
-            attribute_values.push(None);
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        FLOAT8OID => {
+            let attribute_val: Option<pgrx::Array<f64>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        INT2OID => {
+            let attribute_val: Option<pgrx::Array<i16>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        INT4OID => {
+            let attribute_val: Option<pgrx::Array<i32>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        INT8OID => {
+            let attribute_val: Option<pgrx::Array<i64>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        NUMERICOID => {
+            let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
+
+            if precision > MAX_DECIMAL_PRECISION {
+                reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
+
+                let attribute_val: Option<pgrx::Array<FallbackToText>> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
+
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
+                (field, array)
+            } else {
+                let scale = extract_scale_from_numeric_typmod(attribute_context.typmod);
+
+                let attribute_context = attribute_context
+                    .with_scale(scale)
+                    .with_precision(precision);
+
+                let attribute_val: Option<pgrx::Array<AnyNumeric>> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
+
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
+                (field, array)
+            }
+        }
+        BOOLOID => {
+            let attribute_val: Option<pgrx::Array<bool>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        DATEOID => {
+            let attribute_val: Option<pgrx::Array<Date>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        TIMEOID => {
+            let attribute_val: Option<pgrx::Array<Time>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        TIMETZOID => {
+            let attribute_val: Option<pgrx::Array<TimeWithTimeZone>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        TIMESTAMPOID => {
+            let attribute_val: Option<pgrx::Array<Timestamp>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        TIMESTAMPTZOID => {
+            let attribute_val: Option<pgrx::Array<TimestampWithTimeZone>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        CHAROID => {
+            let attribute_val: Option<pgrx::Array<i8>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        TEXTOID => {
+            let attribute_val: Option<pgrx::Array<String>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        BYTEAOID => {
+            let attribute_val: Option<pgrx::Array<&[u8]>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        OIDOID => {
+            let attribute_val: Option<pgrx::Array<Oid>> =
+                tuple.get_by_name(attribute_context.name).unwrap();
+
+            let (field, array) = attribute_val.to_arrow_array(attribute_context);
+            (field, array)
+        }
+        _ => {
+            if is_composite_type(attribute_context.typoid) {
+                let attribute_val: Option<pgrx::Array<PgHeapTuple<AllocatedByRust>>> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
+
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
+                (field, array)
+            } else if is_crunchy_map_typoid(attribute_context.typoid) {
+                let attribute_val: Option<pgrx::Array<CrunchyMap>> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
+
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
+                (field, array)
+            } else if is_postgis_geometry_typoid(attribute_context.typoid) {
+                let attribute_val: Option<pgrx::Array<Geometry>> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
+
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
+                (field, array)
+            } else {
+                reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
+
+                let attribute_val: Option<pgrx::Array<FallbackToText>> =
+                    tuple.get_by_name(attribute_context.name).unwrap();
+
+                let (field, array) = attribute_val.to_arrow_array(attribute_context);
+                (field, array)
+            }
         }
     }
 }

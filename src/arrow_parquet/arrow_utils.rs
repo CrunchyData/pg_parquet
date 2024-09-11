@@ -38,27 +38,22 @@ pub(crate) fn arrow_map_offsets(maps: &Vec<Option<CrunchyMap>>) -> (OffsetBuffer
 }
 
 pub(crate) fn arrow_array_offsets<T>(
-    arrays: &Vec<Option<Vec<Option<T>>>>,
+    pg_array: &Option<pgrx::Array<T>>,
 ) -> (OffsetBuffer<i32>, NullBuffer) {
-    pgrx::pg_sys::check_for_interrupts!();
-
     let mut nulls = vec![];
     let mut offsets = vec![0];
-    let mut current_offset = 0;
-    for array in arrays {
-        if let Some(array) = array {
-            let len = array.len() as i32;
-            current_offset += len;
-            offsets.push(current_offset);
-            nulls.push(true);
-        } else {
-            offsets.push(current_offset);
-            nulls.push(false);
-        }
-    }
 
-    let offsets = OffsetBuffer::new(ScalarBuffer::from(offsets));
-    let nulls = NullBuffer::from(nulls);
+    if let Some(pg_array) = pg_array {
+        let len = pg_array.len() as i32;
+        offsets.push(len);
+        nulls.push(true);
+    } else {
+        offsets.push(0);
+        nulls.push(false);
+    };
+
+    let offsets = arrow::buffer::OffsetBuffer::new(arrow::buffer::ScalarBuffer::from(offsets));
+    let nulls = arrow::buffer::NullBuffer::from(nulls);
 
     (offsets, nulls)
 }

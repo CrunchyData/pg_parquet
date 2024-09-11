@@ -15,14 +15,11 @@ use crate::{
 use super::PgToArrowPerAttributeContext;
 
 // TimeTz
-impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
+impl PgTypeToArrowArray<TimeWithTimeZone> for Option<TimeWithTimeZone> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let timetzs = self
-            .into_iter()
-            .map(|timetz| timetz.and_then(timetz_to_i64))
-            .collect::<Vec<_>>();
+        let timetz = self.map(timetz_to_i64);
 
-        let timetz_array = Time64MicrosecondArray::from(timetzs);
+        let timetz_array = Time64MicrosecondArray::from(vec![timetz]);
 
         (context.field, Arc::new(timetz_array))
     }
@@ -30,24 +27,21 @@ impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
 
 // TimeTz[]
 impl PgTypeToArrowArray<pgrx::Array<'_, TimeWithTimeZone>>
-    for Vec<Option<pgrx::Array<'_, TimeWithTimeZone>>>
+    for Option<pgrx::Array<'_, TimeWithTimeZone>>
 {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .into_iter()
-            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = self {
+            pg_array
+                .iter()
+                .map(|timetz| timetz.map(timetz_to_i64))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
-        let timetzs = pg_array
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|timetz| timetz.and_then(timetz_to_i64))
-            .collect::<Vec<_>>();
-
-        let timetz_array = Time64MicrosecondArray::from(timetzs);
+        let timetz_array = Time64MicrosecondArray::from(pg_array);
 
         let list_field = context.field;
 

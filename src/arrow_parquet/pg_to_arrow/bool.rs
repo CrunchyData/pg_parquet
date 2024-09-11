@@ -11,25 +11,25 @@ use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgType
 use super::PgToArrowPerAttributeContext;
 
 // Bool
-impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
+impl PgTypeToArrowArray<bool> for Option<bool> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let bool_array = BooleanArray::from(self);
+        let bool_array = BooleanArray::from(vec![self]);
         (context.field, Arc::new(bool_array))
     }
 }
 
 // Bool[]
-impl PgTypeToArrowArray<pgrx::Array<'_, bool>> for Vec<Option<pgrx::Array<'_, bool>>> {
+impl<'a> PgTypeToArrowArray<pgrx::Array<'a, bool>> for Option<pgrx::Array<'a, bool>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .into_iter()
-            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = self {
+            pg_array.iter().collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
-        let bools = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
-        let bool_array = BooleanArray::from(bools);
+        let bool_array = BooleanArray::from(pg_array);
 
         let list_field = context.field;
 

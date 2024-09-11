@@ -14,32 +14,28 @@ use crate::{
 use super::PgToArrowPerAttributeContext;
 
 // Geometry
-impl PgTypeToArrowArray<Geometry> for Vec<Option<Geometry>> {
+impl PgTypeToArrowArray<Geometry> for Option<Geometry> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let wkbs = self
-            .iter()
-            .map(|geometry| geometry.as_deref())
-            .collect::<Vec<_>>();
+        let wkb = self.as_deref();
 
-        let wkb_array = BinaryArray::from(wkbs);
+        let wkb_array = BinaryArray::from(vec![wkb]);
 
         (context.field, Arc::new(wkb_array))
     }
 }
 
 // Geometry[]
-impl PgTypeToArrowArray<pgrx::Array<'_, Geometry>> for Vec<Option<pgrx::Array<'_, Geometry>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, Geometry>> for Option<pgrx::Array<'_, Geometry>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .into_iter()
-            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = self {
+            pg_array.iter().collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
-        let wkbs = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
-
-        let wkbs = wkbs
+        let wkbs = pg_array
             .iter()
             .map(|geometry| geometry.as_deref())
             .collect::<Vec<_>>();

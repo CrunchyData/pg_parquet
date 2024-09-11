@@ -17,17 +17,14 @@ use crate::{
 use super::PgToArrowPerAttributeContext;
 
 // Numeric
-impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
+impl PgTypeToArrowArray<AnyNumeric> for Option<AnyNumeric> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
         let precision = extract_precision_from_numeric_typmod(context.typmod);
         let scale = extract_scale_from_numeric_typmod(context.typmod);
 
-        let numerics = self
-            .into_iter()
-            .map(|numeric| numeric.and_then(numeric_to_i128))
-            .collect::<Vec<_>>();
+        let numeric = self.map(numeric_to_i128);
 
-        let numeric_array = Decimal128Array::from(numerics)
+        let numeric_array = Decimal128Array::from(vec![numeric])
             .with_precision_and_scale(precision as _, scale as _)
             .unwrap();
 
@@ -36,26 +33,23 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
 }
 
 // Numeric[]
-impl PgTypeToArrowArray<pgrx::Array<'_, AnyNumeric>> for Vec<Option<pgrx::Array<'_, AnyNumeric>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, AnyNumeric>> for Option<pgrx::Array<'_, AnyNumeric>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .into_iter()
-            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = self {
+            pg_array
+                .iter()
+                .map(|numeric| numeric.map(numeric_to_i128))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
         let precision = extract_precision_from_numeric_typmod(context.typmod);
         let scale = extract_scale_from_numeric_typmod(context.typmod);
 
-        let numerics = pg_array
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|time| time.and_then(numeric_to_i128))
-            .collect::<Vec<_>>();
-
-        let numeric_array = Decimal128Array::from(numerics)
+        let numeric_array = Decimal128Array::from(pg_array)
             .with_precision_and_scale(precision as _, scale as _)
             .unwrap();
 

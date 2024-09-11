@@ -15,14 +15,12 @@ use crate::{
 use super::PgToArrowPerAttributeContext;
 
 // TimestampTz
-impl PgTypeToArrowArray<TimestampWithTimeZone> for Vec<Option<TimestampWithTimeZone>> {
+impl PgTypeToArrowArray<TimestampWithTimeZone> for Option<TimestampWithTimeZone> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let timestamptzs = self
-            .into_iter()
-            .map(|timestamptz| timestamptz.and_then(timestamptz_to_i64))
-            .collect::<Vec<_>>();
+        let timestamptz = self.map(timestamptz_to_i64);
 
-        let timestamptz_array = TimestampMicrosecondArray::from(timestamptzs).with_timezone_utc();
+        let timestamptz_array =
+            TimestampMicrosecondArray::from(vec![timestamptz]).with_timezone_utc();
 
         (context.field, Arc::new(timestamptz_array))
     }
@@ -30,24 +28,21 @@ impl PgTypeToArrowArray<TimestampWithTimeZone> for Vec<Option<TimestampWithTimeZ
 
 // TimestampTz[]
 impl PgTypeToArrowArray<pgrx::Array<'_, TimestampWithTimeZone>>
-    for Vec<Option<pgrx::Array<'_, TimestampWithTimeZone>>>
+    for Option<pgrx::Array<'_, TimestampWithTimeZone>>
 {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .into_iter()
-            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = self {
+            pg_array
+                .iter()
+                .map(|timestamptz| timestamptz.map(timestamptz_to_i64))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
-        let timestamptzs = pg_array
-            .into_iter()
-            .flatten()
-            .flatten()
-            .map(|timestamptz| timestamptz.and_then(timestamptz_to_i64))
-            .collect::<Vec<_>>();
-
-        let timestamptz_array = TimestampMicrosecondArray::from(timestamptzs).with_timezone_utc();
+        let timestamptz_array = TimestampMicrosecondArray::from(pg_array).with_timezone_utc();
 
         let list_field = context.field;
 

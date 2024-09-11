@@ -14,14 +14,11 @@ use crate::{
 use super::PgToArrowPerAttributeContext;
 
 // Text representation of any type
-impl PgTypeToArrowArray<FallbackToText> for Vec<Option<FallbackToText>> {
+impl PgTypeToArrowArray<FallbackToText> for Option<FallbackToText> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let texts = self
-            .into_iter()
-            .map(|val| val.map(String::from))
-            .collect::<Vec<_>>();
+        let text = self.map(String::from);
 
-        let text_array = StringArray::from(texts);
+        let text_array = StringArray::from(vec![text]);
 
         (context.field, Arc::new(text_array))
     }
@@ -29,24 +26,21 @@ impl PgTypeToArrowArray<FallbackToText> for Vec<Option<FallbackToText>> {
 
 // Text[] representation of any type
 impl PgTypeToArrowArray<pgrx::Array<'_, FallbackToText>>
-    for Vec<Option<pgrx::Array<'_, FallbackToText>>>
+    for Option<pgrx::Array<'_, FallbackToText>>
 {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let pg_array = self
-            .into_iter()
-            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
-            .collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+        let pg_array = if let Some(pg_array) = self {
+            pg_array
+                .iter()
+                .map(|f| f.map(String::from))
+                .collect::<Vec<_>>()
+        } else {
+            vec![]
+        };
 
-        let texts = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
-
-        let texts = texts
-            .into_iter()
-            .map(|val| val.map(String::from))
-            .collect::<Vec<_>>();
-
-        let text_array = StringArray::from(texts);
+        let text_array = StringArray::from(pg_array);
 
         let list_field = context.field;
 
