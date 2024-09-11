@@ -14,11 +14,10 @@ use crate::{
         codec::ParquetCodecOption, schema_visitor::parse_arrow_schema_from_tupledesc,
         uri_utils::parquet_writer_from_uri,
     },
-    pgrx_utils::collect_valid_attributes,
     type_compat::{geometry::reset_postgis_context, map::reset_crunchy_map_context},
 };
 
-use super::pg_to_arrow::to_arrow_array;
+use super::pg_to_arrow::{collect_attribute_contexts, to_arrow_array, PgToArrowAttributeContext};
 
 pub(crate) struct ParquetWriterContext<'a> {
     runtime: Runtime,
@@ -66,20 +65,20 @@ impl<'a> ParquetWriterContext<'a> {
         &mut self,
         tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     ) {
+        let attribute_contexts = collect_attribute_contexts(&self.tupledesc, &self.schema.fields);
+
         let mut record_batches = vec![];
 
         for tuple in tuples {
             pgrx::pg_sys::check_for_interrupts!();
 
-            if let Some(tuple) = tuple {
-                let record_batch =
-                    pg_tuple_to_record_batch(tuple, &self.tupledesc, self.schema.clone());
-
-                record_batches.push(record_batch);
+            let record_batch = if let Some(tuple) = tuple {
+                Self::pg_tuple_to_record_batch(tuple, &attribute_contexts, self.schema.clone())
             } else {
-                let null_record_batch = RecordBatch::new_empty(self.schema.clone());
-                record_batches.push(null_record_batch);
-            }
+                RecordBatch::new_empty(self.schema.clone())
+            };
+
+            record_batches.push(record_batch);
         }
 
         let record_batch = arrow::compute::concat_batches(&self.schema, &record_batches).unwrap();
@@ -92,39 +91,23 @@ impl<'a> ParquetWriterContext<'a> {
         self.runtime.block_on(parquet_writer.flush()).unwrap();
     }
 
+    fn pg_tuple_to_record_batch(
+        tuple: PgHeapTuple<AllocatedByRust>,
+        attribute_contexts: &Vec<PgToArrowAttributeContext>,
+        schema: SchemaRef,
+    ) -> RecordBatch {
+        let mut attribute_arrow_arrays = vec![];
+
+        for attribute_context in attribute_contexts {
+            let array = to_arrow_array(&tuple, attribute_context);
+
+            attribute_arrow_arrays.push(array);
+        }
+
+        RecordBatch::try_new(schema, attribute_arrow_arrays).expect("Expected record batch")
+    }
+
     pub(crate) fn close(self) {
         self.runtime.block_on(self.parquet_writer.close()).unwrap();
     }
-}
-
-fn pg_tuple_to_record_batch(
-    tuple: PgHeapTuple<AllocatedByRust>,
-    tupledesc: &PgTupleDesc,
-    schema: SchemaRef,
-) -> RecordBatch {
-    let include_generated_columns = true;
-    let attributes = collect_valid_attributes(tupledesc, include_generated_columns);
-
-    let mut attribute_arrow_arrays = vec![];
-
-    for attribute in attributes {
-        let attribute_name = attribute.name();
-        let attribute_typoid = attribute.type_oid().value();
-        let attribute_typmod = attribute.type_mod();
-        let attribute_field = schema
-            .field_with_name(attribute_name)
-            .expect("Expected attribute field");
-
-        let (_field, array) = to_arrow_array(
-            &tuple,
-            attribute_name,
-            attribute_typoid,
-            attribute_typmod,
-            Arc::new(attribute_field.clone()),
-        );
-
-        attribute_arrow_arrays.push(array);
-    }
-
-    RecordBatch::try_new(schema, attribute_arrow_arrays).expect("Expected record batch")
 }

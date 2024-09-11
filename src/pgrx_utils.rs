@@ -5,10 +5,10 @@ use pgrx::{
     PgTupleDesc,
 };
 
-pub(crate) fn collect_valid_attributes<'a>(
-    tupdesc: &'a PgTupleDesc,
+pub(crate) fn collect_valid_attributes(
+    tupdesc: &PgTupleDesc,
     include_generated_columns: bool,
-) -> Vec<&'a FormData_pg_attribute> {
+) -> Vec<FormData_pg_attribute> {
     let mut attributes = vec![];
     let mut attributes_set = HashSet::<&str>::new();
 
@@ -32,7 +32,7 @@ pub(crate) fn collect_valid_attributes<'a>(
         }
         attributes_set.insert(name);
 
-        attributes.push(attribute);
+        attributes.push(attribute.to_owned());
     }
 
     attributes

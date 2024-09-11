@@ -1,6 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
 use arrow::datatypes::{Field, Fields, Schema};
+use arrow_schema::FieldRef;
 use parquet::arrow::{arrow_to_parquet_schema, PARQUET_FIELD_ID_META_KEY};
 use pg_sys::{
     Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
@@ -22,8 +23,6 @@ use crate::{
         },
     },
 };
-
-use super::arrow_utils::to_not_nullable_field;
 
 pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> String {
     let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc);
@@ -278,4 +277,13 @@ fn visit_primitive_schema(
         .collect();
 
     field.with_metadata(primitive_metadata).into()
+}
+
+fn to_not_nullable_field(field: FieldRef) -> FieldRef {
+    let name = field.deref().name();
+    let data_type = field.deref().data_type();
+    let metadata = field.deref().metadata().clone();
+
+    let field = Field::new(name, data_type.clone(), false).with_metadata(metadata);
+    Arc::new(field)
 }

@@ -1,26 +1,20 @@
 use std::sync::Arc;
 
-use arrow::{
-    array::{make_array, ArrayRef, ListArray, StringArray},
-    datatypes::FieldRef,
-};
-use arrow_schema::DataType;
+use arrow::array::{ArrayRef, ListArray, StringArray};
 
 use crate::{
     arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray},
     type_compat::fallback_to_text::FallbackToText,
 };
 
-use super::PgToArrowPerAttributeContext;
+use super::PgToArrowAttributeContext;
 
 // Text representation of any type
 impl PgTypeToArrowArray<FallbackToText> for Option<FallbackToText> {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
         let text = self.map(String::from);
-
         let text_array = StringArray::from(vec![text]);
-
-        (context.field, Arc::new(text_array))
+        Arc::new(text_array)
     }
 }
 
@@ -28,7 +22,7 @@ impl PgTypeToArrowArray<FallbackToText> for Option<FallbackToText> {
 impl PgTypeToArrowArray<pgrx::Array<'_, FallbackToText>>
     for Option<pgrx::Array<'_, FallbackToText>>
 {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let pg_array = if let Some(pg_array) = self {
@@ -42,20 +36,13 @@ impl PgTypeToArrowArray<pgrx::Array<'_, FallbackToText>>
 
         let text_array = StringArray::from(pg_array);
 
-        let list_field = context.field;
+        let list_array = ListArray::new(
+            context.field.clone(),
+            offsets,
+            Arc::new(text_array),
+            Some(nulls),
+        );
 
-        match list_field.data_type() {
-            DataType::List(text_field) => {
-                let list_array = ListArray::new(
-                    text_field.clone(),
-                    offsets,
-                    Arc::new(text_array),
-                    Some(nulls),
-                );
-
-                (list_field, make_array(list_array.into()))
-            }
-            _ => panic!("Expected List field"),
-        }
+        Arc::new(list_array)
     }
 }

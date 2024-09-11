@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use arrow::{
-    array::{make_array, ArrayRef, ListArray, Time64MicrosecondArray},
-    datatypes::FieldRef,
-};
-use arrow_schema::DataType;
+use arrow::array::{ArrayRef, ListArray, Time64MicrosecondArray};
 use pgrx::datum::TimeWithTimeZone;
 
 use crate::{
@@ -12,16 +8,14 @@ use crate::{
     type_compat::pg_arrow_type_conversions::timetz_to_i64,
 };
 
-use super::PgToArrowPerAttributeContext;
+use super::PgToArrowAttributeContext;
 
 // TimeTz
 impl PgTypeToArrowArray<TimeWithTimeZone> for Option<TimeWithTimeZone> {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
         let timetz = self.map(timetz_to_i64);
-
         let timetz_array = Time64MicrosecondArray::from(vec![timetz]);
-
-        (context.field, Arc::new(timetz_array))
+        Arc::new(timetz_array)
     }
 }
 
@@ -29,7 +23,7 @@ impl PgTypeToArrowArray<TimeWithTimeZone> for Option<TimeWithTimeZone> {
 impl PgTypeToArrowArray<pgrx::Array<'_, TimeWithTimeZone>>
     for Option<pgrx::Array<'_, TimeWithTimeZone>>
 {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let pg_array = if let Some(pg_array) = self {
@@ -43,20 +37,13 @@ impl PgTypeToArrowArray<pgrx::Array<'_, TimeWithTimeZone>>
 
         let timetz_array = Time64MicrosecondArray::from(pg_array);
 
-        let list_field = context.field;
+        let list_array = ListArray::new(
+            context.field.clone(),
+            offsets,
+            Arc::new(timetz_array),
+            Some(nulls),
+        );
 
-        match list_field.data_type() {
-            DataType::List(timetz_field) => {
-                let list_array = ListArray::new(
-                    timetz_field.clone(),
-                    offsets,
-                    Arc::new(timetz_array),
-                    Some(nulls),
-                );
-
-                (list_field, make_array(list_array.into()))
-            }
-            _ => panic!("Expected List field"),
-        }
+        Arc::new(list_array)
     }
 }

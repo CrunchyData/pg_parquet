@@ -1,29 +1,23 @@
 use std::sync::Arc;
 
-use arrow::{
-    array::{make_array, ArrayRef, ListArray, StringArray},
-    datatypes::FieldRef,
-};
-use arrow_schema::DataType;
+use arrow::array::{ArrayRef, ListArray, StringArray};
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
-use super::PgToArrowPerAttributeContext;
+use super::PgToArrowAttributeContext;
 
 // Char
 impl PgTypeToArrowArray<i8> for Option<i8> {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
         let char = self.map(|c| (c as u8 as char).to_string());
-
         let char_array = StringArray::from(vec![char]);
-
-        (context.field, Arc::new(char_array))
+        Arc::new(char_array)
     }
 }
 
 // "Char"[]
 impl PgTypeToArrowArray<pgrx::Array<'_, i8>> for Option<pgrx::Array<'_, i8>> {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let pg_array = if let Some(pg_array) = self {
@@ -37,20 +31,13 @@ impl PgTypeToArrowArray<pgrx::Array<'_, i8>> for Option<pgrx::Array<'_, i8>> {
 
         let char_array = StringArray::from(pg_array);
 
-        let list_field = context.field;
+        let list_array = ListArray::new(
+            context.field.clone(),
+            offsets,
+            Arc::new(char_array),
+            Some(nulls),
+        );
 
-        match list_field.data_type() {
-            DataType::List(char_field) => {
-                let list_array = ListArray::new(
-                    char_field.clone(),
-                    offsets,
-                    Arc::new(char_array),
-                    Some(nulls),
-                );
-
-                (list_field, make_array(list_array.into()))
-            }
-            _ => panic!("Expected List field"),
-        }
+        Arc::new(list_array)
     }
 }

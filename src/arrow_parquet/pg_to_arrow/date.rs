@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use arrow::{
-    array::{make_array, ArrayRef, Date32Array, ListArray},
-    datatypes::FieldRef,
-};
-use arrow_schema::DataType;
+use arrow::array::{ArrayRef, Date32Array, ListArray};
 use pgrx::datum::Date;
 
 use crate::{
@@ -12,22 +8,20 @@ use crate::{
     type_compat::pg_arrow_type_conversions::date_to_i32,
 };
 
-use super::PgToArrowPerAttributeContext;
+use super::PgToArrowAttributeContext;
 
 // Date
 impl PgTypeToArrowArray<Date> for Option<Date> {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
         let date = self.map(date_to_i32);
-
         let date_array = Date32Array::from(vec![date]);
-
-        (context.field, Arc::new(date_array))
+        Arc::new(date_array)
     }
 }
 
 // Date[]
 impl PgTypeToArrowArray<pgrx::Array<'_, Date>> for Option<pgrx::Array<'_, Date>> {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let pg_array = if let Some(pg_array) = self {
@@ -41,20 +35,13 @@ impl PgTypeToArrowArray<pgrx::Array<'_, Date>> for Option<pgrx::Array<'_, Date>>
 
         let date_array = Date32Array::from(pg_array);
 
-        let list_field = context.field;
+        let list_array = ListArray::new(
+            context.field.clone(),
+            offsets,
+            Arc::new(date_array),
+            Some(nulls),
+        );
 
-        match list_field.data_type() {
-            DataType::List(date_field) => {
-                let list_array = ListArray::new(
-                    date_field.clone(),
-                    offsets,
-                    Arc::new(date_array),
-                    Some(nulls),
-                );
-
-                (list_field, make_array(list_array.into()))
-            }
-            _ => panic!("Expected List field"),
-        }
+        Arc::new(list_array)
     }
 }

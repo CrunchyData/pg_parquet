@@ -1,20 +1,6 @@
-use std::{ops::Deref, sync::Arc};
-
-use arrow::{
-    buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
-    datatypes::{Field, FieldRef},
-};
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 
 use crate::type_compat::map::CrunchyMap;
-
-pub(crate) fn to_not_nullable_field(field: FieldRef) -> FieldRef {
-    let name = field.deref().name();
-    let data_type = field.deref().data_type();
-    let metadata = field.deref().metadata().clone();
-
-    let field = Field::new(name, data_type.clone(), false).with_metadata(metadata);
-    Arc::new(field)
-}
 
 pub(crate) fn arrow_map_offsets(maps: &Vec<Option<CrunchyMap>>) -> (OffsetBuffer<i32>, NullBuffer) {
     let mut offsets = vec![0];

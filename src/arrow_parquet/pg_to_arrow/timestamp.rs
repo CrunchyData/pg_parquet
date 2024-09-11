@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use arrow::{
-    array::{make_array, ArrayRef, ListArray, TimestampMicrosecondArray},
-    datatypes::FieldRef,
-};
-use arrow_schema::DataType;
+use arrow::array::{ArrayRef, ListArray, TimestampMicrosecondArray};
 use pgrx::datum::Timestamp;
 
 use crate::{
@@ -12,22 +8,20 @@ use crate::{
     type_compat::pg_arrow_type_conversions::timestamp_to_i64,
 };
 
-use super::PgToArrowPerAttributeContext;
+use super::PgToArrowAttributeContext;
 
 // Timestamp
 impl PgTypeToArrowArray<Timestamp> for Option<Timestamp> {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
         let timestamp = self.map(timestamp_to_i64);
-
         let timestamp_array = TimestampMicrosecondArray::from(vec![timestamp]);
-
-        (context.field, Arc::new(timestamp_array))
+        Arc::new(timestamp_array)
     }
 }
 
 // Timestamp[]
 impl PgTypeToArrowArray<pgrx::Array<'_, Timestamp>> for Option<pgrx::Array<'_, Timestamp>> {
-    fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
+    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let pg_array = if let Some(pg_array) = self {
@@ -41,20 +35,13 @@ impl PgTypeToArrowArray<pgrx::Array<'_, Timestamp>> for Option<pgrx::Array<'_, T
 
         let timestamp_array = TimestampMicrosecondArray::from(pg_array);
 
-        let list_field = context.field;
+        let list_array = ListArray::new(
+            context.field.clone(),
+            offsets,
+            Arc::new(timestamp_array),
+            Some(nulls),
+        );
 
-        match list_field.data_type() {
-            DataType::List(timestamp_field) => {
-                let list_array = ListArray::new(
-                    timestamp_field.clone(),
-                    offsets,
-                    Arc::new(timestamp_array),
-                    Some(nulls),
-                );
-
-                (list_field, make_array(list_array.into()))
-            }
-            _ => panic!("Expected List field"),
-        }
+        Arc::new(list_array)
     }
 }
