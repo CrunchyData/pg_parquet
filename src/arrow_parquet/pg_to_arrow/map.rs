@@ -58,17 +58,11 @@ impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
 }
 
 // crunchy_map.key_<type1>_val_<type2>[]
-impl<'b> PgTypeToArrowArray<pgrx::Array<'_, CrunchyMap<'b>>>
-    for Vec<Option<pgrx::Array<'_, CrunchyMap<'b>>>>
-{
+impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<Vec<Option<CrunchyMap<'b>>>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (list_offsets, list_nulls) = arrow_array_offsets(&self);
 
-        let maps = self
-            .into_iter()
-            .flatten()
-            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
-            .collect::<Vec<_>>();
+        let maps = self.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let map_field = context.field.clone();
 

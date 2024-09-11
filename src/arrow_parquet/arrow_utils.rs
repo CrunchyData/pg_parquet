@@ -24,7 +24,7 @@ pub(crate) fn arrow_map_offsets(maps: &Vec<Option<CrunchyMap>>) -> (OffsetBuffer
 }
 
 pub(crate) fn arrow_array_offsets<T>(
-    pg_array: &Vec<Option<pgrx::Array<T>>>,
+    pg_array: &Vec<Option<Vec<Option<T>>>>,
 ) -> (OffsetBuffer<i32>, NullBuffer) {
     let mut nulls = vec![];
     let mut offsets = vec![0];

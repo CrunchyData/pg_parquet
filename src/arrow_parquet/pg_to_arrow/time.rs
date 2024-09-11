@@ -23,14 +23,14 @@ impl PgTypeToArrowArray<Time> for Vec<Option<Time>> {
 }
 
 // Time[]
-impl PgTypeToArrowArray<pgrx::Array<'_, Time>> for Vec<Option<pgrx::Array<'_, Time>>> {
+impl PgTypeToArrowArray<Time> for Vec<Option<Vec<Option<Time>>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let pg_array = self
             .into_iter()
             .flatten()
-            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            .flatten()
             .map(|time| time.map(time_to_i64))
             .collect::<Vec<_>>();
 

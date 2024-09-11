@@ -20,14 +20,14 @@ impl PgTypeToArrowArray<Oid> for Vec<Option<Oid>> {
 }
 
 // Oid[]
-impl PgTypeToArrowArray<pgrx::Array<'_, Oid>> for Vec<Option<pgrx::Array<'_, Oid>>> {
+impl PgTypeToArrowArray<Oid> for Vec<Option<Vec<Option<Oid>>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         let pg_array = self
             .into_iter()
             .flatten()
-            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            .flatten()
             .map(|oid| oid.map(|oid| oid.as_u32()))
             .collect::<Vec<_>>();
 

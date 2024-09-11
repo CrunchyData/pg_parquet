@@ -199,7 +199,7 @@ pub(crate) fn to_arrow_array(
     }
 }
 
-macro_rules! to_arrow_array {
+macro_rules! to_primitive_arrow_array {
     ($pg_type:ty, $tuples:expr, $attribute_context:expr) => {{
         let mut attribute_vals = vec![];
 
@@ -219,50 +219,105 @@ macro_rules! to_arrow_array {
     }};
 }
 
+macro_rules! to_list_arrow_array {
+    ($pg_type:ty, $tuples:expr, $attribute_context:expr) => {{
+        let mut attribute_vals = vec![];
+
+        for tuple in $tuples {
+            pgrx::pg_sys::check_for_interrupts!();
+
+            if let Some(tuple) = tuple {
+                let attribute_val: Option<$pg_type> =
+                    tuple.get_by_name(&$attribute_context.name).unwrap();
+                attribute_vals.push(attribute_val);
+            } else {
+                attribute_vals.push(None);
+            }
+        }
+
+        let attribute_vals = attribute_vals
+            .iter()
+            .map(|val| val.as_ref().map(|val| val.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+
+        return attribute_vals.to_arrow_array($attribute_context);
+    }};
+}
+
 fn to_arrow_primitive_array(
     tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
     match attribute_context.typoid {
-        FLOAT4OID => to_arrow_array!(f32, tuples, attribute_context),
-        FLOAT8OID => to_arrow_array!(f64, tuples, attribute_context),
-        INT2OID => to_arrow_array!(i16, tuples, attribute_context),
-        INT4OID => to_arrow_array!(i32, tuples, attribute_context),
-        INT8OID => to_arrow_array!(i64, tuples, attribute_context),
+        FLOAT4OID => to_primitive_arrow_array!(f32, tuples, attribute_context),
+        FLOAT8OID => to_primitive_arrow_array!(f64, tuples, attribute_context),
+        INT2OID => to_primitive_arrow_array!(i16, tuples, attribute_context),
+        INT4OID => to_primitive_arrow_array!(i32, tuples, attribute_context),
+        INT8OID => to_primitive_arrow_array!(i64, tuples, attribute_context),
         NUMERICOID => {
             let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
 
             if precision > MAX_DECIMAL_PRECISION {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                to_arrow_array!(FallbackToText, tuples, attribute_context)
+                to_primitive_arrow_array!(FallbackToText, tuples, attribute_context)
             } else {
-                to_arrow_array!(AnyNumeric, tuples, attribute_context)
+                to_primitive_arrow_array!(AnyNumeric, tuples, attribute_context)
             }
         }
-        BOOLOID => to_arrow_array!(bool, tuples, attribute_context),
-        DATEOID => to_arrow_array!(Date, tuples, attribute_context),
-        TIMEOID => to_arrow_array!(Time, tuples, attribute_context),
-        TIMETZOID => to_arrow_array!(TimeWithTimeZone, tuples, attribute_context),
-        TIMESTAMPOID => to_arrow_array!(Timestamp, tuples, attribute_context),
+        BOOLOID => to_primitive_arrow_array!(bool, tuples, attribute_context),
+        DATEOID => to_primitive_arrow_array!(Date, tuples, attribute_context),
+        TIMEOID => to_primitive_arrow_array!(Time, tuples, attribute_context),
+        TIMETZOID => to_primitive_arrow_array!(TimeWithTimeZone, tuples, attribute_context),
+        TIMESTAMPOID => to_primitive_arrow_array!(Timestamp, tuples, attribute_context),
         TIMESTAMPTZOID => {
-            to_arrow_array!(TimestampWithTimeZone, tuples, attribute_context)
+            to_primitive_arrow_array!(TimestampWithTimeZone, tuples, attribute_context)
         }
-        CHAROID => to_arrow_array!(i8, tuples, attribute_context),
-        TEXTOID => to_arrow_array!(String, tuples, attribute_context),
-        BYTEAOID => to_arrow_array!(&[u8], tuples, attribute_context),
-        OIDOID => to_arrow_array!(Oid, tuples, attribute_context),
+        CHAROID => to_primitive_arrow_array!(i8, tuples, attribute_context),
+        TEXTOID => to_primitive_arrow_array!(String, tuples, attribute_context),
+        BYTEAOID => to_primitive_arrow_array!(&[u8], tuples, attribute_context),
+        OIDOID => to_primitive_arrow_array!(Oid, tuples, attribute_context),
         _ => {
             if attribute_context.is_composite {
-                to_arrow_array!(PgHeapTuple<AllocatedByRust>, tuples, attribute_context)
+                let mut attribute_vals = vec![];
+
+                let attribute_tupledesc =
+                    tuple_desc(attribute_context.typoid, attribute_context.typmod);
+
+                for tuple in tuples {
+                    pgrx::pg_sys::check_for_interrupts!();
+
+                    if let Some(tuple) = tuple {
+                        let attribute_val: Option<PgHeapTuple<AllocatedByRust>> =
+                            tuple.get_by_name(&attribute_context.name).unwrap();
+
+                        // this trick is needed to avoid having a bunch of
+                        // reference counted tupledesc which comes from pgrx's "get_by_name".
+                        // we first convert PgHeapTuple into unsafe HeapTuple to drop
+                        // the reference counted tupledesc and then convert it back to
+                        // PgHeapTuple by reusing the same tupledesc that we created
+                        // before the loop. Only overhead is 1 "heap_copy_tuple" call.
+                        let attribute_val = attribute_val.map(|tuple| tuple.into_pg());
+                        let attribute_val = attribute_val.map(|tuple| unsafe {
+                            PgHeapTuple::from_heap_tuple(attribute_tupledesc.clone(), tuple)
+                                .into_owned()
+                        });
+
+                        attribute_vals.push(attribute_val);
+                    } else {
+                        attribute_vals.push(None);
+                    }
+                }
+
+                attribute_vals.to_arrow_array(attribute_context)
             } else if attribute_context.is_crunchy_map {
-                to_arrow_array!(CrunchyMap, tuples, attribute_context)
+                to_primitive_arrow_array!(CrunchyMap, tuples, attribute_context)
             } else if attribute_context.is_geometry {
-                to_arrow_array!(Geometry, tuples, attribute_context)
+                to_primitive_arrow_array!(Geometry, tuples, attribute_context)
             } else {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                to_arrow_array!(FallbackToText, tuples, attribute_context)
+                to_primitive_arrow_array!(FallbackToText, tuples, attribute_context)
             }
         }
     }
@@ -273,57 +328,93 @@ fn to_arrow_list_array(
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
     match attribute_context.typoid {
-        FLOAT4OID => to_arrow_array!(pgrx::Array<f32>, tuples, attribute_context),
-        FLOAT8OID => to_arrow_array!(pgrx::Array<f64>, tuples, attribute_context),
-        INT2OID => to_arrow_array!(pgrx::Array<i16>, tuples, attribute_context),
-        INT4OID => to_arrow_array!(pgrx::Array<i32>, tuples, attribute_context),
-        INT8OID => to_arrow_array!(pgrx::Array<i64>, tuples, attribute_context),
+        FLOAT4OID => to_list_arrow_array!(pgrx::Array<f32>, tuples, attribute_context),
+        FLOAT8OID => to_list_arrow_array!(pgrx::Array<f64>, tuples, attribute_context),
+        INT2OID => to_list_arrow_array!(pgrx::Array<i16>, tuples, attribute_context),
+        INT4OID => to_list_arrow_array!(pgrx::Array<i32>, tuples, attribute_context),
+        INT8OID => to_list_arrow_array!(pgrx::Array<i64>, tuples, attribute_context),
         NUMERICOID => {
             let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
 
             if precision > MAX_DECIMAL_PRECISION {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                to_arrow_array!(pgrx::Array<FallbackToText>, tuples, attribute_context)
+                to_list_arrow_array!(pgrx::Array<FallbackToText>, tuples, attribute_context)
             } else {
-                to_arrow_array!(pgrx::Array<AnyNumeric>, tuples, attribute_context)
+                to_list_arrow_array!(pgrx::Array<AnyNumeric>, tuples, attribute_context)
             }
         }
-        BOOLOID => to_arrow_array!(pgrx::Array<bool>, tuples, attribute_context),
-        DATEOID => to_arrow_array!(pgrx::Array<Date>, tuples, attribute_context),
-        TIMEOID => to_arrow_array!(pgrx::Array<Time>, tuples, attribute_context),
+        BOOLOID => to_list_arrow_array!(pgrx::Array<bool>, tuples, attribute_context),
+        DATEOID => to_list_arrow_array!(pgrx::Array<Date>, tuples, attribute_context),
+        TIMEOID => to_list_arrow_array!(pgrx::Array<Time>, tuples, attribute_context),
         TIMETZOID => {
-            to_arrow_array!(pgrx::Array<TimeWithTimeZone>, tuples, attribute_context)
+            to_list_arrow_array!(pgrx::Array<TimeWithTimeZone>, tuples, attribute_context)
         }
         TIMESTAMPOID => {
-            to_arrow_array!(pgrx::Array<Timestamp>, tuples, attribute_context)
+            to_list_arrow_array!(pgrx::Array<Timestamp>, tuples, attribute_context)
         }
         TIMESTAMPTZOID => {
-            to_arrow_array!(
+            to_list_arrow_array!(
                 pgrx::Array<TimestampWithTimeZone>,
                 tuples,
                 attribute_context
             )
         }
-        CHAROID => to_arrow_array!(pgrx::Array<i8>, tuples, attribute_context),
-        TEXTOID => to_arrow_array!(pgrx::Array<String>, tuples, attribute_context),
-        BYTEAOID => to_arrow_array!(pgrx::Array<&[u8]>, tuples, attribute_context),
-        OIDOID => to_arrow_array!(pgrx::Array<Oid>, tuples, attribute_context),
+        CHAROID => to_list_arrow_array!(pgrx::Array<i8>, tuples, attribute_context),
+        TEXTOID => to_list_arrow_array!(pgrx::Array<String>, tuples, attribute_context),
+        BYTEAOID => to_list_arrow_array!(pgrx::Array<&[u8]>, tuples, attribute_context),
+        OIDOID => to_list_arrow_array!(pgrx::Array<Oid>, tuples, attribute_context),
         _ => {
             if attribute_context.is_composite {
-                to_arrow_array!(
-                    pgrx::Array<PgHeapTuple<AllocatedByRust>>,
-                    tuples,
-                    attribute_context
-                )
+                let mut attribute_vals = vec![];
+
+                let attribute_tupledesc =
+                    tuple_desc(attribute_context.typoid, attribute_context.typmod);
+
+                for tuple in tuples {
+                    pgrx::pg_sys::check_for_interrupts!();
+
+                    if let Some(tuple) = tuple {
+                        let attribute_val: Option<pgrx::Array<PgHeapTuple<AllocatedByRust>>> =
+                            tuple.get_by_name(&attribute_context.name).unwrap();
+
+                        if let Some(attribute_val) = attribute_val {
+                            let attribute_val = attribute_val
+                                .iter()
+                                .map(|tuple| tuple.map(|tuple| tuple.into_pg()))
+                                .collect::<Vec<_>>();
+
+                            let attribute_val = attribute_val
+                                .iter()
+                                .map(|tuple| {
+                                    tuple.map(|tuple| unsafe {
+                                        PgHeapTuple::from_heap_tuple(
+                                            attribute_tupledesc.clone(),
+                                            tuple,
+                                        )
+                                        .into_owned()
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+
+                            attribute_vals.push(Some(attribute_val));
+                        } else {
+                            attribute_vals.push(None);
+                        }
+                    } else {
+                        attribute_vals.push(None);
+                    }
+                }
+
+                attribute_vals.to_arrow_array(attribute_context)
             } else if attribute_context.is_crunchy_map {
-                to_arrow_array!(pgrx::Array<CrunchyMap>, tuples, attribute_context)
+                to_list_arrow_array!(pgrx::Array<CrunchyMap>, tuples, attribute_context)
             } else if attribute_context.is_geometry {
-                to_arrow_array!(pgrx::Array<Geometry>, tuples, attribute_context)
+                to_list_arrow_array!(pgrx::Array<Geometry>, tuples, attribute_context)
             } else {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                to_arrow_array!(pgrx::Array<FallbackToText>, tuples, attribute_context)
+                to_list_arrow_array!(pgrx::Array<FallbackToText>, tuples, attribute_context)
             }
         }
     }

@@ -44,17 +44,13 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 }
 
 // PgHeapTuple[]
-impl PgTypeToArrowArray<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>
-    for Vec<Option<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>>
+impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
+    for Vec<Option<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>>
 {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let tuples = self
-            .iter()
-            .flatten()
-            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
-            .collect::<Vec<_>>();
+        let tuples = self.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let struct_array = tuples.to_arrow_array(context);
 

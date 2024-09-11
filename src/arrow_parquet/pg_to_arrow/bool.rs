@@ -15,15 +15,11 @@ impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
 }
 
 // Bool[]
-impl<'a> PgTypeToArrowArray<pgrx::Array<'a, bool>> for Vec<Option<pgrx::Array<'a, bool>>> {
+impl<'a> PgTypeToArrowArray<bool> for Vec<Option<Vec<Option<bool>>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let pg_array = self
-            .into_iter()
-            .flatten()
-            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
-            .collect::<Vec<_>>();
+        let pg_array = self.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let bool_array = BooleanArray::from(pg_array);
 
