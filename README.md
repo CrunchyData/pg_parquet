@@ -15,6 +15,7 @@
   - [Inspect Parquet metadata](#inspect-parquet-metadata)
 - [Object Store Support](#object-store-support)
 - [Copy Options](#copy-options)
+- [Configuration](#configuration)
 - [Supported Types](#supported-types)
   - [Nested Types](#nested-types)
 
@@ -31,8 +32,14 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 # configure pgrx
 > cargo pgrx init --pg16 $(which pg_config)
 
+# append the extension to shared_preload_libraries in ~/.pgrx/data-16/postgresql.conf 
+> echo "shared_preload_libraries = 'pg_parquet'" >> ~/.pgrx/data-16/postgresql.conf
+
 # run cargo-pgrx to build and install the extension
 > cargo pgrx run
+
+# create the extension in the database
+psql> "CREATE EXTENSION pg_parquet;"
 ```
 
 ## Usage
@@ -103,6 +110,10 @@ You can set the following `AWS S3` environment variables properly to access to t
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<codec>]` extension. (This is the only option that `COPY FROM` command supports.),
 - `row_group_size <size>`: the number of rows in each row group while writing Parquet files. The default row group size is `100000`,
 - `codec <codec>`: the compression codec to use while writing Parquet files. The supported codecs are `uncompressed`, `snappy`, `gzip`, `brotli`, `lz4`, `lz4raw` and `zstd`. The default codec is `uncompressed`. If not specified, the codec is determined by the file extension.
+
+## Configuration
+There is currently only one GUC parameter to enable/disable the `pg_parquet`:
+- `pg_parquet.enable_copy_hooks`: you can set this parameter to `on` or `off` to enable or disable the `pg_parquet` extension. The default value is `on`.
 
 ## Supported Types
 `pg_parquet` has rich type support, including PostgreSQL's primitive, array, and composite types. Below is the table of the supported types in PostgreSQL and their corresponding Parquet types.
