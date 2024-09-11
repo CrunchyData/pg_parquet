@@ -11,27 +11,28 @@ use crate::{
 use super::PgToArrowAttributeContext;
 
 // Timestamp
-impl PgTypeToArrowArray<Timestamp> for Option<Timestamp> {
+impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
     fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
-        let timestamp = self.map(timestamp_to_i64);
-        let timestamp_array = TimestampMicrosecondArray::from(vec![timestamp]);
+        let timestamps = self
+            .into_iter()
+            .map(|timestamp| timestamp.map(timestamp_to_i64))
+            .collect::<Vec<_>>();
+        let timestamp_array = TimestampMicrosecondArray::from(timestamps);
         Arc::new(timestamp_array)
     }
 }
 
 // Timestamp[]
-impl PgTypeToArrowArray<pgrx::Array<'_, Timestamp>> for Option<pgrx::Array<'_, Timestamp>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, Timestamp>> for Vec<Option<pgrx::Array<'_, Timestamp>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let pg_array = if let Some(pg_array) = self {
-            pg_array
-                .iter()
-                .map(|timestamp| timestamp.map(timestamp_to_i64))
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
+        let pg_array = self
+            .into_iter()
+            .flatten()
+            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            .map(|timestamp| timestamp.map(timestamp_to_i64))
+            .collect::<Vec<_>>();
 
         let timestamp_array = TimestampMicrosecondArray::from(pg_array);
 

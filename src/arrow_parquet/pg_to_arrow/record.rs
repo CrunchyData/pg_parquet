@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use arrow::array::{new_empty_array, ArrayRef, ListArray, StructArray};
+use arrow::{
+    array::{ArrayRef, ListArray, StructArray},
+    buffer::{BooleanBuffer, NullBuffer},
+};
 use arrow_schema::DataType;
 use pgrx::{heap_tuple::PgHeapTuple, AllocatedByRust};
 
@@ -10,7 +13,7 @@ use super::{to_arrow_array, PgToArrowAttributeContext};
 
 // PgHeapTuple
 impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
-    for Option<PgHeapTuple<'_, AllocatedByRust>>
+    for Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>
 {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let struct_field = context.field.clone();
@@ -20,60 +23,47 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
             _ => panic!("Expected Struct field"),
         };
 
-        if let Some(tuple) = &self {
-            let mut attribute_arrow_arrays = vec![];
+        let tuples = self;
 
-            let attribute_contexts = context.attribute_contexts.as_ref().unwrap();
+        let mut struct_attribute_arrays = vec![];
 
-            for attribute_context in attribute_contexts {
-                let array = to_arrow_array(tuple, attribute_context);
-
-                attribute_arrow_arrays.push(array);
-            }
-
-            let struct_array = StructArray::new(fields.clone(), attribute_arrow_arrays, None);
-
-            Arc::new(struct_array)
-        } else {
-            Arc::new(StructArray::new_null(fields.clone(), 1))
+        for attribute_context in context.attribute_contexts.as_ref().unwrap() {
+            let attribute_array = to_arrow_array(&tuples, attribute_context);
+            struct_attribute_arrays.push(attribute_array);
         }
+
+        let is_null_buffer =
+            BooleanBuffer::collect_bool(tuples.len(), |idx| tuples.get(idx).unwrap().is_some());
+        let struct_null_buffer = NullBuffer::new(is_null_buffer);
+
+        let struct_array =
+            StructArray::new(fields, struct_attribute_arrays, Some(struct_null_buffer));
+
+        Arc::new(struct_array)
     }
 }
 
 // PgHeapTuple[]
 impl PgTypeToArrowArray<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>
-    for Option<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>
+    for Vec<Option<pgrx::Array<'_, PgHeapTuple<'_, AllocatedByRust>>>>
 {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let pg_array = if let Some(pg_array) = &self {
-            pg_array.iter().collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
-
-        // collect struct arrays
-        let mut struct_arrays = vec![];
-
-        for tuple in pg_array {
-            let struct_array = tuple.to_arrow_array(context);
-            struct_arrays.push(struct_array);
-        }
-
-        let struct_arrays = struct_arrays
+        let tuples = self
             .iter()
-            .map(|array| array.as_ref())
+            .flatten()
+            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
             .collect::<Vec<_>>();
 
-        let struct_array = if struct_arrays.is_empty() {
-            new_empty_array(context.field.data_type())
-        } else {
-            // concatenate struct arrays
-            arrow::compute::concat(&struct_arrays).unwrap()
-        };
+        let struct_array = tuples.to_arrow_array(context);
 
-        let list_array = ListArray::new(context.field.clone(), offsets, struct_array, Some(nulls));
+        let list_array = ListArray::new(
+            context.field.clone(),
+            offsets,
+            Arc::new(struct_array),
+            Some(nulls),
+        );
 
         Arc::new(list_array)
     }

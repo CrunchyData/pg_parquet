@@ -11,27 +11,28 @@ use crate::{
 use super::PgToArrowAttributeContext;
 
 // Date
-impl PgTypeToArrowArray<Date> for Option<Date> {
+impl PgTypeToArrowArray<Date> for Vec<Option<Date>> {
     fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
-        let date = self.map(date_to_i32);
-        let date_array = Date32Array::from(vec![date]);
+        let dates = self
+            .into_iter()
+            .map(|date| date.map(date_to_i32))
+            .collect::<Vec<_>>();
+        let date_array = Date32Array::from(dates);
         Arc::new(date_array)
     }
 }
 
 // Date[]
-impl PgTypeToArrowArray<pgrx::Array<'_, Date>> for Option<pgrx::Array<'_, Date>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, Date>> for Vec<Option<pgrx::Array<'_, Date>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let pg_array = if let Some(pg_array) = self {
-            pg_array
-                .iter()
-                .map(|date| date.map(date_to_i32))
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
+        let pg_array = self
+            .into_iter()
+            .flatten()
+            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            .map(|d| d.map(date_to_i32))
+            .collect::<Vec<_>>();
 
         let date_array = Date32Array::from(pg_array);
 

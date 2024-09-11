@@ -189,279 +189,141 @@ pub(crate) fn collect_attribute_contexts(
 }
 
 pub(crate) fn to_arrow_array(
-    tuple: &PgHeapTuple<AllocatedByRust>,
+    tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
     if attribute_context.is_array {
-        to_arrow_list_array(tuple, attribute_context)
+        to_arrow_list_array(tuples, attribute_context)
     } else {
-        to_arrow_primitive_array(tuple, attribute_context)
+        to_arrow_primitive_array(tuples, attribute_context)
     }
 }
 
+macro_rules! to_arrow_array {
+    ($pg_type:ty, $tuples:expr, $attribute_context:expr) => {{
+        let mut attribute_vals = vec![];
+
+        for tuple in $tuples {
+            pgrx::pg_sys::check_for_interrupts!();
+
+            if let Some(tuple) = tuple {
+                let attribute_val: Option<$pg_type> =
+                    tuple.get_by_name(&$attribute_context.name).unwrap();
+                attribute_vals.push(attribute_val);
+            } else {
+                attribute_vals.push(None);
+            }
+        }
+
+        return attribute_vals.to_arrow_array($attribute_context);
+    }};
+}
+
 fn to_arrow_primitive_array(
-    tuple: &PgHeapTuple<AllocatedByRust>,
+    tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
     match attribute_context.typoid {
-        FLOAT4OID => {
-            let attribute_val: Option<f32> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        FLOAT8OID => {
-            let attribute_val: Option<f64> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        INT2OID => {
-            let attribute_val: Option<i16> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        INT4OID => {
-            let attribute_val: Option<i32> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        INT8OID => {
-            let attribute_val: Option<i64> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
+        FLOAT4OID => to_arrow_array!(f32, tuples, attribute_context),
+        FLOAT8OID => to_arrow_array!(f64, tuples, attribute_context),
+        INT2OID => to_arrow_array!(i16, tuples, attribute_context),
+        INT4OID => to_arrow_array!(i32, tuples, attribute_context),
+        INT8OID => to_arrow_array!(i64, tuples, attribute_context),
         NUMERICOID => {
             let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
 
             if precision > MAX_DECIMAL_PRECISION {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                let attribute_val: Option<FallbackToText> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(FallbackToText, tuples, attribute_context)
             } else {
-                let attribute_val: Option<AnyNumeric> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(AnyNumeric, tuples, attribute_context)
             }
         }
-        BOOLOID => {
-            let attribute_val: Option<bool> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        DATEOID => {
-            let attribute_val: Option<Date> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        TIMEOID => {
-            let attribute_val: Option<Time> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        TIMETZOID => {
-            let attribute_val: Option<TimeWithTimeZone> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        TIMESTAMPOID => {
-            let attribute_val: Option<Timestamp> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
+        BOOLOID => to_arrow_array!(bool, tuples, attribute_context),
+        DATEOID => to_arrow_array!(Date, tuples, attribute_context),
+        TIMEOID => to_arrow_array!(Time, tuples, attribute_context),
+        TIMETZOID => to_arrow_array!(TimeWithTimeZone, tuples, attribute_context),
+        TIMESTAMPOID => to_arrow_array!(Timestamp, tuples, attribute_context),
         TIMESTAMPTZOID => {
-            let attribute_val: Option<TimestampWithTimeZone> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
+            to_arrow_array!(TimestampWithTimeZone, tuples, attribute_context)
         }
-        CHAROID => {
-            let attribute_val: Option<i8> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        TEXTOID => {
-            let attribute_val: Option<String> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        BYTEAOID => {
-            let attribute_val: Option<&[u8]> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        OIDOID => {
-            let attribute_val: Option<Oid> = tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
+        CHAROID => to_arrow_array!(i8, tuples, attribute_context),
+        TEXTOID => to_arrow_array!(String, tuples, attribute_context),
+        BYTEAOID => to_arrow_array!(&[u8], tuples, attribute_context),
+        OIDOID => to_arrow_array!(Oid, tuples, attribute_context),
         _ => {
             if attribute_context.is_composite {
-                let attribute_val: Option<PgHeapTuple<AllocatedByRust>> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(PgHeapTuple<AllocatedByRust>, tuples, attribute_context)
             } else if attribute_context.is_crunchy_map {
-                let attribute_val: Option<CrunchyMap> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(CrunchyMap, tuples, attribute_context)
             } else if attribute_context.is_geometry {
-                let attribute_val: Option<Geometry> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(Geometry, tuples, attribute_context)
             } else {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                let attribute_val: Option<FallbackToText> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(FallbackToText, tuples, attribute_context)
             }
         }
     }
 }
 
-pub(crate) fn to_arrow_list_array(
-    tuple: &PgHeapTuple<AllocatedByRust>,
+fn to_arrow_list_array(
+    tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
     match attribute_context.typoid {
-        FLOAT4OID => {
-            let attribute_val: Option<pgrx::Array<f32>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        FLOAT8OID => {
-            let attribute_val: Option<pgrx::Array<f64>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        INT2OID => {
-            let attribute_val: Option<pgrx::Array<i16>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        INT4OID => {
-            let attribute_val: Option<pgrx::Array<i32>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        INT8OID => {
-            let attribute_val: Option<pgrx::Array<i64>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
+        FLOAT4OID => to_arrow_array!(pgrx::Array<f32>, tuples, attribute_context),
+        FLOAT8OID => to_arrow_array!(pgrx::Array<f64>, tuples, attribute_context),
+        INT2OID => to_arrow_array!(pgrx::Array<i16>, tuples, attribute_context),
+        INT4OID => to_arrow_array!(pgrx::Array<i32>, tuples, attribute_context),
+        INT8OID => to_arrow_array!(pgrx::Array<i64>, tuples, attribute_context),
         NUMERICOID => {
-            let precision = attribute_context.precision.unwrap();
+            let precision = extract_precision_from_numeric_typmod(attribute_context.typmod);
 
             if precision > MAX_DECIMAL_PRECISION {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                let attribute_val: Option<pgrx::Array<FallbackToText>> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(pgrx::Array<FallbackToText>, tuples, attribute_context)
             } else {
-                let attribute_val: Option<pgrx::Array<AnyNumeric>> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(pgrx::Array<AnyNumeric>, tuples, attribute_context)
             }
         }
-        BOOLOID => {
-            let attribute_val: Option<pgrx::Array<bool>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        DATEOID => {
-            let attribute_val: Option<pgrx::Array<Date>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        TIMEOID => {
-            let attribute_val: Option<pgrx::Array<Time>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
+        BOOLOID => to_arrow_array!(pgrx::Array<bool>, tuples, attribute_context),
+        DATEOID => to_arrow_array!(pgrx::Array<Date>, tuples, attribute_context),
+        TIMEOID => to_arrow_array!(pgrx::Array<Time>, tuples, attribute_context),
         TIMETZOID => {
-            let attribute_val: Option<pgrx::Array<TimeWithTimeZone>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
+            to_arrow_array!(pgrx::Array<TimeWithTimeZone>, tuples, attribute_context)
         }
         TIMESTAMPOID => {
-            let attribute_val: Option<pgrx::Array<Timestamp>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
+            to_arrow_array!(pgrx::Array<Timestamp>, tuples, attribute_context)
         }
         TIMESTAMPTZOID => {
-            let attribute_val: Option<pgrx::Array<TimestampWithTimeZone>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
+            to_arrow_array!(
+                pgrx::Array<TimestampWithTimeZone>,
+                tuples,
+                attribute_context
+            )
         }
-        CHAROID => {
-            let attribute_val: Option<pgrx::Array<i8>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        TEXTOID => {
-            let attribute_val: Option<pgrx::Array<String>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        BYTEAOID => {
-            let attribute_val: Option<pgrx::Array<&[u8]>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
-        OIDOID => {
-            let attribute_val: Option<pgrx::Array<Oid>> =
-                tuple.get_by_name(&attribute_context.name).unwrap();
-
-            attribute_val.to_arrow_array(attribute_context)
-        }
+        CHAROID => to_arrow_array!(pgrx::Array<i8>, tuples, attribute_context),
+        TEXTOID => to_arrow_array!(pgrx::Array<String>, tuples, attribute_context),
+        BYTEAOID => to_arrow_array!(pgrx::Array<&[u8]>, tuples, attribute_context),
+        OIDOID => to_arrow_array!(pgrx::Array<Oid>, tuples, attribute_context),
         _ => {
             if attribute_context.is_composite {
-                let attribute_val: Option<pgrx::Array<PgHeapTuple<AllocatedByRust>>> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(
+                    pgrx::Array<PgHeapTuple<AllocatedByRust>>,
+                    tuples,
+                    attribute_context
+                )
             } else if attribute_context.is_crunchy_map {
-                let attribute_val: Option<pgrx::Array<CrunchyMap>> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(pgrx::Array<CrunchyMap>, tuples, attribute_context)
             } else if attribute_context.is_geometry {
-                let attribute_val: Option<pgrx::Array<Geometry>> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(pgrx::Array<Geometry>, tuples, attribute_context)
             } else {
                 reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
 
-                let attribute_val: Option<pgrx::Array<FallbackToText>> =
-                    tuple.get_by_name(&attribute_context.name).unwrap();
-
-                attribute_val.to_arrow_array(attribute_context)
+                to_arrow_array!(pgrx::Array<FallbackToText>, tuples, attribute_context)
             }
         }
     }

@@ -11,14 +11,17 @@ use crate::{
 use super::PgToArrowAttributeContext;
 
 // Numeric
-impl PgTypeToArrowArray<AnyNumeric> for Option<AnyNumeric> {
+impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let precision = context.precision.unwrap();
         let scale = context.scale.unwrap();
 
-        let numeric = self.map(numeric_to_i128);
+        let numerics = self
+            .into_iter()
+            .map(|numeric| numeric.map(numeric_to_i128))
+            .collect::<Vec<_>>();
 
-        let numeric_array = Decimal128Array::from(vec![numeric])
+        let numeric_array = Decimal128Array::from(numerics)
             .with_precision_and_scale(precision as _, scale as _)
             .unwrap();
 
@@ -27,18 +30,16 @@ impl PgTypeToArrowArray<AnyNumeric> for Option<AnyNumeric> {
 }
 
 // Numeric[]
-impl PgTypeToArrowArray<pgrx::Array<'_, AnyNumeric>> for Option<pgrx::Array<'_, AnyNumeric>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, AnyNumeric>> for Vec<Option<pgrx::Array<'_, AnyNumeric>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let pg_array = if let Some(pg_array) = self {
-            pg_array
-                .iter()
-                .map(|numeric| numeric.map(numeric_to_i128))
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
+        let pg_array = self
+            .into_iter()
+            .flatten()
+            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            .map(|numeric| numeric.map(numeric_to_i128))
+            .collect::<Vec<_>>();
 
         let precision = context.precision.unwrap();
         let scale = context.scale.unwrap();

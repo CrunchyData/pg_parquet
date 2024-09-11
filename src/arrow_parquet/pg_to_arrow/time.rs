@@ -11,27 +11,28 @@ use crate::{
 use super::PgToArrowAttributeContext;
 
 // Time
-impl PgTypeToArrowArray<Time> for Option<Time> {
+impl PgTypeToArrowArray<Time> for Vec<Option<Time>> {
     fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
-        let time = self.map(time_to_i64);
-        let time_array = Time64MicrosecondArray::from(vec![time]);
+        let times = self
+            .into_iter()
+            .map(|time| time.map(time_to_i64))
+            .collect::<Vec<_>>();
+        let time_array = Time64MicrosecondArray::from(times);
         Arc::new(time_array)
     }
 }
 
 // Time[]
-impl PgTypeToArrowArray<pgrx::Array<'_, Time>> for Option<pgrx::Array<'_, Time>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, Time>> for Vec<Option<pgrx::Array<'_, Time>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let pg_array = if let Some(pg_array) = self {
-            pg_array
-                .iter()
-                .map(|time| time.map(time_to_i64))
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
+        let pg_array = self
+            .into_iter()
+            .flatten()
+            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            .map(|time| time.map(time_to_i64))
+            .collect::<Vec<_>>();
 
         let time_array = Time64MicrosecondArray::from(pg_array);
 

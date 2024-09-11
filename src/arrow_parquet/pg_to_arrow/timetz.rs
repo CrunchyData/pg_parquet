@@ -11,29 +11,30 @@ use crate::{
 use super::PgToArrowAttributeContext;
 
 // TimeTz
-impl PgTypeToArrowArray<TimeWithTimeZone> for Option<TimeWithTimeZone> {
+impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
     fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
-        let timetz = self.map(timetz_to_i64);
-        let timetz_array = Time64MicrosecondArray::from(vec![timetz]);
+        let timetzs = self
+            .into_iter()
+            .map(|timetz| timetz.map(timetz_to_i64))
+            .collect::<Vec<_>>();
+        let timetz_array = Time64MicrosecondArray::from(timetzs);
         Arc::new(timetz_array)
     }
 }
 
 // TimeTz[]
 impl PgTypeToArrowArray<pgrx::Array<'_, TimeWithTimeZone>>
-    for Option<pgrx::Array<'_, TimeWithTimeZone>>
+    for Vec<Option<pgrx::Array<'_, TimeWithTimeZone>>>
 {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let pg_array = if let Some(pg_array) = self {
-            pg_array
-                .iter()
-                .map(|timetz| timetz.map(timetz_to_i64))
-                .collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
+        let pg_array = self
+            .into_iter()
+            .flatten()
+            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            .map(|timetz| timetz.map(timetz_to_i64))
+            .collect::<Vec<_>>();
 
         let timetz_array = Time64MicrosecondArray::from(pg_array);
 

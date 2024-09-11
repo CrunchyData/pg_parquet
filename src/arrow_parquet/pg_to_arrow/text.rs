@@ -7,23 +7,23 @@ use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgType
 use super::PgToArrowAttributeContext;
 
 // Text
-impl PgTypeToArrowArray<String> for Option<String> {
+impl PgTypeToArrowArray<String> for Vec<Option<String>> {
     fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
-        let text_array = StringArray::from(vec![self]);
+        let text_array = StringArray::from(self);
         Arc::new(text_array)
     }
 }
 
 // Text[]
-impl PgTypeToArrowArray<pgrx::Array<'_, String>> for Option<pgrx::Array<'_, String>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, String>> for Vec<Option<pgrx::Array<'_, String>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
-        let pg_array = if let Some(pg_array) = self {
-            pg_array.iter().collect::<Vec<_>>()
-        } else {
-            vec![]
-        };
+        let pg_array = self
+            .into_iter()
+            .flatten()
+            .flat_map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
 
         let text_array = StringArray::from(pg_array);
 
