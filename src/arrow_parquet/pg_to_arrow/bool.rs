@@ -19,11 +19,16 @@ impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
 }
 
 // Bool[]
-impl PgTypeToArrowArray<Vec<Option<bool>>> for Vec<Option<Vec<Option<bool>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, bool>> for Vec<Option<pgrx::Array<'_, bool>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
 
-        let bools = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let bools = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
         let bool_array = BooleanArray::from(bools);
 
         let list_field = context.field;

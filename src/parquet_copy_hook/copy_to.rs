@@ -1,17 +1,15 @@
 use pgrx::{
     is_a,
     pg_sys::{
-        self, makeRangeVar, pg_analyze_and_rewrite_fixedparams, pg_plan_query,
-        CommandTag_CMDTAG_COPY, CopyStmt, CreateNewPortal, DestReceiver, GetActiveSnapshot,
-        NodeTag::T_CopyStmt, PlannedStmt, PortalDefineQuery, PortalDrop, QueryCompletion, RawStmt,
-        CURSOR_OPT_PARALLEL_OK,
+        self, makeRangeVar, pg_analyze_and_rewrite_fixedparams, pg_plan_query, CommandTag,
+        CopyStmt, CreateNewPortal, DestReceiver, GetActiveSnapshot, NodeTag::T_CopyStmt,
+        PlannedStmt, PortalDefineQuery, PortalDrop, PortalRun, PortalStart, QueryCompletion,
+        RawStmt, CURSOR_OPT_PARALLEL_OK,
     },
     AllocatedByRust, PgBox, PgList, PgRelation,
 };
 
-use crate::parquet_copy_hook::copy_utils::{
-    copy_has_relation, copy_lock_mode, copy_relation_oid, PortalRun, PortalStart,
-};
+use crate::parquet_copy_hook::copy_utils::{copy_has_relation, copy_lock_mode, copy_relation_oid};
 
 pub(crate) fn execute_copy_to_with_dest_receiver(
     pstmt: &PgBox<pg_sys::PlannedStmt>,
@@ -66,7 +64,7 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
             portal.as_ptr(),
             std::ptr::null(),
             query_string.as_ptr(),
-            CommandTag_CMDTAG_COPY,
+            CommandTag::CMDTAG_COPY,
             plans.as_ptr(),
             std::ptr::null_mut(),
         );
@@ -76,7 +74,7 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
 
         // run portal
         let mut completion_tag = QueryCompletion {
-            commandTag: CommandTag_CMDTAG_COPY,
+            commandTag: CommandTag::CMDTAG_COPY,
             nprocessed: 0,
         };
 

@@ -102,8 +102,6 @@ fn collect_arrow_attribute_arrays_from_tupledesc(
 
     let mut tuple_attribute_arrow_arrays = vec![];
 
-    let mut tuples = tuples;
-
     for attribute in attributes {
         let attribute_name = attribute.name();
         let attribute_typoid = attribute.type_oid().value();
@@ -112,16 +110,14 @@ fn collect_arrow_attribute_arrays_from_tupledesc(
             .field_with_name(attribute_name)
             .expect("Expected attribute field");
 
-        let (field, array, tups) = collect_attribute_array_from_tuples(
-            tuples,
-            tupledesc.clone(),
+        let (field, array) = collect_attribute_array_from_tuples(
+            &tuples,
             attribute_name,
             attribute_typoid,
             attribute_typmod,
             Arc::new(attribute_field.clone()),
         );
 
-        tuples = tups;
         let tuple_attribute_arrow_array = (field, array);
 
         tuple_attribute_arrow_arrays.push(tuple_attribute_arrow_array);

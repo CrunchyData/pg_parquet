@@ -2,6 +2,7 @@ use std::borrow::BorrowMut;
 
 use once_cell::sync::OnceCell;
 use pgrx::{
+    datum::UnboxDatum,
     pg_sys::{
         self, fmgr_info, getTypeInputInfo, getTypeOutputInfo, AsPgCStr, FmgrInfo,
         InputFunctionCall, InvalidOid, Oid, OutputFunctionCall,
@@ -132,5 +133,26 @@ impl FromDatum for FallbackToText {
 
             Some(Self(att_val))
         }
+    }
+}
+
+unsafe impl UnboxDatum for FallbackToText {
+    type As<'src> = FallbackToText;
+
+    unsafe fn unbox<'src>(datum: pgrx::datum::Datum<'src>) -> Self::As<'src>
+    where
+        Self: 'src,
+    {
+        let att_cstr = OutputFunctionCall(
+            get_fallback_to_text_context().output_func.borrow_mut(),
+            datum.sans_lifetime(),
+        );
+
+        let att_val = std::ffi::CStr::from_ptr(att_cstr)
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        Self(att_val)
     }
 }

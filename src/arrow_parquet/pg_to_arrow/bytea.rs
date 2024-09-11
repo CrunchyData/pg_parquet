@@ -19,11 +19,19 @@ impl PgTypeToArrowArray<&[u8]> for Vec<Option<&[u8]>> {
 }
 
 // Bytea[]
-impl PgTypeToArrowArray<Vec<Option<&[u8]>>> for Vec<Option<Vec<Option<&[u8]>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, &[u8]>> for Vec<Option<pgrx::Array<'_, &[u8]>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .iter()
+            .map(|v| {
+                v.as_ref()
+                    .map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>();
 
-        let byteas = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let byteas = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
         let bytea_array = BinaryArray::from(byteas);
 
         let list_field = context.field;

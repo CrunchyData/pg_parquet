@@ -19,11 +19,16 @@ impl PgTypeToArrowArray<i16> for Vec<Option<i16>> {
 }
 
 // Int16[]
-impl PgTypeToArrowArray<Vec<Option<i16>>> for Vec<Option<Vec<Option<i16>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, i16>> for Vec<Option<pgrx::Array<'_, i16>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
 
-        let int16s = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let int16s = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let int16_array = Int16Array::from(int16s);
 

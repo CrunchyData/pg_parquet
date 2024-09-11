@@ -1,5 +1,5 @@
 use arrow::array::{Array, Time64MicrosecondArray};
-use pgrx::Time;
+use pgrx::datum::Time;
 
 use crate::type_compat::pg_arrow_type_conversions::i64_to_time;
 

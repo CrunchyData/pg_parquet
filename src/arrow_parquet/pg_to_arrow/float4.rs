@@ -19,11 +19,16 @@ impl PgTypeToArrowArray<f32> for Vec<Option<f32>> {
 }
 
 // Float32[]
-impl PgTypeToArrowArray<Vec<Option<f32>>> for Vec<Option<Vec<Option<f32>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, f32>> for Vec<Option<pgrx::Array<'_, f32>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
 
-        let floats = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let floats = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
         let float_array = Float32Array::from(floats);
 
         let list_field = context.field;

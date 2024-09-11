@@ -28,11 +28,16 @@ impl PgTypeToArrowArray<Geometry> for Vec<Option<Geometry>> {
 }
 
 // Geometry[]
-impl PgTypeToArrowArray<Vec<Option<Geometry>>> for Vec<Option<Vec<Option<Geometry>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, Geometry>> for Vec<Option<pgrx::Array<'_, Geometry>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
 
-        let wkbs = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let wkbs = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let wkbs = wkbs
             .iter()

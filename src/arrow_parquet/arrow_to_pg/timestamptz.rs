@@ -1,5 +1,5 @@
 use arrow::array::{Array, TimestampMicrosecondArray};
-use pgrx::TimestampWithTimeZone;
+use pgrx::datum::TimestampWithTimeZone;
 
 use crate::type_compat::pg_arrow_type_conversions::i64_to_timestamptz;
 

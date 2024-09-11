@@ -28,11 +28,18 @@ impl PgTypeToArrowArray<FallbackToText> for Vec<Option<FallbackToText>> {
 }
 
 // Text[] representation of any type
-impl PgTypeToArrowArray<Vec<Option<FallbackToText>>> for Vec<Option<Vec<Option<FallbackToText>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, FallbackToText>>
+    for Vec<Option<pgrx::Array<'_, FallbackToText>>>
+{
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
 
-        let texts = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let texts = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let texts = texts
             .into_iter()

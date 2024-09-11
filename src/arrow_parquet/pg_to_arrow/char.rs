@@ -25,11 +25,16 @@ impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
 }
 
 // "Char"[]
-impl PgTypeToArrowArray<Vec<Option<i8>>> for Vec<Option<Vec<Option<i8>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, i8>> for Vec<Option<pgrx::Array<'_, i8>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
 
-        let chars = self
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let chars = pg_array
             .into_iter()
             .flatten()
             .flatten()

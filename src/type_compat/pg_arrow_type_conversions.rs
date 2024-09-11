@@ -1,10 +1,8 @@
 use std::ffi::CStr;
 
 use pgrx::{
-    direct_function_call,
-    pg_sys::{self, TimeTzADT},
-    AnyNumeric, Date, Interval, IntoDatum, Time, TimeWithTimeZone, Timestamp,
-    TimestampWithTimeZone,
+    datum::{Date, Interval, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
+    direct_function_call, pg_sys, AnyNumeric, IntoDatum,
 };
 
 pub(crate) const MAX_DECIMAL_PRECISION: usize = 38;
@@ -48,7 +46,7 @@ pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> Option<i64> {
 }
 
 pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Option<Timestamp> {
-    let timestamp: Timestamp = i64_timestamp.into();
+    let timestamp: Timestamp = i64_timestamp.try_into().unwrap();
 
     // Duckdb epoch is Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
     let adjustment_interval = Interval::from_days(10957);
@@ -61,22 +59,6 @@ pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Option<Timestamp> {
     };
 
     Some(adjusted_timestamp)
-}
-
-pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64) -> Option<TimestampWithTimeZone> {
-    let timestamptz: TimestampWithTimeZone = i64_timestamptz.try_into().unwrap();
-
-    // Duckdb epoch is Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
-    let adjustment_interval = Interval::from_days(10957);
-    let adjusted_timestamptz: TimestampWithTimeZone = unsafe {
-        direct_function_call(
-            pg_sys::timestamptz_mi_interval,
-            &[timestamptz.into_datum(), adjustment_interval.into_datum()],
-        )
-        .unwrap()
-    };
-
-    Some(adjusted_timestamptz)
 }
 
 pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> Option<i64> {
@@ -102,6 +84,22 @@ pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> Option<i
     ))
 }
 
+pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64) -> Option<TimestampWithTimeZone> {
+    let timestamptz: TimestampWithTimeZone = i64_timestamptz.try_into().unwrap();
+
+    // Duckdb epoch is Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
+    let adjustment_interval = Interval::from_days(10957);
+    let adjusted_timestamptz: TimestampWithTimeZone = unsafe {
+        direct_function_call(
+            pg_sys::timestamptz_mi_interval,
+            &[timestamptz.into_datum(), adjustment_interval.into_datum()],
+        )
+        .unwrap()
+    };
+
+    Some(adjusted_timestamptz)
+}
+
 pub(crate) fn time_to_i64(time: Time) -> Option<i64> {
     let time_as_bytes: Vec<u8> =
         unsafe { direct_function_call(pg_sys::time_send, &[time.into_datum()]).unwrap() };
@@ -109,8 +107,7 @@ pub(crate) fn time_to_i64(time: Time) -> Option<i64> {
 }
 
 pub(crate) fn i64_to_time(i64_time: i64) -> Option<Time> {
-    let time: Time = i64_time.into();
-    Some(time)
+    Some(i64_time.try_into().unwrap())
 }
 
 pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> Option<i64> {
@@ -141,12 +138,7 @@ pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> Option<i64> {
 }
 
 pub(crate) fn i64_to_timetz(i64_timetz: i64) -> Option<TimeWithTimeZone> {
-    let adjusted_timetz = TimeTzADT {
-        time: i64_timetz,
-        zone: 0,
-    };
-    let adjusted_timetz: TimeWithTimeZone = adjusted_timetz.into();
-    Some(adjusted_timetz)
+    i64_to_time(i64_timetz).map(|time| time.into())
 }
 
 pub(crate) fn numeric_to_i128(numeric: AnyNumeric) -> Option<i128> {

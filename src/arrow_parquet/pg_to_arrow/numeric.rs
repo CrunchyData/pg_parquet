@@ -36,14 +36,19 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
 }
 
 // Numeric[]
-impl PgTypeToArrowArray<Vec<Option<AnyNumeric>>> for Vec<Option<Vec<Option<AnyNumeric>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, AnyNumeric>> for Vec<Option<pgrx::Array<'_, AnyNumeric>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
 
         let precision = extract_precision_from_numeric_typmod(context.typmod);
         let scale = extract_scale_from_numeric_typmod(context.typmod);
 
-        let numerics = self
+        let numerics = pg_array
             .into_iter()
             .flatten()
             .flatten()

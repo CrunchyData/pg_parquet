@@ -2,9 +2,9 @@ use pgrx::{
     ereport, pg_guard,
     pg_sys::{
         self, canonicalize_qual, coerce_to_boolean, eval_const_expressions, make_ands_explicit,
-        make_parsestate, AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc, List,
-        ParseExprKind_EXPR_KIND_COPY_WHERE, ParseNamespaceItem, ParseState, RowExclusiveLock,
-        TupleDescInitEntry,
+        make_parsestate, transformExpr, AccessShareLock, AsPgCStr, BeginCopyFrom, CopyFrom,
+        CopyStmt, CreateTemplateTupleDesc, EndCopyFrom, List, ParseExprKind, ParseNamespaceItem,
+        ParseState, RowExclusiveLock, TupleDescInitEntry,
     },
     void_mut_ptr, PgBox, PgList, PgLogLevel, PgRelation, PgSqlErrorCode, PgTupleDesc,
 };
@@ -12,10 +12,11 @@ use pgrx::{
 use crate::{
     arrow_parquet::parquet_reader::ParquetReaderContext,
     parquet_copy_hook::copy_utils::{
-        addNSItemToQuery, addRangeTableEntryForRelation, add_binary_format_option,
-        assign_expr_collations, copy_lock_mode, copy_relation_oid, copy_stmt_filename,
-        is_copy_from_parquet_stmt, transformExpr, BeginCopyFrom, CopyFrom, CopyFromState,
-        EndCopyFrom,
+        add_binary_format_option, copy_lock_mode, copy_relation_oid, copy_stmt_filename,
+        is_copy_from_parquet_stmt,
+    },
+    pgrx_missing_declerations::{
+        addNSItemToQuery, addRangeTableEntryForRelation, assign_expr_collations,
     },
 };
 
@@ -40,9 +41,9 @@ pub(crate) fn pop_parquet_reader_context(throw_error: bool) {
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             "parquet reader context stack is already empty"
         );
+    } else {
+        current_parquet_reader_context.take();
     }
-
-    current_parquet_reader_context.take();
 }
 
 pub(crate) fn push_parquet_reader_context(reader_ctx: ParquetReaderContext) {
@@ -83,7 +84,7 @@ pub(crate) fn execute_copy_from(
     pstmt: PgBox<pg_sys::PlannedStmt>,
     query_string: &core::ffi::CStr,
     query_env: PgBox<pg_sys::QueryEnvironment>,
-) -> i64 {
+) -> u64 {
     let rel_oid = copy_relation_oid(&pstmt);
     let lock_mode = copy_lock_mode(&pstmt);
     let relation = unsafe { PgRelation::with_lock(rel_oid, lock_mode) };
@@ -115,7 +116,7 @@ pub(crate) fn execute_copy_from(
 
         let copy_options = add_binary_format_option(&pstmt);
 
-        let copy_from_state: CopyFromState = BeginCopyFrom(
+        let copy_from_state = BeginCopyFrom(
             pstate.as_ptr(),
             relation.as_ptr(),
             where_clause.as_ptr(),
@@ -153,7 +154,7 @@ fn copy_from_transform_where_clause(
         transformExpr(
             pstate.as_ptr(),
             where_clause.as_ptr(),
-            ParseExprKind_EXPR_KIND_COPY_WHERE,
+            ParseExprKind::EXPR_KIND_COPY_WHERE,
         )
     };
 

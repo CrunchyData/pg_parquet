@@ -2,18 +2,15 @@ use std::{ffi::CString, ops::Deref};
 
 use once_cell::sync::OnceCell;
 use pgrx::{
+    datum::UnboxDatum,
     pg_sys::{
         self, makeString, Anum_pg_type_oid, AsPgCStr, GetSysCacheOid, InvalidOid, LookupFuncName,
-        Oid, OidFunctionCall1Coll, SysCacheIdentifier_TYPENAMENSP, BYTEAOID,
+        Oid, OidFunctionCall1Coll, SysCacheIdentifier::TYPENAMENSP, BYTEAOID,
     },
     FromDatum, IntoDatum, PgList,
 };
 
-#[allow(improper_ctypes)]
-extern "C" {
-    fn get_extension_oid(name: *const i8, missing_ok: bool) -> Oid;
-    fn get_extension_schema(ext_oid: Oid) -> Oid;
-}
+use crate::pgrx_missing_declerations::{get_extension_oid, get_extension_schema};
 
 // we need to reset the postgis context at each copy start
 static mut POSTGIS_CONTEXT: OnceCell<PostgisContext> = OnceCell::new();
@@ -116,7 +113,7 @@ impl PostgisContext {
 
         let postgis_geometry_typoid = unsafe {
             GetSysCacheOid(
-                SysCacheIdentifier_TYPENAMENSP as _,
+                TYPENAMENSP as _,
                 Anum_pg_type_oid as _,
                 postgis_geometry_type_name.into_datum().unwrap(),
                 postgis_ext_schema_oid.into_datum().unwrap(),
@@ -192,5 +189,25 @@ impl FromDatum for Geometry {
             let wkb = Vec::<u8>::from_datum(wkb_datum, false).unwrap();
             Some(Self(wkb))
         }
+    }
+}
+
+unsafe impl UnboxDatum for Geometry {
+    type As<'src> = Geometry;
+
+    unsafe fn unbox<'src>(datum: pgrx::datum::Datum<'src>) -> Self::As<'src>
+    where
+        Self: 'src,
+    {
+        let st_asbinary_func_oid = get_postgis_context()
+            .st_asbinary_funcoid
+            .expect("st_asbinary_funcoid");
+
+        let geom_datum = datum.sans_lifetime();
+
+        let wkb_datum = OidFunctionCall1Coll(st_asbinary_func_oid, InvalidOid, geom_datum);
+
+        let wkb = Vec::<u8>::from_datum(wkb_datum, false).unwrap();
+        Geometry(wkb)
     }
 }

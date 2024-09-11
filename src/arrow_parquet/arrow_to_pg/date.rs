@@ -1,5 +1,5 @@
 use arrow::array::{Array, Date32Array};
-use pgrx::Date;
+use pgrx::datum::Date;
 
 use crate::type_compat::pg_arrow_type_conversions::i32_to_date;
 

@@ -11,7 +11,7 @@ use crate::{
         arrow_utils::{arrow_array_offsets, arrow_map_offsets},
         pg_to_arrow::PgTypeToArrowArray,
     },
-    pgrx_utils::{domain_array_base_elem_typoid, tuple_desc},
+    pgrx_utils::domain_array_base_elem_typoid,
     type_compat::map::CrunchyMap,
 };
 
@@ -33,25 +33,30 @@ impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
 
         for map in self {
             if let Some(map) = map {
-                entries.push(map.entries);
+                entries.push(Some(map.entries));
             } else {
-                entries.push(vec![]);
+                entries.push(None);
             }
         }
 
-        let entries = entries.into_iter().flatten().map(Some).collect::<Vec<_>>();
+        let entries = entries
+            .iter()
+            .map(|v| {
+                v.as_ref()
+                    .map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>();
+
+        let entries = entries.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let entries_typoid = domain_array_base_elem_typoid(context.typoid);
-
-        let entries_tupledesc = tuple_desc(entries_typoid, -1);
 
         let entries_context = PgToArrowPerAttributeContext::new(
             context.name,
             entries_typoid,
             context.typmod,
             entries_field.clone(),
-        )
-        .with_tupledesc(entries_tupledesc);
+        );
 
         let (_, entries_array) = entries.to_arrow_array(entries_context);
 
@@ -70,11 +75,19 @@ impl<'b> PgTypeToArrowArray<CrunchyMap<'b>> for Vec<Option<CrunchyMap<'b>>> {
 }
 
 // crunchy_map.key_<type1>_val_<type2>[]
-impl<'b> PgTypeToArrowArray<Vec<Option<CrunchyMap<'b>>>>
-    for Vec<Option<Vec<Option<CrunchyMap<'b>>>>>
+impl<'b> PgTypeToArrowArray<pgrx::Array<'_, CrunchyMap<'b>>>
+    for Vec<Option<pgrx::Array<'_, CrunchyMap<'b>>>>
 {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (list_offsets, list_nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .iter()
+            .map(|v| {
+                v.as_ref()
+                    .map(|pg_array| pg_array.iter().collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>();
+
+        let (list_offsets, list_nulls) = arrow_array_offsets(&pg_array);
 
         let list_field = context.field;
 
@@ -83,7 +96,7 @@ impl<'b> PgTypeToArrowArray<Vec<Option<CrunchyMap<'b>>>>
             _ => panic!("Expected List field"),
         };
 
-        let maps = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let maps = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let (map_offsets, map_nulls) = arrow_map_offsets(&maps);
 
@@ -96,9 +109,9 @@ impl<'b> PgTypeToArrowArray<Vec<Option<CrunchyMap<'b>>>>
 
         for map in maps {
             if let Some(map) = map {
-                entries.push(map.entries);
+                entries.push(Some(map.entries));
             } else {
-                entries.push(vec![]);
+                entries.push(None);
             }
         }
 
@@ -106,15 +119,12 @@ impl<'b> PgTypeToArrowArray<Vec<Option<CrunchyMap<'b>>>>
 
         let entries_typoid = domain_array_base_elem_typoid(context.typoid);
 
-        let entries_tupledesc = tuple_desc(entries_typoid, -1);
-
         let entries_context = PgToArrowPerAttributeContext::new(
             context.name,
             entries_typoid,
             context.typmod,
             entries_field.clone(),
-        )
-        .with_tupledesc(entries_tupledesc);
+        );
 
         let (_, entries_array) = entries.to_arrow_array(entries_context);
 

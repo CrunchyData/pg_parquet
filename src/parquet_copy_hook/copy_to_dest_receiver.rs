@@ -1,5 +1,5 @@
 use pg_sys::{
-    AsPgCStr, BlessTupleDesc, CommandDest_DestCopyOut, CurrentMemoryContext, Datum, DestReceiver,
+    AsPgCStr, BlessTupleDesc, CommandDest, CurrentMemoryContext, Datum, DestReceiver,
     HeapTupleData, List, MemoryContext, TupleDesc, TupleTableSlot,
 };
 use pgrx::{prelude::*, PgList, PgMemoryContexts, PgTupleDesc};
@@ -9,7 +9,7 @@ use crate::{
         codec::ParquetCodecOption, parquet_writer::ParquetWriterContext,
         schema_visitor::parquet_schema_string_from_tupledesc,
     },
-    parquet_copy_hook::copy_utils::slot_getallattrs,
+    pgrx_missing_declerations::slot_getallattrs,
     pgrx_utils::collect_valid_attributes,
 };
 
@@ -35,7 +35,9 @@ pub(crate) fn peek_parquet_writer_context() -> Option<&'static mut ParquetWriter
 pub(crate) fn pop_parquet_writer_context(throw_error: bool) {
     let current_parquet_writer_context = unsafe { PARQUET_WRITER_CONTEXT_STACK.pop() };
 
-    if current_parquet_writer_context.is_none() {
+    if let Some(current_parquet_writer_context) = current_parquet_writer_context {
+        current_parquet_writer_context.close();
+    } else {
         let level = if throw_error {
             PgLogLevel::ERROR
         } else {
@@ -48,8 +50,6 @@ pub(crate) fn pop_parquet_writer_context(throw_error: bool) {
             "parquet writer context stack is already empty"
         );
     }
-
-    current_parquet_writer_context.unwrap().close();
 }
 
 pub(crate) fn push_parquet_writer_context(writer_ctx: ParquetWriterContext<'static>) {
@@ -220,7 +220,7 @@ pub extern "C" fn create_copy_to_parquet_dest_receiver(
     parquet_dest.dest.rStartup = Some(copy_startup);
     parquet_dest.dest.rShutdown = Some(copy_shutdown);
     parquet_dest.dest.rDestroy = Some(copy_destroy);
-    parquet_dest.dest.mydest = CommandDest_DestCopyOut;
+    parquet_dest.dest.mydest = CommandDest::DestCopyOut;
     parquet_dest.filename = filename;
     parquet_dest.tupledesc = std::ptr::null_mut();
     parquet_dest.natts = 0;

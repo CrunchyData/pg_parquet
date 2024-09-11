@@ -1,20 +1,18 @@
 use once_cell::sync::OnceCell;
 use pgrx::{
+    datum::UnboxDatum,
     pg_sys::{
         self, Anum_pg_type_oid, AsPgCStr, GetSysCacheOid, InvalidOid, Oid,
-        SysCacheIdentifier_TYPEOID,
+        SysCacheIdentifier::TYPEOID,
     },
     prelude::PgHeapTuple,
     AllocatedByRust, FromDatum, IntoDatum,
 };
 
-use crate::pgrx_utils::is_domain_of_array_type;
-
-#[allow(improper_ctypes)]
-extern "C" {
-    fn get_extension_oid(name: *const i8, missing_ok: bool) -> Oid;
-    fn get_extension_schema(ext_oid: Oid) -> Oid;
-}
+use crate::{
+    pgrx_missing_declerations::{get_extension_oid, get_extension_schema},
+    pgrx_utils::is_domain_of_array_type,
+};
 
 // we need to reset the crunchy_map context at each copy start
 static mut CRUNCHY_MAP_CONTEXT: OnceCell<CrunchyMapContext> = OnceCell::new();
@@ -53,7 +51,7 @@ pub(crate) fn is_crunchy_map_typoid(typoid: Oid) -> bool {
 
     let found_typoid = unsafe {
         GetSysCacheOid(
-            SysCacheIdentifier_TYPEOID as _,
+            TYPEOID as _,
             Anum_pg_type_oid as _,
             typoid.into_datum().unwrap(),
             crunchy_map_ext_schema_oid.into_datum().unwrap(),
@@ -115,7 +113,7 @@ impl CrunchyMapContext {
 
 // crunchy_map is a domain type over array of key-value pairs
 pub(crate) struct CrunchyMap<'a> {
-    pub(crate) entries: Vec<PgHeapTuple<'a, AllocatedByRust>>,
+    pub(crate) entries: pgrx::Array<'a, PgHeapTuple<'a, AllocatedByRust>>,
 }
 
 impl IntoDatum for CrunchyMap<'_> {
@@ -143,8 +141,27 @@ impl FromDatum for CrunchyMap<'_> {
         if is_null {
             None
         } else {
-            let entries = Vec::<PgHeapTuple<AllocatedByRust>>::from_datum(datum, is_null).unwrap();
+            let entries =
+                pgrx::Array::<PgHeapTuple<AllocatedByRust>>::from_datum(datum, false).unwrap();
+
             Some(CrunchyMap { entries })
         }
+    }
+}
+
+unsafe impl<'a> UnboxDatum for CrunchyMap<'a> {
+    type As<'src> = Self
+    where
+        Self: 'src;
+
+    unsafe fn unbox<'src>(datum: pgrx::datum::Datum<'src>) -> Self::As<'src>
+    where
+        Self: 'src,
+    {
+        let entries =
+            pgrx::Array::<PgHeapTuple<AllocatedByRust>>::from_datum(datum.sans_lifetime(), false)
+                .unwrap();
+
+        CrunchyMap { entries }
     }
 }

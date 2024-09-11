@@ -5,7 +5,7 @@ use arrow::{
     datatypes::FieldRef,
 };
 use arrow_schema::DataType;
-use pgrx::TimestampWithTimeZone;
+use pgrx::datum::TimestampWithTimeZone;
 
 use crate::{
     arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray},
@@ -29,13 +29,18 @@ impl PgTypeToArrowArray<TimestampWithTimeZone> for Vec<Option<TimestampWithTimeZ
 }
 
 // TimestampTz[]
-impl PgTypeToArrowArray<Vec<Option<TimestampWithTimeZone>>>
-    for Vec<Option<Vec<Option<TimestampWithTimeZone>>>>
+impl PgTypeToArrowArray<pgrx::Array<'_, TimestampWithTimeZone>>
+    for Vec<Option<pgrx::Array<'_, TimestampWithTimeZone>>>
 {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
 
-        let timestamptzs = self
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let timestamptzs = pg_array
             .into_iter()
             .flatten()
             .flatten()

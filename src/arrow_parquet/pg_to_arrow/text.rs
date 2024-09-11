@@ -19,11 +19,16 @@ impl PgTypeToArrowArray<String> for Vec<Option<String>> {
 }
 
 // Text[]
-impl PgTypeToArrowArray<Vec<Option<String>>> for Vec<Option<Vec<Option<String>>>> {
+impl PgTypeToArrowArray<pgrx::Array<'_, String>> for Vec<Option<pgrx::Array<'_, String>>> {
     fn to_arrow_array(self, context: PgToArrowPerAttributeContext) -> (FieldRef, ArrayRef) {
-        let (offsets, nulls) = arrow_array_offsets(&self);
+        let pg_array = self
+            .into_iter()
+            .map(|v| v.map(|pg_array| pg_array.iter().collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
 
-        let texts = self.into_iter().flatten().flatten().collect::<Vec<_>>();
+        let (offsets, nulls) = arrow_array_offsets(&pg_array);
+
+        let texts = pg_array.into_iter().flatten().flatten().collect::<Vec<_>>();
 
         let text_array = StringArray::from(texts);
 

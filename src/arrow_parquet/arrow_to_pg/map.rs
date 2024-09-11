@@ -1,5 +1,5 @@
 use arrow::array::{Array, MapArray, StructArray};
-use pgrx::{prelude::PgHeapTuple, AllocatedByRust};
+use pgrx::{prelude::PgHeapTuple, AllocatedByRust, FromDatum, IntoDatum};
 
 use crate::{
     pgrx_utils::{domain_array_base_elem_typoid, tuple_desc},
@@ -32,9 +32,14 @@ impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, CrunchyMap<'a>> for CrunchyMap
             >>::to_pg_type(entries_array, entries_context);
 
             if let Some(entries) = entries {
-                // entries cannot be null if the map is not null (arrow does not allow it)
-                let entries = entries.into_iter().flatten().collect();
-                Some(CrunchyMap { entries })
+                let entries_datum = entries.into_datum();
+
+                if let Some(entries_datum) = entries_datum {
+                    let entries = unsafe { pgrx::Array::from_datum(entries_datum, false).unwrap() };
+                    Some(CrunchyMap { entries })
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -67,9 +72,15 @@ impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, Vec<Option<CrunchyMap<'a>>>>
                 >>::to_pg_type(entries_array, entries_context.clone());
 
                 if let Some(entries) = entries {
-                    // entries cannot be null if the map is not null (arrow does not allow it)
-                    let entries = entries.into_iter().flatten().collect();
-                    maps.push(Some(CrunchyMap { entries }));
+                    let entries_datum = entries.into_datum();
+
+                    if let Some(entries_datum) = entries_datum {
+                        let entries =
+                            unsafe { pgrx::Array::from_datum(entries_datum, false).unwrap() };
+                        maps.push(Some(CrunchyMap { entries }))
+                    } else {
+                        maps.push(None);
+                    }
                 } else {
                     maps.push(None);
                 }

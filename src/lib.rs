@@ -1,9 +1,10 @@
-use parquet_copy_hook::hook::PARQUET_COPY_HOOK;
-use pgrx::{prelude::*, register_hook};
+use parquet_copy_hook::hook::init_parquet_copy_hook;
+use pgrx::prelude::*;
 
 mod arrow_parquet;
 mod parquet_copy_hook;
 mod parquet_udfs;
+mod pgrx_missing_declerations;
 mod pgrx_utils;
 mod type_compat;
 
@@ -18,7 +19,7 @@ pgrx::pg_module_magic!();
 #[allow(static_mut_refs)]
 #[pg_guard]
 pub extern "C" fn _PG_init() {
-    unsafe { register_hook(&mut PARQUET_COPY_HOOK) };
+    init_parquet_copy_hook();
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -33,8 +34,9 @@ mod tests {
     use crate::type_compat::geometry::Geometry;
     use pgrx::pg_sys::Oid;
     use pgrx::{
-        composite_type, pg_test, AnyNumeric, Date, FromDatum, IntoDatum, Spi, Time,
-        TimeWithTimeZone, Timestamp, TimestampWithTimeZone,
+        composite_type,
+        datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
+        pg_test, AnyNumeric, FromDatum, IntoDatum, Spi,
     };
     enum CopyOptionValue {
         StringOption(String),
@@ -526,11 +528,28 @@ mod tests {
 
     #[pg_test]
     fn test_bytea_array() {
-        let test_table = TestTable::<Vec<Option<Vec<u8>>>>::new("bytea[]".into());
+        let test_table = TestTable::<pgrx::Array<&[u8]>>::new("bytea[]".into());
         test_table.insert(
             "INSERT INTO test_expected (a) VALUES (array[E'\\\\x010203',E'\\\\x040506',null]::bytea[]), (null);",
         );
-        test_helper(test_table);
+        let TestResult { expected, result } = test_common(test_table);
+
+        for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
+            if expected.is_none() {
+                assert!(actual.is_none());
+            }
+
+            if expected.is_some() {
+                assert!(actual.is_some());
+
+                let expected = expected.unwrap();
+                let actual = actual.unwrap();
+
+                for (expected, actual) in expected.iter().zip(actual.iter()) {
+                    assert_eq!(expected, actual);
+                }
+            }
+        }
     }
 
     #[pg_test]
@@ -694,18 +713,7 @@ mod tests {
         let TestResult { expected, result } = test_common(test_table);
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(actual.is_none());
-            }
-
-            if expected.is_some() {
-                assert!(actual.is_some());
-
-                let expected = expected.unwrap();
-                let actual = actual.unwrap();
-
-                assert_eq!(expected.0, actual.0);
-            }
+            assert_eq!(expected, actual);
         }
     }
 
@@ -717,31 +725,7 @@ mod tests {
         let TestResult { expected, result } = test_common(test_table);
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(actual.is_none());
-            }
-
-            if expected.is_some() {
-                assert!(actual.is_some());
-
-                let expected = expected.unwrap();
-                let actual = actual.unwrap();
-
-                for (expected, actual) in expected.into_iter().zip(actual.into_iter()) {
-                    if expected.is_none() {
-                        assert!(actual.is_none());
-                    }
-
-                    if expected.is_some() {
-                        assert!(actual.is_some());
-
-                        let expected = expected.unwrap();
-                        let actual = actual.unwrap();
-
-                        assert_eq!(expected.0, actual.0);
-                    }
-                }
-            }
+            assert_eq!(expected, actual);
         }
     }
 
@@ -753,18 +737,7 @@ mod tests {
         let TestResult { expected, result } = test_common(test_table);
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(actual.is_none());
-            }
-
-            if expected.is_some() {
-                assert!(actual.is_some());
-
-                let expected = expected.unwrap();
-                let actual = actual.unwrap();
-
-                assert_eq!(expected.0, actual.0);
-            }
+            assert_eq!(expected, actual);
         }
     }
 
@@ -775,31 +748,7 @@ mod tests {
         let TestResult { expected, result } = test_common(test_table);
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(actual.is_none());
-            }
-
-            if expected.is_some() {
-                assert!(actual.is_some());
-
-                let expected = expected.unwrap();
-                let actual = actual.unwrap();
-
-                for (expected, actual) in expected.into_iter().zip(actual.into_iter()) {
-                    if expected.is_none() {
-                        assert!(actual.is_none());
-                    }
-
-                    if expected.is_some() {
-                        assert!(actual.is_some());
-
-                        let expected = expected.unwrap();
-                        let actual = actual.unwrap();
-
-                        assert_eq!(expected.0, actual.0);
-                    }
-                }
-            }
+            assert_eq!(expected, actual);
         }
     }
 
@@ -934,10 +883,10 @@ mod tests {
                 );
 
                 let expected_dogs = expected
-                    .get_by_name::<Vec<Option<composite_type!("dog")>>>("dogs")
+                    .get_by_name::<pgrx::Array<composite_type!("dog")>>("dogs")
                     .unwrap();
                 let actual_dogs = actual
-                    .get_by_name::<Vec<Option<composite_type!("dog")>>>("dogs")
+                    .get_by_name::<pgrx::Array<composite_type!("dog")>>("dogs")
                     .unwrap();
 
                 if expected_dogs.is_none() {
@@ -948,9 +897,7 @@ mod tests {
                     let expected_dogs = expected_dogs.unwrap();
                     let actual_dogs = actual_dogs.unwrap();
 
-                    for (expected_dog, actual_dog) in
-                        expected_dogs.into_iter().zip(actual_dogs.into_iter())
-                    {
+                    for (expected_dog, actual_dog) in expected_dogs.iter().zip(actual_dogs.iter()) {
                         if expected_dog.is_none() {
                             assert!(actual_dog.is_none());
                         } else if expected_dog.is_some() {
@@ -973,14 +920,28 @@ mod tests {
                 }
 
                 let expected_lucky_numbers = expected
-                    .get_by_name::<Vec<Option<i32>>>("lucky_numbers")
+                    .get_by_name::<pgrx::Array<i32>>("lucky_numbers")
                     .unwrap();
 
                 let actual_lucky_numbers = actual
-                    .get_by_name::<Vec<Option<i32>>>("lucky_numbers")
+                    .get_by_name::<pgrx::Array<i32>>("lucky_numbers")
                     .unwrap();
 
-                assert_eq!(expected_lucky_numbers, actual_lucky_numbers);
+                if expected_lucky_numbers.is_none() {
+                    assert!(actual_lucky_numbers.is_none());
+                } else if expected_lucky_numbers.is_some() {
+                    assert!(actual_lucky_numbers.is_some());
+
+                    let expected_lucky_numbers = expected_lucky_numbers.unwrap();
+                    let actual_lucky_numbers = actual_lucky_numbers.unwrap();
+
+                    for (expected_lucky_number, actual_lucky_number) in expected_lucky_numbers
+                        .into_iter()
+                        .zip(actual_lucky_numbers.into_iter())
+                    {
+                        assert_eq!(expected_lucky_number, actual_lucky_number);
+                    }
+                }
             }
         }
 
@@ -1074,6 +1035,18 @@ mod tests {
     #[ignore = "not yet implemented"]
     fn test_s3_object_store() {
         todo!("Implement tests for S3 object store");
+    }
+
+    #[pg_test]
+    #[ignore = "not yet implemented"]
+    fn test_crunchy_map() {
+        todo!("Implement tests for Crunchy Map");
+    }
+
+    #[pg_test]
+    #[ignore = "not yet implemented"]
+    fn test_crunchy_map_array() {
+        todo!("Implement tests for Crunchy Map array");
     }
 
     #[pg_test]

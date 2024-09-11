@@ -4,13 +4,13 @@ use arrow::array::{
     StructArray, Time64MicrosecondArray, TimestampMicrosecondArray, UInt32Array,
 };
 use pgrx::{
+    datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
     pg_sys::{
         Datum, Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID,
         INT8OID, NUMERICOID, OIDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID,
     },
     prelude::PgHeapTuple,
-    AllocatedByRust, AnyNumeric, Date, IntoDatum, PgTupleDesc, Time, TimeWithTimeZone, Timestamp,
-    TimestampWithTimeZone,
+    AllocatedByRust, AnyNumeric, IntoDatum, PgTupleDesc,
 };
 
 use crate::{
@@ -92,35 +92,22 @@ pub(crate) fn to_pg_datum(
     attribute_typoid: Oid,
     attribute_typmod: i32,
 ) -> Option<Datum> {
-    if is_composite_type(attribute_typoid) {
-        let attribute_tupledesc = tuple_desc(attribute_typoid, attribute_typmod);
-
-        let attribute_context =
-            ArrowToPgPerAttributeContext::new(attribute_typoid, attribute_typmod)
-                .with_tupledesc(attribute_tupledesc);
-
-        to_pg_composite_datum(attribute_array.into(), attribute_context)
-    } else if is_array_type(attribute_typoid) {
+    if is_array_type(attribute_typoid) {
         let attribute_element_typoid = array_element_typoid(attribute_typoid);
 
         let attribute_context =
             ArrowToPgPerAttributeContext::new(attribute_element_typoid, attribute_typmod);
 
         to_pg_array_datum(attribute_array.into(), attribute_context)
-    } else if is_crunchy_map_typoid(attribute_typoid) {
-        let attribute_context =
-            ArrowToPgPerAttributeContext::new(attribute_typoid, attribute_typmod);
-
-        to_pg_map_datum(attribute_array.into(), attribute_context)
     } else {
         let attribute_context =
             ArrowToPgPerAttributeContext::new(attribute_typoid, attribute_typmod);
 
-        to_pg_primitive_datum(attribute_array, attribute_context)
+        to_pg_nonarray_datum(attribute_array, attribute_context)
     }
 }
 
-fn to_pg_primitive_datum(
+fn to_pg_nonarray_datum(
     primitive_array: ArrayData,
     attribute_context: ArrowToPgPerAttributeContext,
 ) -> Option<Datum> {
@@ -233,10 +220,41 @@ fn to_pg_primitive_datum(
             val.into_datum()
         }
         _ => {
-            if is_postgis_geometry_typoid(attribute_context.typoid) {
-                to_pg_geometry_datum(primitive_array.into(), attribute_context)
+            if is_composite_type(attribute_context.typoid) {
+                let attribute_tupledesc =
+                    tuple_desc(attribute_context.typoid, attribute_context.typmod);
+                let attribute_context = attribute_context.with_tupledesc(attribute_tupledesc);
+
+                let val = <PgHeapTuple<AllocatedByRust> as ArrowArrayToPgType<
+                    StructArray,
+                    PgHeapTuple<AllocatedByRust>,
+                >>::to_pg_type(primitive_array.into(), attribute_context);
+
+                val.into_datum()
+            } else if is_crunchy_map_typoid(attribute_context.typoid) {
+                let val = <CrunchyMap as ArrowArrayToPgType<MapArray, CrunchyMap>>::to_pg_type(
+                    primitive_array.into(),
+                    attribute_context,
+                );
+
+                val.into_datum()
+            } else if is_postgis_geometry_typoid(attribute_context.typoid) {
+                let val = <Geometry as ArrowArrayToPgType<BinaryArray, Geometry>>::to_pg_type(
+                    primitive_array.into(),
+                    attribute_context,
+                );
+
+                val.into_datum()
             } else {
-                to_pg_fallback_to_text_datum(primitive_array.into(), attribute_context)
+                reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
+
+                let val =
+                    <FallbackToText as ArrowArrayToPgType<StringArray, FallbackToText>>::to_pg_type(
+                        primitive_array.into(),
+                        attribute_context,
+                    );
+
+                val.into_datum()
             }
         }
     }
@@ -372,120 +390,40 @@ fn to_pg_array_datum(
             if is_composite_type(attribute_context.typoid) {
                 let attribute_tupledesc =
                     tuple_desc(attribute_context.typoid, attribute_context.typmod);
+                let attribute_context = attribute_context.with_tupledesc(attribute_tupledesc);
 
-                to_pg_composite_array_datum(
-                    list_array.into(),
-                    attribute_context.with_tupledesc(attribute_tupledesc),
-                )
+                let val = <Vec<Option<PgHeapTuple<AllocatedByRust>>> as ArrowArrayToPgType<
+                    StructArray,
+                    Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+                >>::to_pg_type(list_array.into(), attribute_context);
+
+                val.into_datum()
             } else if is_crunchy_map_typoid(attribute_context.typoid) {
-                to_pg_map_array_datum(list_array.into(), attribute_context)
+                let val = <Vec<Option<CrunchyMap>> as ArrowArrayToPgType<
+                    MapArray,
+                    Vec<Option<CrunchyMap>>,
+                >>::to_pg_type(list_array.into(), attribute_context);
+
+                val.into_datum()
             } else if is_postgis_geometry_typoid(attribute_context.typoid) {
-                to_pg_geometry_array_datum(list_array.into(), attribute_context)
+                let val = <Vec<Option<Geometry>> as ArrowArrayToPgType<
+                    BinaryArray,
+                    Vec<Option<Geometry>>,
+                >>::to_pg_type(list_array.into(), attribute_context);
+
+                val.into_datum()
             } else {
-                to_pg_fallback_to_text_array_datum(list_array.into(), attribute_context)
+                reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
+
+                let val = <Vec<Option<FallbackToText>> as ArrowArrayToPgType<
+                    StringArray,
+                    Vec<Option<FallbackToText>>,
+                >>::to_pg_type(list_array.into(), attribute_context);
+
+                val.into_datum()
             }
         }
     }
-}
-
-fn to_pg_composite_datum(
-    struct_array: StructArray,
-    attribute_context: ArrowToPgPerAttributeContext,
-) -> Option<Datum> {
-    let val = <PgHeapTuple<AllocatedByRust> as ArrowArrayToPgType<
-        StructArray,
-        PgHeapTuple<AllocatedByRust>,
-    >>::to_pg_type(struct_array, attribute_context);
-
-    val.into_datum()
-}
-
-fn to_pg_composite_array_datum(
-    struct_array: StructArray,
-    attribute_context: ArrowToPgPerAttributeContext,
-) -> Option<Datum> {
-    let val = <Vec<Option<PgHeapTuple<AllocatedByRust>>> as ArrowArrayToPgType<
-        StructArray,
-        Vec<Option<PgHeapTuple<AllocatedByRust>>>,
-    >>::to_pg_type(struct_array, attribute_context);
-
-    val.into_datum()
-}
-
-fn to_pg_map_datum(
-    map_array: MapArray,
-    attribute_context: ArrowToPgPerAttributeContext,
-) -> Option<Datum> {
-    let val = <CrunchyMap as ArrowArrayToPgType<MapArray, CrunchyMap>>::to_pg_type(
-        map_array,
-        attribute_context,
-    );
-
-    val.into_datum()
-}
-
-fn to_pg_map_array_datum(
-    map_array: MapArray,
-    attribute_context: ArrowToPgPerAttributeContext,
-) -> Option<Datum> {
-    let val = <Vec<Option<CrunchyMap>> as ArrowArrayToPgType<MapArray, Vec<Option<CrunchyMap>>>>::to_pg_type(
-        map_array,
-        attribute_context,
-    );
-
-    val.into_datum()
-}
-
-fn to_pg_geometry_datum(
-    geometry_array: BinaryArray,
-    attribute_context: ArrowToPgPerAttributeContext,
-) -> Option<Datum> {
-    let val = <Geometry as ArrowArrayToPgType<BinaryArray, Geometry>>::to_pg_type(
-        geometry_array,
-        attribute_context,
-    );
-
-    val.into_datum()
-}
-
-fn to_pg_geometry_array_datum(
-    geometry_array: BinaryArray,
-    attribute_context: ArrowToPgPerAttributeContext,
-) -> Option<Datum> {
-    let val = <Vec<Option<Geometry>> as ArrowArrayToPgType<
-                    BinaryArray,
-                    Vec<Option<Geometry>>,
-                >>::to_pg_type(geometry_array, attribute_context);
-
-    val.into_datum()
-}
-
-fn to_pg_fallback_to_text_datum(
-    text_array: StringArray,
-    attribute_context: ArrowToPgPerAttributeContext,
-) -> Option<Datum> {
-    reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
-
-    let val = <FallbackToText as ArrowArrayToPgType<StringArray, FallbackToText>>::to_pg_type(
-        text_array,
-        attribute_context,
-    );
-
-    val.into_datum()
-}
-
-fn to_pg_fallback_to_text_array_datum(
-    text_array: StringArray,
-    attribute_context: ArrowToPgPerAttributeContext,
-) -> Option<Datum> {
-    reset_fallback_to_text_context(attribute_context.typoid, attribute_context.typmod);
-
-    let val = <Vec<Option<FallbackToText>> as ArrowArrayToPgType<
-        StringArray,
-        Vec<Option<FallbackToText>>,
-    >>::to_pg_type(text_array, attribute_context);
-
-    val.into_datum()
 }
 
 fn to_pg_numeric_datum(
