@@ -27,14 +27,14 @@ impl FromStr for UriFormat {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.starts_with("file://") {
+        if !s.contains("://") {
             return Ok(UriFormat::File);
         } else if s.starts_with("s3://") {
             return Ok(UriFormat::S3);
         }
 
         Err(format!(
-            "unsupported uri {}. Only URIs with prefix file:// or s3:// are supported.",
+            "unsupported uri {}. Only local files and URIs with s3:// prefix are supported.",
             s
         ))
     }
@@ -55,7 +55,6 @@ async fn object_store_with_location(uri: &str) -> (Arc<dyn ObjectStore>, Path) {
 
     match uri_format {
         UriFormat::File => {
-            let uri = uri.strip_prefix("file://").unwrap();
             let storage_container = Arc::new(LocalFileSystem::new());
             let location = Path::from_filesystem_path(uri).unwrap();
             (storage_container, location)
@@ -124,8 +123,6 @@ pub(crate) async fn parquet_writer_from_uri(
     let uri_format = UriFormat::from_str(uri).unwrap_or_else(|e| panic!("{}", e));
 
     if uri_format == UriFormat::File {
-        let uri = uri.strip_prefix("file://").unwrap();
-
         // we overwrite the local file if it exists
         std::fs::OpenOptions::new()
             .write(true)

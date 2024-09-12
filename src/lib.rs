@@ -115,7 +115,7 @@ mod tests {
                 CopyOptionValue::StringOption("parquet".to_string()),
             );
 
-            let uri = "file:///tmp/test.parquet".to_string();
+            let uri = "/tmp/test.parquet".to_string();
 
             let order_by_col = "a".to_string();
 
@@ -214,12 +214,8 @@ mod tests {
 
     impl<T: IntoDatum + FromDatum> Drop for TestTable<T> {
         fn drop(&mut self) {
-            if self.uri.starts_with("file://") {
-                let path = self.uri.replace("file://", "");
-
-                if std::path::Path::new(&path).exists() {
-                    std::fs::remove_file(path).unwrap();
-                }
+            if !self.uri.contains("://") && std::path::Path::new(&self.uri).exists() {
+                std::fs::remove_file(&self.uri).unwrap();
             }
         }
     }
@@ -931,7 +927,7 @@ mod tests {
 
         Spi::run("TRUNCATE dog_owners;").unwrap();
 
-        let uri = "file:///tmp/test.parquet";
+        let uri = "/tmp/test.parquet";
 
         let copy_to_query = format!(
             "COPY (SELECT owner FROM dog_owners) TO '{}' WITH (format parquet);",
@@ -1058,7 +1054,7 @@ mod tests {
 
         Spi::run("INSERT INTO test (c) VALUES ('test');").unwrap();
 
-        let uri = "file:///tmp/test.parquet";
+        let uri = "/tmp/test.parquet";
 
         let copy_to_query = format!(
             "COPY (SELECT * FROM test) TO '{}' WITH (format parquet);",
@@ -1133,9 +1129,10 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "unsupported uri invalid_uri")]
+    #[should_panic(expected = "unsupported uri gs://testbucket")]
     fn test_invalid_uri() {
-        let test_table = TestTable::<i32>::new("int4".into()).with_uri("invalid_uri".to_string());
+        let test_table =
+            TestTable::<i32>::new("int4".into()).with_uri("gs://testbucket".to_string());
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
@@ -1240,11 +1237,12 @@ mod tests {
         let create_table_command = "CREATE TABLE exports (id int, url text);";
         Spi::run(create_table_command).unwrap();
 
-        let insert_query = "insert into exports values ( 1, 'file:///tmp/test1.parquet'), ( 2, 'file:///tmp/test2.parquet');";
+        let insert_query =
+            "insert into exports values ( 1, '/tmp/test1.parquet'), ( 2, '/tmp/test2.parquet');";
         Spi::run(insert_query).unwrap();
 
         let nested_copy_command =
-            "COPY (SELECT copy_to(url) as copy_to_result FROM exports) TO 'file:///tmp/test3.parquet';";
+            "COPY (SELECT copy_to(url) as copy_to_result FROM exports) TO '/tmp/test3.parquet';";
         Spi::run(nested_copy_command).unwrap();
 
         let create_table_command = "
@@ -1254,8 +1252,8 @@ mod tests {
         Spi::run(create_table_command).unwrap();
 
         let copy_from_command = "
-            COPY file1_result FROM 'file:///tmp/test1.parquet';
-            COPY file3_result FROM 'file:///tmp/test3.parquet';
+            COPY file1_result FROM '/tmp/test1.parquet';
+            COPY file3_result FROM '/tmp/test3.parquet';
         ";
         Spi::run(copy_from_command).unwrap();
 
@@ -1296,11 +1294,12 @@ mod tests {
             create type person AS (id int, name text);
             create type worker AS (p person[], monthly_salary decimal(15,6));
             create table workers (id int, workers worker[], company text);
-            copy workers to 'file:///tmp/test.parquet';
+            copy workers to '/tmp/test.parquet';
         ";
         Spi::run(ddls).unwrap();
 
-        let parquet_schema_command = "select * from pgparquet.schema('file:///tmp/test.parquet') ORDER BY name, converted_type;";
+        let parquet_schema_command =
+            "select * from pgparquet.schema('/tmp/test.parquet') ORDER BY name, converted_type;";
 
         let result_schema = Spi::connect(|client| {
             let mut results = Vec::new();
@@ -1339,7 +1338,7 @@ mod tests {
 
         let expected_schema = vec![
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "arrow_schema".into(),
                 None,
                 None,
@@ -1352,7 +1351,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "company".into(),
                 Some("BYTE_ARRAY".into()),
                 None,
@@ -1365,7 +1364,7 @@ mod tests {
                 Some("STRING".into()),
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "id".into(),
                 Some("INT32".into()),
                 None,
@@ -1378,7 +1377,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "id".into(),
                 Some("INT32".into()),
                 None,
@@ -1391,7 +1390,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "list".into(),
                 None,
                 None,
@@ -1404,7 +1403,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "list".into(),
                 None,
                 None,
@@ -1417,7 +1416,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "monthly_salary".into(),
                 Some("INT64".into()),
                 None,
@@ -1430,7 +1429,7 @@ mod tests {
                 Some("DECIMAL".into()),
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "name".into(),
                 Some("BYTE_ARRAY".into()),
                 None,
@@ -1443,7 +1442,7 @@ mod tests {
                 Some("STRING".into()),
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "p".into(),
                 None,
                 None,
@@ -1456,7 +1455,7 @@ mod tests {
                 Some("LIST".into()),
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "p".into(),
                 None,
                 None,
@@ -1469,7 +1468,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "workers".into(),
                 None,
                 None,
@@ -1482,7 +1481,7 @@ mod tests {
                 Some("LIST".into()),
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 "workers".into(),
                 None,
                 None,
@@ -1512,14 +1511,13 @@ mod tests {
             create type worker AS (p person[], monthly_salary decimal(15,6));
             create table workers (id int, workers worker[], company text);
             insert into workers select i, null::worker[], null from generate_series(1, {}) i;
-            copy workers to 'file:///tmp/test.parquet' with (row_group_size {});
+            copy workers to '/tmp/test.parquet' with (row_group_size {});
         ",
             total_rows, row_group_size
         );
         Spi::run(&ddls).unwrap();
 
-        let parquet_metadata_command =
-            "select * from pgparquet.metadata('file:///tmp/test.parquet');";
+        let parquet_metadata_command = "select * from pgparquet.metadata('/tmp/test.parquet');";
 
         // Debug (assert_eq! requires) is only implemented for tuples up to 12 elements. This is why we split the
         // metadata into two parts.
@@ -1595,7 +1593,7 @@ mod tests {
 
         let expected_metadata_part1 = vec![
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 0,
                 5,
                 5,
@@ -1609,7 +1607,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 0,
                 5,
                 5,
@@ -1623,7 +1621,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 0,
                 5,
                 5,
@@ -1637,7 +1635,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 0,
                 5,
                 5,
@@ -1651,7 +1649,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 0,
                 5,
                 5,
@@ -1665,7 +1663,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 1,
                 5,
                 5,
@@ -1679,7 +1677,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 1,
                 5,
                 5,
@@ -1693,7 +1691,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 1,
                 5,
                 5,
@@ -1707,7 +1705,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 1,
                 5,
                 5,
@@ -1721,7 +1719,7 @@ mod tests {
                 None,
             ),
             (
-                "file:///tmp/test.parquet".into(),
+                "/tmp/test.parquet".into(),
                 1,
                 5,
                 5,
@@ -1867,14 +1865,14 @@ mod tests {
             create type worker AS (p person[], monthly_salary decimal(15,6));
             create table workers (id int, workers worker[], company text);
             insert into workers select i, null::worker[], null from generate_series(1, {}) i;
-            copy workers to 'file:///tmp/test.parquet' with (row_group_size {});
+            copy workers to '/tmp/test.parquet' with (row_group_size {});
         ",
             total_rows, row_group_size
         );
         Spi::run(&ddls).unwrap();
 
         let parquet_file_metadata_command =
-            "select * from pgparquet.file_metadata('file:///tmp/test.parquet');";
+            "select * from pgparquet.file_metadata('/tmp/test.parquet');";
 
         let result_file_metadata = Spi::connect(|client| {
             let mut results = Vec::new();
@@ -1902,7 +1900,7 @@ mod tests {
         });
 
         let expected_file_metadata = vec![(
-            "file:///tmp/test.parquet".into(),
+            "/tmp/test.parquet".into(),
             Some("pg_parquet".into()),
             total_rows,
             total_row_groups,
@@ -1920,12 +1918,12 @@ mod tests {
             create type person AS (id int, name text);
             create type worker AS (p person[], monthly_salary decimal(15,6));
             create table workers (id int, workers worker[], company text);
-            copy workers to 'file:///tmp/test.parquet';
+            copy workers to '/tmp/test.parquet';
         ";
         Spi::run(ddls).unwrap();
 
         let parquet_kv_metadata_command =
-            "select * from pgparquet.kv_metadata('file:///tmp/test.parquet');";
+            "select * from pgparquet.kv_metadata('/tmp/test.parquet');";
 
         let result_kv_metadata = Spi::connect(|client| {
             let mut results = Vec::new();
@@ -1945,7 +1943,7 @@ mod tests {
         });
 
         let expected_kv_metadata = vec![(
-            "file:///tmp/test.parquet".into(),
+            "/tmp/test.parquet".into(),
             vec![65, 82, 82, 79, 87, 58, 115, 99, 104, 101, 109, 97],
             Some(vec![
                 47, 47, 47, 47, 47, 43, 103, 68, 65, 65, 65, 81, 65, 65, 65, 65, 65, 65, 65, 75,
@@ -2025,10 +2023,13 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "relative path not allowed for COPY to file")]
+    #[should_panic(expected = "file size of 2 is less than footer")]
     fn test_disabled_hooks() {
         Spi::run("SET pg_parquet.enable_copy_hooks TO false;").unwrap();
-        Spi::run("COPY (SELECT 1 as id) TO 'file:///tmp/test.parquet'").unwrap();
+        Spi::run("COPY (SELECT 1 as id) TO '/tmp/test.parquet'").unwrap();
+
+        let parquet_metadata_command = "select * from pgparquet.metadata('/tmp/test.parquet');";
+        Spi::run(parquet_metadata_command).unwrap();
     }
 }
 

@@ -15,7 +15,7 @@ impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
 }
 
 // Bool[]
-impl<'a> PgTypeToArrowArray<bool> for Vec<Option<Vec<Option<bool>>>> {
+impl PgTypeToArrowArray<bool> for Vec<Option<Vec<Option<bool>>>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 

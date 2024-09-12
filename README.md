@@ -43,7 +43,7 @@ psql> "CREATE EXTENSION pg_parquet;"
 ```
 
 ## Usage
-There ara mainly 3 things that you can do with `pg_parquet`:
+There are mainly 3 things that you can do with `pg_parquet`:
 1. You can export Postgres tables/queries to Parquet files,
 2. You can ingest data from Parquet files to Postgres tables,
 3. You can inspect the schema and metadata of Parquet files.
@@ -75,13 +75,13 @@ insert into product_example values (
 );
 
 -- copy the table to a parquet file
-COPY product_example TO 'file:///tmp/product_example.parquet' (FORMAT 'parquet', CODEC 'gzip');
+COPY product_example TO '/tmp/product_example.parquet' (FORMAT 'parquet', CODEC 'gzip');
 
 -- show table
 SELECT * FROM product_example;
 
 -- copy the parquet file to the table
-COPY product_example FROM 'file:///tmp/product_example.parquet';
+COPY product_example FROM '/tmp/product_example.parquet';
 
 -- show table
 SELECT * FROM product_example;
@@ -98,7 +98,7 @@ You can call `SELECT * FROM pgparquet.file_metadata(<uri>)` to discover file lev
 You can call `SELECT * FROM pgparquet.kv_metadata(<uri>)` to query custom key-value metadata of the Parquet file at given uri.
 
 ## Object Store Support
-`pg_parquet` supports reading and writing Parquet files from/to `S3` object store. You can replace `file://`, as shown in above example, with `s3://` scheme to specify the location of the Parquet file in the `S3` object store.
+`pg_parquet` supports reading and writing Parquet files from/to `S3` object store. Only the uris with `s3://` scheme is supported.
 
 You can set the following `AWS S3` environment variables properly to access to the object store:
 - `AWS_ACCESS_KEY_ID`: the access key ID of the AWS account,
