@@ -1120,9 +1120,16 @@ mod tests {
     }
 
     #[pg_test]
-    #[ignore = "not yet implemented"]
     fn test_s3_object_store() {
-        todo!("Implement tests for S3 object store");
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_helper(test_table);
     }
 
     #[pg_test]
