@@ -12,3 +12,6 @@ Cargo.lock
 *.gcov
 *.lcov
 *.xml
+lcov.info
+.env
+playground.rs

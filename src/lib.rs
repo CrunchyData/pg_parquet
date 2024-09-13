@@ -1117,6 +1117,8 @@ mod tests {
 
     #[pg_test]
     fn test_s3_object_store() {
+        dotenvy::from_path("/tmp/.env").unwrap();
+
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
