@@ -1,6 +1,6 @@
 use crate::arrow_parquet::uri_utils::parquet_metadata_from_uri;
 
-use parquet::file::statistics::Statistics;
+use ::parquet::file::statistics::Statistics;
 use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
 
 #[pg_schema]

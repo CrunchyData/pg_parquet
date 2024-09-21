@@ -1,6 +1,6 @@
 use crate::arrow_parquet::uri_utils::parquet_schema_from_uri;
 
-use parquet::{
+use ::parquet::{
     format::{ConvertedType, FieldRepetitionType, LogicalType, Type},
     schema::types::to_thrift,
 };

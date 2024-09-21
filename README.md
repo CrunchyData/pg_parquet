@@ -75,7 +75,7 @@ insert into product_example values (
 );
 
 -- copy the table to a parquet file
-COPY product_example TO '/tmp/product_example.parquet' (FORMAT 'parquet', CODEC 'gzip');
+COPY product_example TO '/tmp/product_example.parquet' (FORMAT 'parquet', COMPRESSION 'gzip');
 
 -- show table
 SELECT * FROM product_example;
@@ -107,9 +107,9 @@ You can set the following `AWS S3` environment variables properly to access to t
 
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
-- `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<codec>]` extension. (This is the only option that `COPY FROM` command supports.),
+- `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<compression>]` extension. (This is the only option that `COPY FROM` command supports.),
 - `row_group_size <size>`: the number of rows in each row group while writing Parquet files. The default row group size is `100000`,
-- `codec <codec>`: the compression codec to use while writing Parquet files. The supported codecs are `uncompressed`, `snappy`, `gzip`, `brotli`, `lz4`, `lz4raw` and `zstd`. The default codec is `uncompressed`. If not specified, the codec is determined by the file extension.
+- `compression <compression>`: the compression format to use while writing Parquet files. The supported compression formats are `uncompressed`, `snappy`, `gzip`, `brotli`, `lz4`, `lz4raw` and `zstd`. The default compression format is `uncompressed`. If not specified, the compression format is determined by the file extension.
 
 ## Configuration
 There is currently only one GUC parameter to enable/disable the `pg_parquet`:

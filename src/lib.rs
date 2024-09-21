@@ -101,7 +101,7 @@ mod tests {
                 CopyOptionValue::StringOption("parquet".to_string()),
             );
             copy_to_options.insert(
-                "codec".to_string(),
+                "compression".to_string(),
                 CopyOptionValue::StringOption(ParquetCodecOption::Uncompressed.to_string()),
             );
             copy_to_options.insert(
@@ -1104,7 +1104,7 @@ mod tests {
         for codec in codecs {
             let mut copy_options = HashMap::new();
             copy_options.insert(
-                "codec".to_string(),
+                "compression".to_string(),
                 CopyOptionValue::StringOption(codec.to_string()),
             );
 
@@ -1196,11 +1196,11 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "invalid_codec is not a valid codec")]
+    #[should_panic(expected = "invalid_codec is not a valid compression format")]
     fn test_invalid_codec() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
-            "codec".to_string(),
+            "compression".to_string(),
             CopyOptionValue::StringOption("invalid_codec".to_string()),
         );
 
@@ -1924,8 +1924,7 @@ mod tests {
         ";
         Spi::run(ddls).unwrap();
 
-        let parquet_kv_metadata_command =
-            "select * from parquet.kv_metadata('/tmp/test.parquet');";
+        let parquet_kv_metadata_command = "select * from parquet.kv_metadata('/tmp/test.parquet');";
 
         let result_kv_metadata = Spi::connect(|client| {
             let mut results = Vec::new();

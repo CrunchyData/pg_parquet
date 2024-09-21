@@ -75,7 +75,7 @@ impl FromStr for ParquetCodecOption {
         } else if s == ParquetCodecOption::Zstd.to_string() {
             Ok(ParquetCodecOption::Zstd)
         } else {
-            Err(format!("uncregonized codec: {}", s))
+            Err(format!("uncregonized compression format: {}", s))
         }
     }
 }

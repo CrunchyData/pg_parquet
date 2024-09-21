@@ -41,7 +41,7 @@ pub(crate) fn is_parquet_file(copy_stmt: &PgBox<CopyStmt>) -> bool {
 }
 
 pub(crate) fn validate_copy_to_options(pstmt: &PgBox<pg_sys::PlannedStmt>) {
-    let allowed_options = ["format", "row_group_size", "codec"];
+    let allowed_options = ["format", "row_group_size", "compression"];
 
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
     let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
@@ -71,12 +71,12 @@ pub(crate) fn validate_copy_to_options(pstmt: &PgBox<pg_sys::PlannedStmt>) {
             }
         }
 
-        if key == "codec" {
+        if key == "compression" {
             let codec = unsafe { defGetString(option.as_ptr()) };
             let codec = unsafe { std::ffi::CStr::from_ptr(codec).to_str().unwrap() };
             if ParquetCodecOption::from_str(codec).is_err() {
                 panic!(
-                    "{} is not a valid codec. Supported codecs are {}",
+                    "{} is not a valid compression format. Supported compression formats are {}",
                     codec,
                     all_supported_codecs()
                         .into_iter()
@@ -150,7 +150,7 @@ pub(crate) fn copy_stmt_codec_option(
     for option in copy_options.iter_ptr() {
         let option = unsafe { PgBox::<DefElem>::from_pg(option) };
         let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
-        if key != "codec" {
+        if key != "compression" {
             continue;
         }
 
