@@ -1131,8 +1131,32 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "status: 404")]
+    fn test_s3_object_store_write_invalid_uri() {
+        let s3_uri = "s3://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
+
+        let copy_to_command = format!(
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}';",
+            s3_uri
+        );
+        Spi::run(copy_to_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "status: 404")]
+    fn test_s3_object_store_read_invalid_uri() {
+        let s3_uri = "s3://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
+
+        let create_table_command = "CREATE TABLE test_table (a int);";
+        Spi::run(create_table_command).unwrap();
+
+        let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri);
+        Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
     #[should_panic(expected = "unsupported uri gs://testbucket")]
-    fn test_invalid_uri() {
+    fn test_unsupported_uri() {
         let test_table =
             TestTable::<i32>::new("int4".into()).with_uri("gs://testbucket".to_string());
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");

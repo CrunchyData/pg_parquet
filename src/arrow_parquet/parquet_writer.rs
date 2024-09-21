@@ -96,7 +96,6 @@ impl<'a> ParquetWriterContext<'a> {
     }
 
     pub(crate) fn close(self) {
-        // should not panic as we can call from try catch block
-        self.runtime.block_on(self.parquet_writer.close()).ok();
+        self.runtime.block_on(self.parquet_writer.close()).unwrap();
     }
 }
