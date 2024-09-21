@@ -7,7 +7,7 @@ use parquet::{
 use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
 
 #[pg_schema]
-mod pgparquet {
+mod parquet {
     use super::*;
 
     #[pg_extern]

@@ -1301,7 +1301,7 @@ mod tests {
         Spi::run(ddls).unwrap();
 
         let parquet_schema_command =
-            "select * from pgparquet.schema('/tmp/test.parquet') ORDER BY name, converted_type;";
+            "select * from parquet.schema('/tmp/test.parquet') ORDER BY name, converted_type;";
 
         let result_schema = Spi::connect(|client| {
             let mut results = Vec::new();
@@ -1519,7 +1519,7 @@ mod tests {
         );
         Spi::run(&ddls).unwrap();
 
-        let parquet_metadata_command = "select * from pgparquet.metadata('/tmp/test.parquet');";
+        let parquet_metadata_command = "select * from parquet.metadata('/tmp/test.parquet');";
 
         // Debug (assert_eq! requires) is only implemented for tuples up to 12 elements. This is why we split the
         // metadata into two parts.
@@ -1874,7 +1874,7 @@ mod tests {
         Spi::run(&ddls).unwrap();
 
         let parquet_file_metadata_command =
-            "select * from pgparquet.file_metadata('/tmp/test.parquet');";
+            "select * from parquet.file_metadata('/tmp/test.parquet');";
 
         let result_file_metadata = Spi::connect(|client| {
             let mut results = Vec::new();
@@ -1925,7 +1925,7 @@ mod tests {
         Spi::run(ddls).unwrap();
 
         let parquet_kv_metadata_command =
-            "select * from pgparquet.kv_metadata('/tmp/test.parquet');";
+            "select * from parquet.kv_metadata('/tmp/test.parquet');";
 
         let result_kv_metadata = Spi::connect(|client| {
             let mut results = Vec::new();
@@ -2030,7 +2030,7 @@ mod tests {
         Spi::run("SET pg_parquet.enable_copy_hooks TO false;").unwrap();
         Spi::run("COPY (SELECT 1 as id) TO '/tmp/test.parquet'").unwrap();
 
-        let parquet_metadata_command = "select * from pgparquet.metadata('/tmp/test.parquet');";
+        let parquet_metadata_command = "select * from parquet.metadata('/tmp/test.parquet');";
         Spi::run(parquet_metadata_command).unwrap();
     }
 }

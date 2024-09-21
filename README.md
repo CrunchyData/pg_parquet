@@ -88,14 +88,14 @@ SELECT * FROM product_example;
 ```
 
 ### Inspect Parquet schema
-You can call `SELECT * FROM pgparquet.schema(<uri>)` to discover the schema of the Parquet file at given uri.
+You can call `SELECT * FROM parquet.schema(<uri>)` to discover the schema of the Parquet file at given uri.
 
 ### Inspect Parquet metadata
-You can call `SELECT * FROM pgparquet.metadata(<uri>)` to discover the detailed metadata of the Parquet file, such as column statistics, at given uri.
+You can call `SELECT * FROM parquet.metadata(<uri>)` to discover the detailed metadata of the Parquet file, such as column statistics, at given uri.
 
-You can call `SELECT * FROM pgparquet.file_metadata(<uri>)` to discover file level metadata of the Parquet file, such as format version, at given uri.
+You can call `SELECT * FROM parquet.file_metadata(<uri>)` to discover file level metadata of the Parquet file, such as format version, at given uri.
 
-You can call `SELECT * FROM pgparquet.kv_metadata(<uri>)` to query custom key-value metadata of the Parquet file at given uri.
+You can call `SELECT * FROM parquet.kv_metadata(<uri>)` to query custom key-value metadata of the Parquet file at given uri.
 
 ## Object Store Support
 `pg_parquet` supports reading and writing Parquet files from/to `S3` object store. Only the uris with `s3://` scheme is supported.
