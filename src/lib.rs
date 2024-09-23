@@ -2,6 +2,7 @@ use pgrx::prelude::*;
 
 mod pgrx_missing_declerations;
 mod pgrx_utils;
+mod type_compat;
 
 pgrx::pg_module_magic!();
 
