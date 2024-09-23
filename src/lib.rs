@@ -1,5 +1,6 @@
 use pgrx::prelude::*;
 
+mod pgrx_missing_declerations;
 mod pgrx_utils;
 
 pgrx::pg_module_magic!();
