@@ -1,0 +1,70 @@
+name: CI lints and tests
+on:
+  push:
+    branches:
+      - "*"
+
+concurrency: 
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.81.0
+          target: x86_64-unknown-linux-gnu
+          components: rustfmt, clippy
+
+      - name: Install cargo-llvm-cov for coverage report
+        run: cargo install --locked cargo-llvm-cov@0.6.12
+
+      - name: Install PostgreSQL
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+          sudo apt-get update
+          sudo apt-get install build-essential libreadline-dev zlib1g-dev flex bison libxml2-dev libxslt-dev libssl-dev libxml2-utils xsltproc ccache pkg-config
+          sudo apt-get -y install postgresql-16-postgis-3 libpq-dev postgresql-server-dev-16 postgresql-client-16
+
+      - name: Install and configure pgrx
+        run: |
+          cargo install --locked cargo-pgrx@0.12.4
+          cargo pgrx init --pg16 $(which pg_config)
+
+      - name: Format and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      # pgrx tests with runas argument ignores environment variables,
+      # so we need to create a .env file beforehand
+      - name: Create .env file
+        run: |
+          touch /tmp/.env
+          echo AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} >> /tmp/.env
+          echo AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} >> /tmp/.env
+          echo AWS_REGION=${{ secrets.AWS_REGION }} >> /tmp/.env
+          echo AWS_S3_TEST_BUCKET=${{ secrets.AWS_S3_TEST_BUCKET }} >> /tmp/.env
+
+      - name: Run tests
+        run: |
+          cargo llvm-cov test --lcov --output-path lcov.info
+        env:
+          RUST_TEST_THREADS: 1
+          CARGO_PGRX_TEST_RUNAS: postgres
+          CARGO_PGRX_TEST_PGDATA: /tmp/pgdata
+
+      - name: Upload coverage report to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          fail_ci_if_error: true
+          files: ./lcov.info
+          flags: pgrxtests
+          token: ${{ secrets.CODECOV_TOKEN }}
