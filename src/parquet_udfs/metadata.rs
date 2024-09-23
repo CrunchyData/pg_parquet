@@ -40,7 +40,9 @@ mod parquet {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
+            .unwrap_or_else(|e| {
+                panic!("Failed to create tokio runtime: {}", e);
+            });
 
         let parquet_metadata = runtime.block_on(parquet_metadata_from_uri(&uri));
 
@@ -141,7 +143,9 @@ mod parquet {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
+            .unwrap_or_else(|e| {
+                panic!("Failed to create tokio runtime: {}", e);
+            });
 
         let parquet_metadata = runtime.block_on(parquet_metadata_from_uri(&uri));
 
@@ -183,7 +187,9 @@ mod parquet {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
+            .unwrap_or_else(|e| {
+                panic!("Failed to create tokio runtime: {}", e);
+            });
 
         let parquet_metadata = runtime.block_on(parquet_metadata_from_uri(&uri));
         let kv_metadata = parquet_metadata.file_metadata().key_value_metadata();
@@ -192,7 +198,7 @@ mod parquet {
             return TableIterator::new(vec![]);
         }
 
-        let kv_metadata = kv_metadata.unwrap();
+        let kv_metadata = kv_metadata.expect("kv_metadata should be Some");
 
         let mut rows = vec![];
 

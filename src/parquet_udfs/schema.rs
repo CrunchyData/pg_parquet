@@ -33,12 +33,16 @@ mod parquet {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
+            .unwrap_or_else(|e| {
+                panic!("Failed to create tokio runtime: {}", e);
+            });
 
         let parquet_schema = runtime.block_on(parquet_schema_from_uri(&uri));
 
         let root_type = parquet_schema.root_schema();
-        let thrift_schema_elements = to_thrift(root_type).unwrap();
+        let thrift_schema_elements = to_thrift(root_type).unwrap_or_else(|e| {
+            panic!("Failed to convert schema to thrift: {}", e);
+        });
 
         let mut rows = vec![];
 

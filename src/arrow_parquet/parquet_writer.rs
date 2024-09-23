@@ -40,7 +40,7 @@ impl<'a> ParquetWriterContext<'a> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
+            .unwrap_or_else(|e| panic!("failed to create tokio runtime: {}", e));
 
         let writer_props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
@@ -75,8 +75,11 @@ impl<'a> ParquetWriterContext<'a> {
 
         self.runtime
             .block_on(parquet_writer.write(&record_batch))
-            .unwrap();
-        self.runtime.block_on(parquet_writer.flush()).unwrap();
+            .unwrap_or_else(|e| panic!("failed to write record batch: {}", e));
+
+        self.runtime
+            .block_on(parquet_writer.flush())
+            .unwrap_or_else(|e| panic!("failed to flush record batch: {}", e));
     }
 
     fn pg_tuples_to_record_batch(
@@ -96,6 +99,10 @@ impl<'a> ParquetWriterContext<'a> {
     }
 
     pub(crate) fn close(self) {
-        self.runtime.block_on(self.parquet_writer.close()).unwrap();
+        self.runtime
+            .block_on(self.parquet_writer.close())
+            .unwrap_or_else(|e| {
+                panic!("failed to close parquet writer: {}", e);
+            });
     }
 }

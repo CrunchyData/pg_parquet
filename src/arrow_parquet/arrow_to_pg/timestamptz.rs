@@ -16,8 +16,7 @@ impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, TimestampWithTimeZone>
         if arr.is_null(0) {
             None
         } else {
-            let val = arr.value(0);
-            i64_to_timestamptz(val)
+            Some(i64_to_timestamptz(arr.value(0)))
         }
     }
 }
@@ -32,7 +31,7 @@ impl ArrowArrayToPgType<'_, TimestampMicrosecondArray, Vec<Option<TimestampWithT
     ) -> Option<Vec<Option<TimestampWithTimeZone>>> {
         let mut vals = vec![];
         for val in arr.iter() {
-            let val = val.and_then(i64_to_timestamptz);
+            let val = val.map(i64_to_timestamptz);
             vals.push(val);
         }
         Some(vals)

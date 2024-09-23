@@ -1131,7 +1131,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "status: 404")]
+    #[should_panic(expected = "404 Not Found")]
     fn test_s3_object_store_write_invalid_uri() {
         let s3_uri = "s3://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
 
@@ -1143,7 +1143,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "status: 404")]
+    #[should_panic(expected = "404 Not Found")]
     fn test_s3_object_store_read_invalid_uri() {
         let s3_uri = "s3://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
 

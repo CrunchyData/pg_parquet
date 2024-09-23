@@ -99,7 +99,8 @@ fn copy_buffered_tuples(tupledesc: TupleDesc, tuples: *mut List) {
         panic!("parquet writer context is not found");
     }
 
-    let current_parquet_writer_context = current_parquet_writer_context.unwrap();
+    let current_parquet_writer_context =
+        current_parquet_writer_context.expect("current parquet writer context is not found");
     current_parquet_writer_context.write_new_row_group(tuples);
 }
 
@@ -114,7 +115,7 @@ extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tupledesc: 
 
     let filename = unsafe { std::ffi::CStr::from_ptr(parquet_dest.filename) }
         .to_str()
-        .unwrap();
+        .expect("filename is not a valid C string");
 
     let codec = parquet_dest.codec;
 
@@ -161,7 +162,8 @@ extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceiver) -
 
             let tupledesc = PgTupleDesc::from_pg(parquet_dest.tupledesc);
 
-            let heap_tuple = PgHeapTuple::from_datums(tupledesc, datums).unwrap();
+            let heap_tuple = PgHeapTuple::from_datums(tupledesc, datums)
+                .unwrap_or_else(|e| panic!("failed to create heap tuple from datums: {}", e));
 
             collect_tuple(&mut parquet_dest, heap_tuple);
 

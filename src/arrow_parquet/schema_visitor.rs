@@ -26,11 +26,12 @@ use crate::{
 
 pub(crate) fn parquet_schema_string_from_tupledesc(tupledesc: PgTupleDesc) -> String {
     let arrow_schema = parse_arrow_schema_from_tupledesc(tupledesc);
-    let parquet_schema = arrow_to_parquet_schema(&arrow_schema).unwrap();
+    let parquet_schema = arrow_to_parquet_schema(&arrow_schema)
+        .unwrap_or_else(|e| panic!("failed to convert arrow schema to parquet schema: {}", e));
 
     let mut buf = Vec::new();
     parquet::schema::printer::print_schema(&mut buf, &parquet_schema.root_schema_ptr());
-    String::from_utf8(buf).unwrap()
+    String::from_utf8(buf).unwrap_or_else(|e| panic!("failed to convert schema to string: {}", e))
 }
 
 pub(crate) fn parse_arrow_schema_from_tupledesc(tupledesc: PgTupleDesc) -> Schema {

@@ -15,9 +15,7 @@ impl ArrowArrayToPgType<'_, Decimal128Array, AnyNumeric> for AnyNumeric {
             None
         } else {
             let scale = context.scale.expect("Expected scale");
-            let val = arr.value(0);
-            let val = i128_to_numeric(val, scale).unwrap();
-            Some(val)
+            Some(i128_to_numeric(arr.value(0), scale))
         }
     }
 }
@@ -31,7 +29,7 @@ impl ArrowArrayToPgType<'_, Decimal128Array, Vec<Option<AnyNumeric>>> for Vec<Op
         let scale = context.scale.expect("Expected scale");
         let mut vals = vec![];
         for val in arr.iter() {
-            let val = val.and_then(|v| i128_to_numeric(v, scale));
+            let val = val.map(|v| i128_to_numeric(v, scale));
             vals.push(val);
         }
         Some(vals)

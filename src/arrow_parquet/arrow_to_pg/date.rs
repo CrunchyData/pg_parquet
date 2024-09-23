@@ -12,8 +12,7 @@ impl ArrowArrayToPgType<'_, Date32Array, Date> for Date {
             None
         } else {
             let val = arr.value(0);
-            let val = i32_to_date(val).unwrap();
-            Some(val)
+            Some(i32_to_date(val))
         }
     }
 }
@@ -26,7 +25,7 @@ impl ArrowArrayToPgType<'_, Date32Array, Vec<Option<Date>>> for Vec<Option<Date>
     ) -> Option<Vec<Option<Date>>> {
         let mut vals = vec![];
         for val in arr.iter() {
-            let val = val.and_then(i32_to_date);
+            let val = val.map(i32_to_date);
             vals.push(val);
         }
         Some(vals)

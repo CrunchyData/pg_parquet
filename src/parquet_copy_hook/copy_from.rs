@@ -60,7 +60,8 @@ extern "C" fn copy_received_parquet_data_to_buffer(
     if current_parquet_reader_context.is_none() {
         panic!("parquet reader context is not found");
     }
-    let current_parquet_reader_context = current_parquet_reader_context.unwrap();
+    let current_parquet_reader_context =
+        current_parquet_reader_context.expect("current parquet reader context is not found");
 
     let mut bytes_in_buffer = current_parquet_reader_context.bytes_in_buffer();
 
@@ -108,7 +109,7 @@ pub(crate) fn execute_copy_from(
     unsafe {
         let filename = std::ffi::CStr::from_ptr(filename)
             .to_str()
-            .unwrap()
+            .expect("filename is not a valid C string")
             .to_string();
 
         let parquet_reader_context = ParquetReaderContext::new(filename, tupledesc.as_ptr());
@@ -158,7 +159,7 @@ fn copy_from_transform_where_clause(
         )
     };
 
-    let construct = std::ffi::CString::new("WHERE").unwrap();
+    let construct = std::ffi::CString::new("WHERE").expect("CString::new failed");
     let where_clause =
         unsafe { coerce_to_boolean(pstate.as_ptr(), where_clause, construct.as_ptr()) };
 
@@ -189,7 +190,7 @@ fn copy_attnames(pstmt: &PgBox<pg_sys::PlannedStmt>) -> Vec<String> {
             .map(|ptr| {
                 { std::ffi::CStr::from_ptr(*ptr) }
                     .to_str()
-                    .unwrap()
+                    .expect("attnamelist is not a valid C string")
                     .to_string()
             })
             .collect::<Vec<_>>()

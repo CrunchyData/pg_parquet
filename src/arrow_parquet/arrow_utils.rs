@@ -9,10 +9,10 @@ pub(crate) fn arrow_map_offsets(maps: &Vec<Option<CrunchyMap>>) -> (OffsetBuffer
     for map in maps {
         if let Some(map) = map {
             let len = map.entries.len() as i32;
-            offsets.push(offsets.last().unwrap() + len);
+            offsets.push(offsets.last().expect("failed to get last map offset") + len);
             nulls.push(true);
         } else {
-            offsets.push(*offsets.last().unwrap());
+            offsets.push(*offsets.last().expect("failed to get last map offset"));
             nulls.push(false);
         }
     }
@@ -32,10 +32,10 @@ pub(crate) fn arrow_array_offsets<T>(
     for pg_array in pg_array {
         if let Some(pg_array) = pg_array {
             let len = pg_array.len() as i32;
-            offsets.push(offsets.last().unwrap() + len);
+            offsets.push(offsets.last().expect("failed to get last array offset") + len);
             nulls.push(true);
         } else {
-            offsets.push(*offsets.last().unwrap());
+            offsets.push(*offsets.last().expect("failed to get last array offset"));
             nulls.push(false);
         }
     }

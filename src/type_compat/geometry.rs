@@ -61,13 +61,19 @@ impl PostgisContext {
             postgis_ext_oid.map(|postgis_ext_oid| unsafe { get_extension_schema(postgis_ext_oid) });
 
         let st_asbinary_funcoid = postgis_ext_oid.map(|postgis_ext_oid| {
-            Self::st_asbinary_funcoid(postgis_ext_oid, postgis_ext_schema_oid.unwrap())
+            Self::st_asbinary_funcoid(
+                postgis_ext_oid,
+                postgis_ext_schema_oid.expect("expected postgis is created"),
+            )
         });
 
         let st_geomfromwkb_funcoid = postgis_ext_oid.map(|_| Self::st_geomfromwkb_funcoid());
 
         let geometry_typoid = postgis_ext_oid.map(|_| {
-            Self::geometry_typoid(postgis_ext_oid.unwrap(), postgis_ext_schema_oid.unwrap())
+            Self::geometry_typoid(
+                postgis_ext_oid.expect("expected postgis is created"),
+                postgis_ext_schema_oid.expect("expected postgis is created"),
+            )
         });
 
         Self {
@@ -109,7 +115,7 @@ impl PostgisContext {
             return InvalidOid;
         }
 
-        let postgis_geometry_type_name = CString::new("geometry").unwrap();
+        let postgis_geometry_type_name = CString::new("geometry").expect("CString::new failed");
 
         let postgis_geometry_typoid = unsafe {
             GetSysCacheOid(
@@ -153,7 +159,7 @@ impl IntoDatum for Geometry {
             .st_geomfromwkb_funcoid
             .expect("st_geomfromwkb_funcoid");
 
-        let wkb_datum = self.0.into_datum().unwrap();
+        let wkb_datum = self.0.into_datum().expect("cannot convert wkb to datum");
 
         Some(unsafe { OidFunctionCall1Coll(st_geomfromwkb_funcoid, InvalidOid, wkb_datum) })
     }
@@ -186,7 +192,7 @@ impl FromDatum for Geometry {
             let wkb_datum =
                 unsafe { OidFunctionCall1Coll(st_asbinary_func_oid, InvalidOid, geom_datum) };
 
-            let wkb = Vec::<u8>::from_datum(wkb_datum, false).unwrap();
+            let wkb = Vec::<u8>::from_datum(wkb_datum, false).expect("cannot convert datum to wkb");
             Some(Self(wkb))
         }
     }
@@ -207,7 +213,7 @@ unsafe impl UnboxDatum for Geometry {
 
         let wkb_datum = OidFunctionCall1Coll(st_asbinary_func_oid, InvalidOid, geom_datum);
 
-        let wkb = Vec::<u8>::from_datum(wkb_datum, false).unwrap();
+        let wkb = Vec::<u8>::from_datum(wkb_datum, false).expect("cannot convert datum to wkb");
         Geometry(wkb)
     }
 }

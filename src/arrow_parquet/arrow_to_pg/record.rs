@@ -29,13 +29,19 @@ impl<'a> ArrowArrayToPgType<'a, StructArray, PgHeapTuple<'a, AllocatedByRust>>
             let typoid = attribute.type_oid().value();
             let typmod = attribute.type_mod();
 
-            let column_data = arr.column_by_name(name).unwrap();
+            let column_data = arr
+                .column_by_name(name)
+                .unwrap_or_else(|| panic!("column {} not found", name));
 
             let datum = to_pg_datum(column_data.into_data(), typoid, typmod);
             datums.push(datum);
         }
 
-        Some(unsafe { PgHeapTuple::from_datums(tupledesc, datums) }.unwrap())
+        Some(
+            unsafe { PgHeapTuple::from_datums(tupledesc, datums) }.unwrap_or_else(|e| {
+                panic!("failed to create heap tuple: {}", e);
+            }),
+        )
     }
 }
 

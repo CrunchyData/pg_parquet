@@ -128,7 +128,7 @@ impl FromDatum for FallbackToText {
             );
             let att_val = std::ffi::CStr::from_ptr(att_cstr)
                 .to_str()
-                .unwrap()
+                .expect("fallback-to-text attribute value is not a valid C string")
                 .to_owned();
 
             Some(Self(att_val))
@@ -150,7 +150,7 @@ unsafe impl UnboxDatum for FallbackToText {
 
         let att_val = std::ffi::CStr::from_ptr(att_cstr)
             .to_str()
-            .unwrap()
+            .expect("fallback-to-text attribute value is not a valid C string")
             .to_owned();
 
         Self(att_val)

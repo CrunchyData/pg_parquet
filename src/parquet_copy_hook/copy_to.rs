@@ -43,7 +43,10 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
         );
 
         // plan rewritten query
-        let query = PgList::from_pg(rewritten_queries).pop().unwrap();
+        let query = PgList::from_pg(rewritten_queries)
+            .pop()
+            .expect("rewritten query is empty");
+
         let plan = pg_plan_query(
             query,
             std::ptr::null(),

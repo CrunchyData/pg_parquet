@@ -18,13 +18,21 @@ pub(crate) fn is_parquet_format(copy_stmt: &PgBox<CopyStmt>) -> bool {
     let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
     for option in copy_options.iter_ptr() {
         let option = unsafe { PgBox::<DefElem>::from_pg(option) };
-        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        let key = unsafe {
+            std::ffi::CStr::from_ptr(option.defname)
+                .to_str()
+                .unwrap_or_else(|e| panic!("copy option is not a valid CString: {}", e))
+        };
         if key != "format" {
             continue;
         }
 
         let format = unsafe { defGetString(option.as_ptr()) };
-        let format = unsafe { std::ffi::CStr::from_ptr(format).to_str().unwrap() };
+        let format = unsafe {
+            std::ffi::CStr::from_ptr(format)
+                .to_str()
+                .unwrap_or_else(|e| panic!("format option is not a valid CString: {}", e))
+        };
         return format == "parquet";
     }
 
@@ -35,7 +43,7 @@ pub(crate) fn is_parquet_file(copy_stmt: &PgBox<CopyStmt>) -> bool {
     let filename = unsafe {
         std::ffi::CStr::from_ptr(copy_stmt.filename)
             .to_str()
-            .unwrap()
+            .expect("filename is not a valid C string")
     };
     <ParquetCodecOption as FromPath>::try_from_path(filename).is_ok()
 }
@@ -48,14 +56,24 @@ pub(crate) fn validate_copy_to_options(pstmt: &PgBox<pg_sys::PlannedStmt>) {
 
     for option in copy_options.iter_ptr() {
         let option = unsafe { PgBox::<DefElem>::from_pg(option) };
-        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        let key = unsafe {
+            std::ffi::CStr::from_ptr(option.defname)
+                .to_str()
+                .expect("copy option is not a valid CString")
+        };
+
         if !allowed_options.contains(&key) {
             panic!("{} is not a valid option for COPY TO PARQUET", key);
         }
 
         if key == "format" {
             let format = unsafe { defGetString(option.as_ptr()) };
-            let format = unsafe { std::ffi::CStr::from_ptr(format).to_str().unwrap() };
+            let format = unsafe {
+                std::ffi::CStr::from_ptr(format)
+                    .to_str()
+                    .expect("copy option is not a valid CString")
+            };
+
             if format != "parquet" {
                 panic!(
                     "{} is not a valid format. Only parquet format is supported.",
@@ -73,7 +91,12 @@ pub(crate) fn validate_copy_to_options(pstmt: &PgBox<pg_sys::PlannedStmt>) {
 
         if key == "compression" {
             let codec = unsafe { defGetString(option.as_ptr()) };
-            let codec = unsafe { std::ffi::CStr::from_ptr(codec).to_str().unwrap() };
+            let codec = unsafe {
+                std::ffi::CStr::from_ptr(codec)
+                    .to_str()
+                    .expect("codec option is not a valid CString")
+            };
+
             if ParquetCodecOption::from_str(codec).is_err() {
                 panic!(
                     "{} is not a valid compression format. Supported compression formats are {}",
@@ -97,14 +120,23 @@ pub(crate) fn validate_copy_from_options(pstmt: &PgBox<pg_sys::PlannedStmt>) {
 
     for option in copy_options.iter_ptr() {
         let option = unsafe { PgBox::<DefElem>::from_pg(option) };
-        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        let key = unsafe {
+            std::ffi::CStr::from_ptr(option.defname)
+                .to_str()
+                .expect("copy option is not a valid CString")
+        };
+
         if !allowed_options.contains(&key) {
             panic!("{} is not a valid option for COPY FROM PARQUET", key);
         }
 
         if key == "format" {
             let format = unsafe { defGetString(option.as_ptr()) };
-            let format = unsafe { std::ffi::CStr::from_ptr(format).to_str().unwrap() };
+            let format = unsafe {
+                std::ffi::CStr::from_ptr(format)
+                    .to_str()
+                    .expect("format option is not a valid CString")
+            };
             if format != "parquet" {
                 panic!("{} is not a valid format for COPY FROM PARQUET", format);
             }
@@ -127,7 +159,12 @@ pub(crate) fn copy_stmt_row_group_size_option(pstmt: &PgBox<pg_sys::PlannedStmt>
     let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
     for option in copy_options.iter_ptr() {
         let option = unsafe { PgBox::<DefElem>::from_pg(option) };
-        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        let key = unsafe {
+            std::ffi::CStr::from_ptr(option.defname)
+                .to_str()
+                .expect("row_group_size option is not a valid CString")
+        };
+
         if key != "row_group_size" {
             continue;
         }
@@ -149,14 +186,22 @@ pub(crate) fn copy_stmt_codec_option(
     let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
     for option in copy_options.iter_ptr() {
         let option = unsafe { PgBox::<DefElem>::from_pg(option) };
-        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        let key = unsafe {
+            std::ffi::CStr::from_ptr(option.defname)
+                .to_str()
+                .expect("compression option is not a valid CString")
+        };
         if key != "compression" {
             continue;
         }
 
         let codec = unsafe { defGetString(option.as_ptr()) };
-        let codec = unsafe { std::ffi::CStr::from_ptr(codec).to_str().unwrap() };
-        let codec = ParquetCodecOption::from_str(codec).unwrap();
+        let codec = unsafe {
+            std::ffi::CStr::from_ptr(codec)
+                .to_str()
+                .expect("compression option is not a valid CString")
+        };
+        let codec = ParquetCodecOption::from_str(codec).unwrap_or_else(|e| panic!("{}", e));
         return Some(codec);
     }
 
@@ -168,7 +213,11 @@ pub(crate) fn copy_stmt_codec(pstmt: &PgBox<pg_sys::PlannedStmt>) -> ParquetCode
         codec
     } else {
         let copy_filename = copy_stmt_filename(pstmt);
-        let copy_filename = unsafe { std::ffi::CStr::from_ptr(copy_filename).to_str().unwrap() };
+        let copy_filename = unsafe {
+            std::ffi::CStr::from_ptr(copy_filename)
+                .to_str()
+                .expect("filename option is not a valid CString")
+        };
         FromPath::try_from_path(copy_filename).unwrap_or(ParquetCodecOption::Uncompressed)
     }
 }
@@ -176,20 +225,30 @@ pub(crate) fn copy_stmt_codec(pstmt: &PgBox<pg_sys::PlannedStmt>) -> ParquetCode
 pub(crate) fn add_binary_format_option(pstmt: &PgBox<pg_sys::PlannedStmt>) -> PgList<DefElem> {
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(pstmt.utilityStmt as _) };
 
-    let binary = std::ffi::CString::new("binary").unwrap();
+    let binary = std::ffi::CString::new("binary").expect("CString::new failed");
     let binary = unsafe { pg_sys::makeString(binary.into_raw() as _) };
 
     let mut found_parquet_format = false;
     let mut copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
     for option in copy_options.iter_ptr() {
         let mut option = unsafe { PgBox::<DefElem>::from_pg(option) };
-        let key = unsafe { std::ffi::CStr::from_ptr(option.defname).to_str().unwrap() };
+        let key = unsafe {
+            std::ffi::CStr::from_ptr(option.defname)
+                .to_str()
+                .expect("copy option is not a valid CString")
+        };
+
         if key != "format" {
             continue;
         }
 
         let format = unsafe { defGetString(option.as_ptr()) };
-        let format = unsafe { std::ffi::CStr::from_ptr(format).to_str().unwrap() };
+        let format = unsafe {
+            std::ffi::CStr::from_ptr(format)
+                .to_str()
+                .expect("format option is not a valid CString")
+        };
+
         if format == "parquet" {
             option.arg = binary as _;
             found_parquet_format = true;
@@ -197,7 +256,7 @@ pub(crate) fn add_binary_format_option(pstmt: &PgBox<pg_sys::PlannedStmt>) -> Pg
     }
 
     if !found_parquet_format {
-        let format = std::ffi::CString::new("format").unwrap();
+        let format = std::ffi::CString::new("format").expect("CString::new failed");
         let format = unsafe { pg_sys::makeDefElem(format.into_raw() as _, binary as _, -1) };
         copy_options.push(format);
     }
@@ -262,8 +321,9 @@ pub(crate) fn copy_relation_oid(pstmt: &PgBox<pg_sys::PlannedStmt>) -> Oid {
     let relname = unsafe {
         std::ffi::CStr::from_ptr(range_var.relname)
             .to_str()
-            .unwrap()
+            .expect("relation name is not a valid CString")
     };
-    let relation = PgRelation::open_with_name_and_share_lock(relname).unwrap();
+    let relation =
+        PgRelation::open_with_name_and_share_lock(relname).unwrap_or_else(|e| panic!("{}", e));
     relation.rd_id
 }

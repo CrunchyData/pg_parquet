@@ -35,7 +35,10 @@ impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, CrunchyMap<'a>> for CrunchyMap
                 let entries_datum = entries.into_datum();
 
                 if let Some(entries_datum) = entries_datum {
-                    let entries = unsafe { pgrx::Array::from_datum(entries_datum, false).unwrap() };
+                    let entries = unsafe {
+                        pgrx::Array::from_datum(entries_datum, false)
+                            .expect("map entries should be an array")
+                    };
                     Some(CrunchyMap { entries })
                 } else {
                     None
@@ -75,8 +78,10 @@ impl<'b, 'a: 'b> ArrowArrayToPgType<'b, MapArray, Vec<Option<CrunchyMap<'a>>>>
                     let entries_datum = entries.into_datum();
 
                     if let Some(entries_datum) = entries_datum {
-                        let entries =
-                            unsafe { pgrx::Array::from_datum(entries_datum, false).unwrap() };
+                        let entries = unsafe {
+                            pgrx::Array::from_datum(entries_datum, false)
+                                .expect("map entries should be an array")
+                        };
                         maps.push(Some(CrunchyMap { entries }))
                     } else {
                         maps.push(None);

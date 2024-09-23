@@ -47,7 +47,9 @@ pub(crate) fn is_crunchy_map_typoid(typoid: Oid) -> bool {
         return false;
     }
 
-    let crunchy_map_ext_schema_oid = crunchy_map_context.crunchy_map_ext_schema_oid.unwrap();
+    let crunchy_map_ext_schema_oid = crunchy_map_context
+        .crunchy_map_ext_schema_oid
+        .expect("expected crunchy_map is created");
 
     let found_typoid = unsafe {
         GetSysCacheOid(
@@ -141,8 +143,8 @@ impl FromDatum for CrunchyMap<'_> {
         if is_null {
             None
         } else {
-            let entries =
-                pgrx::Array::<PgHeapTuple<AllocatedByRust>>::from_datum(datum, false).unwrap();
+            let entries = pgrx::Array::<PgHeapTuple<AllocatedByRust>>::from_datum(datum, false)
+                .expect("cannot convert datum to crunchy_map entries");
 
             Some(CrunchyMap { entries })
         }
@@ -160,7 +162,7 @@ unsafe impl<'a> UnboxDatum for CrunchyMap<'a> {
     {
         let entries =
             pgrx::Array::<PgHeapTuple<AllocatedByRust>>::from_datum(datum.sans_lifetime(), false)
-                .unwrap();
+                .expect("cannot convert datum to crunchy_map entries");
 
         CrunchyMap { entries }
     }

@@ -41,7 +41,7 @@ impl FromStr for UriFormat {
 }
 
 fn parse_bucket_and_key(uri: &str) -> (String, String) {
-    let uri = uri.strip_prefix("s3://").unwrap();
+    let uri = uri.strip_prefix("s3://").expect("unexpected s3 uri");
 
     let mut parts = uri.splitn(2, '/');
     let bucket = parts.next().expect("bucket not found in uri");
@@ -56,7 +56,7 @@ async fn object_store_with_location(uri: &str) -> (Arc<dyn ObjectStore>, Path) {
     match uri_format {
         UriFormat::File => {
             let storage_container = Arc::new(LocalFileSystem::new());
-            let location = Path::from_filesystem_path(uri).unwrap();
+            let location = Path::from_filesystem_path(uri).unwrap_or_else(|e| panic!("{}", e));
             (storage_container, location)
         }
         UriFormat::S3 => {
@@ -65,7 +65,7 @@ async fn object_store_with_location(uri: &str) -> (Arc<dyn ObjectStore>, Path) {
                 AmazonS3Builder::from_env()
                     .with_bucket_name(bucket)
                     .build()
-                    .unwrap(),
+                    .unwrap_or_else(|e| panic!("{}", e)),
             );
             let location = Path::from(key);
             (storage_container, location)
@@ -78,19 +78,22 @@ pub(crate) async fn parquet_schema_from_uri(uri: &str) -> SchemaDescriptor {
 
     let arrow_schema = parquet_reader.schema();
 
-    arrow_to_parquet_schema(arrow_schema).unwrap()
+    arrow_to_parquet_schema(arrow_schema).unwrap_or_else(|e| panic!("{}", e))
 }
 
 pub(crate) async fn parquet_metadata_from_uri(uri: &str) -> Arc<ParquetMetaData> {
     let (parquet_object_store, location) = object_store_with_location(uri).await;
 
-    let object_store_meta = parquet_object_store.head(&location).await.unwrap();
+    let object_store_meta = parquet_object_store
+        .head(&location)
+        .await
+        .unwrap_or_else(|e| panic!("failed to get object store metadata for uri {}: {}", uri, e));
 
     let parquet_object_reader = ParquetObjectReader::new(parquet_object_store, object_store_meta);
 
     let builder = ParquetRecordBatchStreamBuilder::new(parquet_object_reader)
         .await
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{}", e));
 
     builder.metadata().to_owned()
 }
@@ -100,19 +103,23 @@ pub(crate) async fn parquet_reader_from_uri(
 ) -> ParquetRecordBatchStream<ParquetObjectReader> {
     let (parquet_object_store, location) = object_store_with_location(uri).await;
 
-    let object_store_meta = parquet_object_store.head(&location).await.unwrap();
+    let object_store_meta = parquet_object_store
+        .head(&location)
+        .await
+        .unwrap_or_else(|e| panic!("failed to get object store metadata for uri {}: {}", uri, e));
 
     let parquet_object_reader = ParquetObjectReader::new(parquet_object_store, object_store_meta);
 
     let builder = ParquetRecordBatchStreamBuilder::new(parquet_object_reader)
         .await
-        .unwrap();
+        .unwrap_or_else(|e| panic!("{}", e));
+
     pgrx::debug2!("Converted arrow schema is: {}", builder.schema());
 
     builder
         .with_batch_size(DEFAULT_ROW_GROUP_SIZE as usize)
         .build()
-        .unwrap()
+        .unwrap_or_else(|e| panic!("{}", e))
 }
 
 pub(crate) async fn parquet_writer_from_uri(
@@ -129,12 +136,13 @@ pub(crate) async fn parquet_writer_from_uri(
             .truncate(true)
             .create(true)
             .open(uri)
-            .unwrap();
+            .unwrap_or_else(|e| panic!("{}", e));
     }
 
     let (parquet_object_store, location) = object_store_with_location(uri).await;
 
     let parquet_object_writer = ParquetObjectWriter::new(parquet_object_store, location);
 
-    AsyncArrowWriter::try_new(parquet_object_writer, arrow_schema, Some(writer_props)).unwrap()
+    AsyncArrowWriter::try_new(parquet_object_writer, arrow_schema, Some(writer_props))
+        .unwrap_or_else(|e| panic!("failed to create parquet writer for uri {}: {}", uri, e))
 }

@@ -38,7 +38,7 @@ impl ParquetReaderContext {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .unwrap();
+            .unwrap_or_else(|e| panic!("failed to create tokio runtime: {}", e));
 
         let parquet_reader = runtime.block_on(parquet_reader_from_uri(&uri));
 
@@ -159,7 +159,8 @@ impl ParquetReaderContext {
         let record_batch = self.runtime.block_on(self.parquet_reader.next());
 
         if let Some(batch_result) = record_batch {
-            let record_batch = batch_result.unwrap();
+            let record_batch =
+                batch_result.unwrap_or_else(|e| panic!("failed to read record batch: {}", e));
 
             let num_rows = record_batch.num_rows();
 

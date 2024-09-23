@@ -13,8 +13,12 @@ use super::PgToArrowAttributeContext;
 // Numeric
 impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
-        let precision = context.precision.unwrap();
-        let scale = context.scale.unwrap();
+        let precision = context
+            .precision
+            .expect("precision is required in context for numeric");
+        let scale = context
+            .scale
+            .expect("scale is required in context for numeric");
 
         let numerics = self
             .into_iter()
@@ -23,7 +27,7 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
 
         let numeric_array = Decimal128Array::from(numerics)
             .with_precision_and_scale(precision as _, scale as _)
-            .unwrap();
+            .unwrap_or_else(|e| panic!("failed to create Decimal128Array: {}", e));
 
         Arc::new(numeric_array)
     }
@@ -41,12 +45,16 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<Vec<Option<AnyNumeric>>>> {
             .map(|numeric| numeric.map(numeric_to_i128))
             .collect::<Vec<_>>();
 
-        let precision = context.precision.unwrap();
-        let scale = context.scale.unwrap();
+        let precision = context
+            .precision
+            .expect("precision is required in context for numeric");
+        let scale = context
+            .scale
+            .expect("scale is required in context for numeric");
 
         let numeric_array = Decimal128Array::from(pg_array)
             .with_precision_and_scale(precision as _, scale as _)
-            .unwrap();
+            .unwrap_or_else(|e| panic!("failed to create Decimal128Array: {}", e));
 
         let list_array = ListArray::new(
             context.field.clone(),

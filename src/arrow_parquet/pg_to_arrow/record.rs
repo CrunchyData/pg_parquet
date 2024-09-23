@@ -27,13 +27,18 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 
         let mut struct_attribute_arrays = vec![];
 
-        for attribute_context in context.attribute_contexts.as_ref().unwrap() {
+        for attribute_context in context
+            .attribute_contexts
+            .as_ref()
+            .expect("each attribute of the tuple should have a context")
+        {
             let attribute_array = to_arrow_array(&tuples, attribute_context);
             struct_attribute_arrays.push(attribute_array);
         }
 
-        let is_null_buffer =
-            BooleanBuffer::collect_bool(tuples.len(), |idx| tuples.get(idx).unwrap().is_some());
+        let is_null_buffer = BooleanBuffer::collect_bool(tuples.len(), |idx| {
+            tuples.get(idx).expect("invalid tuple idx").is_some()
+        });
         let struct_null_buffer = NullBuffer::new(is_null_buffer);
 
         let struct_array =

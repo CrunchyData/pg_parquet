@@ -71,7 +71,7 @@ impl PgToArrowAttributeContext {
         let field = fields
             .iter()
             .find(|field| field.name() == &name)
-            .unwrap()
+            .unwrap_or_else(|| panic!("failed to find field {}", name))
             .clone();
 
         let is_array = is_array_type(typoid);
@@ -207,8 +207,10 @@ macro_rules! to_primitive_arrow_array {
             pgrx::pg_sys::check_for_interrupts!();
 
             if let Some(tuple) = tuple {
-                let attribute_val: Option<$pg_type> =
-                    tuple.get_by_name(&$attribute_context.name).unwrap();
+                let attribute_val: Option<$pg_type> = tuple
+                    .get_by_name(&$attribute_context.name)
+                    .unwrap_or_else(|e| panic!("failed to get attribute: {}", e));
+
                 attribute_vals.push(attribute_val);
             } else {
                 attribute_vals.push(None);
@@ -227,8 +229,10 @@ macro_rules! to_list_arrow_array {
             pgrx::pg_sys::check_for_interrupts!();
 
             if let Some(tuple) = tuple {
-                let attribute_val: Option<$pg_type> =
-                    tuple.get_by_name(&$attribute_context.name).unwrap();
+                let attribute_val: Option<$pg_type> = tuple
+                    .get_by_name(&$attribute_context.name)
+                    .unwrap_or_else(|e| panic!("failed to get attribute: {}", e));
+
                 attribute_vals.push(attribute_val);
             } else {
                 attribute_vals.push(None);
@@ -288,8 +292,9 @@ fn to_arrow_primitive_array(
                     pgrx::pg_sys::check_for_interrupts!();
 
                     if let Some(tuple) = tuple {
-                        let attribute_val: Option<PgHeapTuple<AllocatedByRust>> =
-                            tuple.get_by_name(&attribute_context.name).unwrap();
+                        let attribute_val: Option<PgHeapTuple<AllocatedByRust>> = tuple
+                            .get_by_name(&attribute_context.name)
+                            .unwrap_or_else(|e| panic!("failed to get attribute: {}", e));
 
                         // this trick is needed to avoid having a bunch of
                         // reference counted tupledesc which comes from pgrx's "get_by_name".
@@ -376,7 +381,9 @@ fn to_arrow_list_array(
 
                     if let Some(tuple) = tuple {
                         let attribute_val: Option<pgrx::Array<PgHeapTuple<AllocatedByRust>>> =
-                            tuple.get_by_name(&attribute_context.name).unwrap();
+                            tuple
+                                .get_by_name(&attribute_context.name)
+                                .unwrap_or_else(|e| panic!("failed to get attribute: {}", e));
 
                         if let Some(attribute_val) = attribute_val {
                             let attribute_val = attribute_val

@@ -13,7 +13,7 @@ pub(crate) fn collect_valid_attributes(
     let mut attributes_set = HashSet::<&str>::new();
 
     for i in 0..tupdesc.len() {
-        let attribute = tupdesc.get(i).unwrap();
+        let attribute = tupdesc.get(i).expect("failed to get attribute");
         if attribute.is_dropped() {
             continue;
         }
