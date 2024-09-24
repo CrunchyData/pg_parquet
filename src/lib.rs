@@ -1,5 +1,5 @@
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
-use pg_sys::MarkGUCPrefixReserved;
+use pg_sys::{AsPgCStr, MarkGUCPrefixReserved};
 use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry};
 
 mod arrow_parquet;
@@ -17,7 +17,8 @@ pub use crate::parquet_copy_hook::copy_to_dest_receiver::create_copy_to_parquet_
 
 pgrx::pg_module_magic!();
 
-#[allow(static_mut_refs)]
+extension_sql_file!("../sql/bootstrap.sql", name = "role_setup", bootstrap);
+
 #[pg_guard]
 pub extern "C" fn _PG_init() {
     GucRegistry::define_bool_guc(
@@ -29,7 +30,7 @@ pub extern "C" fn _PG_init() {
         GucFlags::default(),
     );
 
-    unsafe { MarkGUCPrefixReserved("pg_parquet".as_ptr() as _) };
+    unsafe { MarkGUCPrefixReserved("pg_parquet".as_pg_cstr()) };
 
     init_parquet_copy_hook();
 }
@@ -1173,6 +1174,94 @@ mod tests {
 
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
+    }
+
+    #[pg_test]
+    #[should_panic(
+        expected = "current user does not have the role, named parquet_object_store_read"
+    )]
+    fn test_s3_no_read_access() {
+        // create regular user
+        Spi::run("CREATE USER regular_user;").unwrap();
+
+        // grant write access to the regular user but not read access
+        Spi::run("GRANT parquet_object_store_write TO regular_user;").unwrap();
+
+        // grant all permissions for public schema
+        Spi::run("GRANT ALL ON SCHEMA public TO regular_user;").unwrap();
+
+        // set the current user to the regular user
+        Spi::run("SET SESSION AUTHORIZATION regular_user;").unwrap();
+
+        dotenvy::from_path("/tmp/.env").unwrap();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri.clone());
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+
+        // can write to s3
+        let copy_to_command = format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{}';",
+            s3_uri
+        );
+        Spi::run(copy_to_command.as_str()).unwrap();
+
+        // cannot read from s3
+        let copy_from_command = format!("COPY test_expected FROM '{}';", s3_uri);
+        Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(
+        expected = "current user does not have the role, named parquet_object_store_write"
+    )]
+    fn test_s3_no_write_access() {
+        // create regular user
+        Spi::run("CREATE USER regular_user;").unwrap();
+
+        // grant read access to the regular user but not write access
+        Spi::run("GRANT parquet_object_store_read TO regular_user;").unwrap();
+
+        // grant usage access to parquet schema and its udfs
+        Spi::run("GRANT USAGE ON SCHEMA parquet TO regular_user;").unwrap();
+        Spi::run("GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA parquet TO regular_user;").unwrap();
+
+        // grant all permissions for public schema
+        Spi::run("GRANT ALL ON SCHEMA public TO regular_user;").unwrap();
+
+        // set the current user to the regular user
+        Spi::run("SET SESSION AUTHORIZATION regular_user;").unwrap();
+
+        dotenvy::from_path("/tmp/.env").unwrap();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        // can call metadata udf (requires read access)
+        let metadata_query = format!("SELECT parquet.metadata('{}');", s3_uri.clone());
+        Spi::run(&metadata_query).unwrap();
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri.clone());
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+
+        // can read from s3
+        let copy_from_command = format!("COPY test_expected FROM '{}';", s3_uri);
+        Spi::run(copy_from_command.as_str()).unwrap();
+
+        // cannot write to s3
+        let copy_to_command = format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{}';",
+            s3_uri
+        );
+        Spi::run(copy_to_command.as_str()).unwrap();
     }
 
     #[pg_test]

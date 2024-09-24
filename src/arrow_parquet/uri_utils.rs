@@ -21,8 +21,12 @@ use parquet::{
     },
     file::properties::WriterProperties,
 };
+use pgrx::pg_sys::AsPgCStr;
 
 use crate::arrow_parquet::parquet_writer::DEFAULT_ROW_GROUP_SIZE;
+
+const PARQUET_OBJECT_STORE_READ_ROLE: &str = "parquet_object_store_read";
+const PARQUET_OBJECT_STORE_WRITE_ROLE: &str = "parquet_object_store_write";
 
 #[derive(Debug, PartialEq)]
 enum UriFormat {
@@ -57,18 +61,20 @@ fn parse_bucket_and_key(uri: &str) -> (String, String) {
     (bucket.to_string(), key.to_string())
 }
 
-async fn object_store_with_location(uri: &str) -> (Arc<dyn ObjectStore>, Path) {
+async fn object_store_with_location(uri: &str, read_only: bool) -> (Arc<dyn ObjectStore>, Path) {
     let uri_format = UriFormat::from_str(uri).unwrap_or_else(|e| panic!("{}", e));
 
     match uri_format {
         UriFormat::File => {
-            // create or overwrite the local file
-            std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(uri)
-                .unwrap_or_else(|e| panic!("{}", e));
+            if !read_only {
+                // create or overwrite the local file
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .create(true)
+                    .open(uri)
+                    .unwrap_or_else(|e| panic!("{}", e));
+            }
 
             let storage_container = Arc::new(LocalFileSystem::new());
 
@@ -77,6 +83,8 @@ async fn object_store_with_location(uri: &str) -> (Arc<dyn ObjectStore>, Path) {
             (storage_container, location)
         }
         UriFormat::S3 => {
+            ensure_object_store_access(read_only);
+
             let (bucket_name, key) = parse_bucket_and_key(uri);
 
             let storage_container = Arc::new(get_s3_object_store(&bucket_name).await);
@@ -97,7 +105,8 @@ pub(crate) async fn parquet_schema_from_uri(uri: &str) -> SchemaDescriptor {
 }
 
 pub(crate) async fn parquet_metadata_from_uri(uri: &str) -> Arc<ParquetMetaData> {
-    let (parquet_object_store, location) = object_store_with_location(uri).await;
+    let read_only = true;
+    let (parquet_object_store, location) = object_store_with_location(uri, read_only).await;
 
     let object_store_meta = parquet_object_store
         .head(&location)
@@ -116,7 +125,8 @@ pub(crate) async fn parquet_metadata_from_uri(uri: &str) -> Arc<ParquetMetaData>
 pub(crate) async fn parquet_reader_from_uri(
     uri: &str,
 ) -> ParquetRecordBatchStream<ParquetObjectReader> {
-    let (parquet_object_store, location) = object_store_with_location(uri).await;
+    let read_only = true;
+    let (parquet_object_store, location) = object_store_with_location(uri, read_only).await;
 
     let object_store_meta = parquet_object_store
         .head(&location)
@@ -142,7 +152,8 @@ pub(crate) async fn parquet_writer_from_uri(
     arrow_schema: SchemaRef,
     writer_props: WriterProperties,
 ) -> AsyncArrowWriter<ParquetObjectWriter> {
-    let (parquet_object_store, location) = object_store_with_location(uri).await;
+    let read_only = false;
+    let (parquet_object_store, location) = object_store_with_location(uri, read_only).await;
 
     let parquet_object_writer = ParquetObjectWriter::new(parquet_object_store, location);
 
@@ -203,4 +214,30 @@ pub async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
     }
 
     aws_s3_builder.build().unwrap_or_else(|e| panic!("{}", e))
+}
+
+fn ensure_object_store_access(read_only: bool) {
+    if unsafe { pgrx::pg_sys::superuser() } {
+        return;
+    }
+
+    let user_id = unsafe { pgrx::pg_sys::GetUserId() };
+
+    let required_role_name = if read_only {
+        PARQUET_OBJECT_STORE_READ_ROLE
+    } else {
+        PARQUET_OBJECT_STORE_WRITE_ROLE
+    };
+
+    let required_role_id =
+        unsafe { pgrx::pg_sys::get_role_oid(required_role_name.to_string().as_pg_cstr(), false) };
+
+    let operation_str = if read_only { "read" } else { "write" };
+
+    if !unsafe { pgrx::pg_sys::has_privs_of_role(user_id, required_role_id) } {
+        panic!(
+            "current user does not have the role, named {}, to {} the bucket",
+            required_role_name, operation_str
+        );
+    }
 }
