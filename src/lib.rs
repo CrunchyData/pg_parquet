@@ -37,6 +37,7 @@ pub extern "C" fn _PG_init() {
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
+    use std::io::Write;
     use std::marker::PhantomData;
     use std::{collections::HashMap, fmt::Debug};
 
@@ -1116,11 +1117,55 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_s3_object_store() {
+    fn test_s3_object_store_from_env() {
         dotenvy::from_path("/tmp/.env").unwrap();
 
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_helper(test_table);
+    }
+
+    #[pg_test]
+    fn test_s3_object_store_from_config_file() {
+        dotenvy::from_path("/tmp/.env").unwrap();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        // remove these to make sure the config file is used
+        let access_key_id = std::env::var("AWS_ACCESS_KEY_ID").unwrap();
+        std::env::remove_var("AWS_ACCESS_KEY_ID");
+        let secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap();
+        std::env::remove_var("AWS_SECRET_ACCESS_KEY");
+        let region = std::env::var("AWS_REGION").unwrap();
+        std::env::remove_var("AWS_REGION");
+
+        // create a config file
+        let aws_config_file_content = format!(
+            "[profile pg_parquet_test]\nregion = {}\naws_access_key_id = {}\naws_secret_access_key = {}\n",
+            region, access_key_id, secret_access_key
+        );
+        std::env::set_var("AWS_PROFILE", "pg_parquet_test");
+
+        let aws_config_file = "/tmp/aws_config";
+        std::env::set_var("AWS_CONFIG_FILE", aws_config_file);
+
+        let mut aws_config_file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(aws_config_file)
+            .unwrap();
+
+        aws_config_file
+            .write_all(aws_config_file_content.as_bytes())
+            .unwrap();
 
         let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
 

@@ -1,7 +1,14 @@
 use std::{str::FromStr, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
-use object_store::aws::AmazonS3Builder;
+use aws_config::environment::{
+    EnvironmentVariableCredentialsProvider, EnvironmentVariableRegionProvider,
+};
+use aws_config::meta::credentials::CredentialsProviderChain;
+use aws_config::meta::region::RegionProviderChain;
+use aws_config::profile::{ProfileFileCredentialsProvider, ProfileFileRegionProvider};
+use aws_credential_types::provider::ProvideCredentials;
+use object_store::aws::{AmazonS3, AmazonS3Builder};
 use object_store::{local::LocalFileSystem, path::Path, ObjectStore};
 use parquet::arrow::arrow_to_parquet_schema;
 use parquet::arrow::async_writer::ParquetObjectWriter;
@@ -55,19 +62,27 @@ async fn object_store_with_location(uri: &str) -> (Arc<dyn ObjectStore>, Path) {
 
     match uri_format {
         UriFormat::File => {
+            // create or overwrite the local file
+            std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .create(true)
+                .open(uri)
+                .unwrap_or_else(|e| panic!("{}", e));
+
             let storage_container = Arc::new(LocalFileSystem::new());
+
             let location = Path::from_filesystem_path(uri).unwrap_or_else(|e| panic!("{}", e));
+
             (storage_container, location)
         }
         UriFormat::S3 => {
-            let (bucket, key) = parse_bucket_and_key(uri);
-            let storage_container = Arc::new(
-                AmazonS3Builder::from_env()
-                    .with_bucket_name(bucket)
-                    .build()
-                    .unwrap_or_else(|e| panic!("{}", e)),
-            );
+            let (bucket_name, key) = parse_bucket_and_key(uri);
+
+            let storage_container = Arc::new(get_s3_object_store(&bucket_name).await);
+
             let location = Path::from(key);
+
             (storage_container, location)
         }
     }
@@ -127,22 +142,65 @@ pub(crate) async fn parquet_writer_from_uri(
     arrow_schema: SchemaRef,
     writer_props: WriterProperties,
 ) -> AsyncArrowWriter<ParquetObjectWriter> {
-    let uri_format = UriFormat::from_str(uri).unwrap_or_else(|e| panic!("{}", e));
-
-    if uri_format == UriFormat::File {
-        // we overwrite the local file if it exists
-        std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .open(uri)
-            .unwrap_or_else(|e| panic!("{}", e));
-    }
-
     let (parquet_object_store, location) = object_store_with_location(uri).await;
 
     let parquet_object_writer = ParquetObjectWriter::new(parquet_object_store, location);
 
     AsyncArrowWriter::try_new(parquet_object_writer, arrow_schema, Some(writer_props))
         .unwrap_or_else(|e| panic!("failed to create parquet writer for uri {}: {}", uri, e))
+}
+
+pub async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
+    // try loading the .env file
+    dotenvy::from_path("/tmp/.env").ok();
+
+    let mut aws_s3_builder = AmazonS3Builder::new().with_bucket_name(bucket_name);
+
+    let is_test_running = std::env::var("PG_PARQUET_TEST").is_ok();
+
+    if is_test_running {
+        // use minio for testing
+        aws_s3_builder = aws_s3_builder.with_endpoint("http://localhost:9000");
+        aws_s3_builder = aws_s3_builder.with_allow_http(true);
+    }
+
+    let aws_profile_name = std::env::var("AWS_PROFILE").unwrap_or("default".to_string());
+
+    // load the region from the environment variables or the profile file
+    let region_provider = RegionProviderChain::first_try(EnvironmentVariableRegionProvider::new())
+        .or_else(
+            ProfileFileRegionProvider::builder()
+                .profile_name(aws_profile_name.clone())
+                .build(),
+        );
+
+    let region = region_provider.region().await;
+
+    if let Some(region) = region {
+        aws_s3_builder = aws_s3_builder.with_region(region.to_string());
+    }
+
+    // load the credentials from the environment variables or the profile file
+    let credential_provider = CredentialsProviderChain::first_try(
+        "Environment",
+        EnvironmentVariableCredentialsProvider::new(),
+    )
+    .or_else(
+        "Profile",
+        ProfileFileCredentialsProvider::builder()
+            .profile_name(aws_profile_name)
+            .build(),
+    );
+
+    if let Ok(credentials) = credential_provider.provide_credentials().await {
+        aws_s3_builder = aws_s3_builder.with_access_key_id(credentials.access_key_id());
+
+        aws_s3_builder = aws_s3_builder.with_secret_access_key(credentials.secret_access_key());
+
+        if let Some(token) = credentials.session_token() {
+            aws_s3_builder = aws_s3_builder.with_token(token);
+        }
+    }
+
+    aws_s3_builder.build().unwrap_or_else(|e| panic!("{}", e))
 }

@@ -100,10 +100,12 @@ You can call `SELECT * FROM parquet.kv_metadata(<uri>)` to query custom key-valu
 ## Object Store Support
 `pg_parquet` supports reading and writing Parquet files from/to `S3` object store. Only the uris with `s3://` scheme is supported.
 
-You can set the following `AWS S3` environment variables properly to access to the object store:
+You can either set the following environment variables or use shared configuration files to access to the object store:
 - `AWS_ACCESS_KEY_ID`: the access key ID of the AWS account,
 - `AWS_SECRET_ACCESS_KEY`: the secret access key of the AWS account,
 - `AWS_REGION`: the default region of the AWS account.
+
+You can set config file path with `AWS_CONFIG_FILE` environment variable. The default config file path is `~/.aws/config`. You can also set profile name with `AWS_PROFILE` environment variable. The default profile name is `default`.
 
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
