@@ -1,3 +1,5 @@
+![Logo](logo.png)
+
 # pg_parquet
 
 > Copy from/to Parquet files in PostgreSQL!
