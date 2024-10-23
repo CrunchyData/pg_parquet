@@ -1,4 +1,7 @@
-use std::{sync::Arc, sync::LazyLock};
+use std::{
+    panic,
+    sync::{Arc, LazyLock},
+};
 
 use arrow::datatypes::SchemaRef;
 use aws_config::{
@@ -7,11 +10,14 @@ use aws_config::{
     profile::{ProfileFileCredentialsProvider, ProfileFileRegionProvider},
 };
 use aws_credential_types::provider::ProvideCredentials;
+use home::home_dir;
+use ini::Ini;
 use object_store::{
     aws::{AmazonS3, AmazonS3Builder},
+    azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder},
     local::LocalFileSystem,
     path::Path,
-    ObjectStore,
+    ObjectStore, ObjectStoreScheme,
 };
 use parquet::{
     arrow::{
@@ -44,57 +50,106 @@ pub(crate) static PG_BACKEND_TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(||
         .unwrap_or_else(|e| panic!("failed to create tokio runtime: {}", e))
 });
 
-fn parse_bucket_and_key(uri: &Url) -> (String, String) {
-    debug_assert!(uri.scheme() == "s3");
+fn parse_azure_blob_container(uri: &Url) -> Option<String> {
+    let host = uri.host_str()?;
 
-    let bucket = uri
-        .host_str()
-        .unwrap_or_else(|| panic!("bucket not found in uri: {}", uri));
+    // az(ure)://{container}/key
+    if uri.scheme() == "az" || uri.scheme() == "azure" {
+        return Some(host.to_string());
+    }
+    // https://{account}.blob.core.windows.net/{container}
+    else if host.ends_with("blob.core.windows.net") {
+        let path_segments: Vec<&str> = uri.path_segments()?.collect();
 
-    let key = uri.path();
+        if !path_segments.is_empty() {
+            return Some(path_segments[0].to_string());
+        } else {
+            return None;
+        }
+    }
 
-    (bucket.to_string(), key.to_string())
+    None
+}
+
+fn parse_s3_bucket(uri: &Url) -> Option<String> {
+    let host = uri.host_str()?;
+
+    // s3(a)://{bucket}/key
+    if uri.scheme() == "s3" || uri.scheme() == "s3a" {
+        return Some(host.to_string());
+    }
+    // https://s3.amazonaws.com/{bucket}/key
+    else if host == "s3.amazonaws.com" {
+        let path_segments: Vec<&str> = uri.path_segments()?.collect();
+        if !path_segments.is_empty() {
+            return Some(path_segments[0].to_string()); // Bucket name is the first part of the path
+        } else {
+            return None;
+        }
+    }
+    // https://{bucket}.s3.amazonaws.com/key
+    else if host.ends_with("s3.amazonaws.com") {
+        let bucket_name = host.split('.').next()?;
+        return Some(bucket_name.to_string());
+    }
+
+    None
 }
 
 fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStore>, Path) {
-    if uri.scheme() == "s3" {
-        let (bucket_name, key) = parse_bucket_and_key(uri);
+    let (scheme, path) =
+        ObjectStoreScheme::parse(uri).unwrap_or_else(|_| panic!("unsupported uri {}", uri));
 
-        let storage_container = PG_BACKEND_TOKIO_RUNTIME
-            .block_on(async { Arc::new(get_s3_object_store(&bucket_name).await) });
+    match scheme {
+        ObjectStoreScheme::AmazonS3 => {
+            let bucket_name = parse_s3_bucket(uri).unwrap_or_else(|| {
+                panic!("failed to parse bucket name from uri: {}", uri);
+            });
 
-        let location = Path::from(key);
+            let storage_container = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { Arc::new(get_s3_object_store(&bucket_name).await) });
 
-        (storage_container, location)
-    } else {
-        debug_assert!(uri.scheme() == "file");
-
-        let uri = uri_as_string(uri);
-
-        if !copy_from {
-            // create or overwrite the local file
-            std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(&uri)
-                .unwrap_or_else(|e| panic!("{}", e));
+            (storage_container, path)
         }
+        ObjectStoreScheme::MicrosoftAzure => {
+            let container_name = parse_azure_blob_container(uri).unwrap_or_else(|| {
+                panic!("failed to parse container name from uri: {}", uri);
+            });
 
-        let storage_container = Arc::new(LocalFileSystem::new());
+            let storage_container = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { Arc::new(get_azure_object_store(&container_name).await) });
 
-        let location = Path::from_filesystem_path(&uri).unwrap_or_else(|e| panic!("{}", e));
+            (storage_container, path)
+        }
+        ObjectStoreScheme::Local => {
+            let uri = uri_as_string(uri);
 
-        (storage_container, location)
+            if !copy_from {
+                // create or overwrite the local file
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .create(true)
+                    .open(&uri)
+                    .unwrap_or_else(|e| panic!("{}", e));
+            }
+
+            let storage_container = Arc::new(LocalFileSystem::new());
+
+            let path = Path::from_filesystem_path(&uri).unwrap_or_else(|e| panic!("{}", e));
+
+            (storage_container, path)
+        }
+        _ => {
+            panic!("unsupported uri {}", uri);
+        }
     }
 }
 
 async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
     let mut aws_s3_builder = AmazonS3Builder::new().with_bucket_name(bucket_name);
 
-    let is_test_running = std::env::var("PG_PARQUET_TEST").is_ok();
-
-    if is_test_running {
+    if is_testing() {
         // use minio for testing
         aws_s3_builder = aws_s3_builder.with_endpoint("http://localhost:9000");
         aws_s3_builder = aws_s3_builder.with_allow_http(true);
@@ -139,6 +194,78 @@ async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
     aws_s3_builder.build().unwrap_or_else(|e| panic!("{}", e))
 }
 
+async fn get_azure_object_store(container_name: &str) -> MicrosoftAzure {
+    let mut azure_builder = MicrosoftAzureBuilder::new().with_container_name(container_name);
+
+    if is_testing() {
+        // use azurite for testing
+        azure_builder =
+            azure_builder.with_endpoint("http://localhost:10000/devstoreaccount1".into());
+        azure_builder = azure_builder.with_allow_http(true);
+    }
+
+    // ~/.azure/config
+    let azure_config_file_path = std::env::var("AZURE_CONFIG_FILE").unwrap_or(
+        home_dir()
+            .expect("failed to get home directory")
+            .join(".azure")
+            .join("config")
+            .to_str()
+            .expect("failed to convert path to string")
+            .to_string(),
+    );
+
+    let azure_config_content = Ini::load_from_file(&azure_config_file_path).ok();
+
+    // storage account
+    let azure_blob_account = match std::env::var("AZURE_STORAGE_ACCOUNT") {
+        Ok(account) => Some(account),
+        Err(_) => azure_config_content
+            .as_ref()
+            .and_then(|ini| ini.section(Some("storage")))
+            .and_then(|section| section.get("account"))
+            .map(|account| account.to_string()),
+    };
+
+    if let Some(azure_blob_account) = azure_blob_account {
+        azure_builder = azure_builder.with_account(azure_blob_account);
+    }
+
+    // storage key
+    let azure_blob_key = match std::env::var("AZURE_STORAGE_KEY") {
+        Ok(key) => Some(key),
+        Err(_) => azure_config_content
+            .as_ref()
+            .and_then(|ini| ini.section(Some("storage")))
+            .and_then(|section| section.get("key"))
+            .map(|key| key.to_string()),
+    };
+
+    if let Some(azure_blob_key) = azure_blob_key {
+        azure_builder = azure_builder.with_access_key(azure_blob_key);
+    }
+
+    // sas token
+    let azure_blob_sas_token = match std::env::var("AZURE_STORAGE_SAS_TOKEN") {
+        Ok(token) => Some(token),
+        Err(_) => azure_config_content
+            .as_ref()
+            .and_then(|ini| ini.section(Some("storage")))
+            .and_then(|section| section.get("sas_token"))
+            .map(|token| token.to_string()),
+    };
+
+    if let Some(azure_blob_sas_token) = azure_blob_sas_token {
+        azure_builder = azure_builder.with_config(AzureConfigKey::SasKey, azure_blob_sas_token);
+    }
+
+    azure_builder.build().unwrap_or_else(|e| panic!("{}", e))
+}
+
+fn is_testing() -> bool {
+    std::env::var("PG_PARQUET_TEST").is_ok()
+}
+
 pub(crate) fn parse_uri(uri: &str) -> Url {
     if !uri.contains("://") {
         // local file
@@ -148,12 +275,25 @@ pub(crate) fn parse_uri(uri: &str) -> Url {
 
     let uri = Url::parse(uri).unwrap_or_else(|e| panic!("{}", e));
 
-    if uri.scheme() != "s3" {
+    let (scheme, _) =
+        ObjectStoreScheme::parse(&uri).unwrap_or_else(|_| panic!("unsupported uri {}", uri));
+
+    if scheme == ObjectStoreScheme::AmazonS3 {
+        parse_s3_bucket(&uri)
+            .unwrap_or_else(|| panic!("failed to parse bucket name from s3 uri {}", uri));
+    } else if scheme == ObjectStoreScheme::MicrosoftAzure {
+        parse_azure_blob_container(&uri).unwrap_or_else(|| {
+            panic!(
+                "failed to parse container name from azure blob storage uri {}",
+                uri
+            )
+        });
+    } else {
         panic!(
-            "unsupported uri {}. Only local files and URIs with s3:// prefix are supported.",
+            "unsupported uri {}. Only Azure and S3 uris are supported.",
             uri
         );
-    }
+    };
 
     uri
 }

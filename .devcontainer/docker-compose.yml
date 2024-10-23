@@ -10,13 +10,16 @@ services:
       - ${USERPROFILE}${HOME}/.ssh:/home/rust/.ssh:ro
       - ${USERPROFILE}${HOME}/.ssh/known_hosts:/home/rust/.ssh/known_hosts:rw
       - ${USERPROFILE}${HOME}/.gitconfig:/home/rust/.gitconfig:ro
-      - ${USERPROFILE}${HOME}/.aws:/home/rust/.aws:ro
+      - ${USERPROFILE}${HOME}/.aws:/home/rust/.aws:rw
+      - ${USERPROFILE}${HOME}/.azure:/home/rust/.azure:rw
+
     env_file:
       - .env
     cap_add:
       - SYS_PTRACE
     depends_on:
       - minio
+      - azurite
 
   minio:
     image: minio/minio
@@ -27,6 +30,18 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "http://localhost:9000"]
+      interval: 6s
+      timeout: 2s
+      retries: 3
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    env_file:
+      - .env
+    network_mode: host
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "http://localhost:10000"]
       interval: 6s
       timeout: 2s
       retries: 3
