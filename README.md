@@ -213,6 +213,28 @@ Supported Azure Blob Storage uri formats are shown below:
 - azure:// \<container\> / \<path\>
 - https:// \<account\>.blob.core.windows.net / \<container\>
 
+#### Google Cloud Storage
+
+The simplest way to configure object storage is by creating a json config file like [`/tmp/gcs.json`]:
+
+```bash
+$ cat /tmp/gcs.json
+{
+  "gcs_base_url": "http://localhost:4443",     
+  "disable_oauth": true,
+  "client_email": "",
+  "private_key_id": "",
+  "private_key": ""
+}
+```
+
+Alternatively, you can use the following environment variables when starting postgres to configure the Google Cloud Storage client:
+- `GOOGLE_SERVICE_ACCOUNT_KEY`: json serialized service account key
+- `GOOGLE_SERVICE_ACCOUNT_PATH`: an alternative location for the config file
+
+Supported Google Cloud Storage uri formats are shown below:
+- gs:// \<bucket\> / \<path\>
+
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<compression>]` extension,
