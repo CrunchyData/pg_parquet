@@ -15,7 +15,7 @@
             ]
         }
     },
-    "postStartCommand": "bash .devcontainer/scripts/setup-minio.sh",
+    "postStartCommand": "bash .devcontainer/scripts/setup_minio.sh && bash .devcontainer/scripts/setup_azurite.sh",
     "forwardPorts": [
         5432
     ],

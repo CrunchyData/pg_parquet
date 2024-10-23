@@ -155,7 +155,13 @@ SELECT uri, encode(key, 'escape') as key, encode(value, 'escape') as value FROM 
 ```
 
 ## Object Store Support
-`pg_parquet` supports reading and writing Parquet files from/to `S3` object store. Only the uris with `s3://` scheme is supported. 
+`pg_parquet` supports reading and writing Parquet files from/to `S3` and `Azure Blob Storage` object stores.
+
+> [!NOTE]
+> To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
+> Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
+
+#### S3 Storage
 
 The simplest way to configure object storage is by creating the standard `~/.aws/credentials` and `~/.aws/config` files:
 
@@ -178,9 +184,20 @@ Alternatively, you can use the following environment variables when starting pos
 - `AWS_CONFIG_FILE`: an alternative location for the config file
 - `AWS_PROFILE`: the name of the profile from the credentials and config file (default profile name is `default`)
 
-> [!NOTE]
-> To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
-> Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
+Supported S3 uri formats are shown below:
+- s3:// \<bucket\> / \<path\>
+- s3a:// \<bucket\> / \<path\>
+- https:// \<bucket\>.s3.amazonaws.com / \<path\>
+- https:// s3.amazonaws.com / \<bucket\> / \<path\>
+
+#### Azure Blob Storage
+
+You can use the following environment variables when starting postgres to configure the Azure Blob Storage client:
+- `AZURE_STORAGE_ACCOUNT_KEY`: the storage account key of the Azure Blob
+- `AZURE_STORAGE_SAS_TOKEN`: the storage SAS token for the Azure Blob
+
+Supported Azure Blob Storage uri formats are shown below:
+- https:// \<account\>.blob.core.windows.net / \<container\> / \<path\>
 
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
