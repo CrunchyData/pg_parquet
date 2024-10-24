@@ -43,6 +43,73 @@ pub(crate) extern "C" fn init_parquet_copy_hook() {
     }
 }
 
+fn process_copy_to_parquet(
+    p_stmt: &PgBox<PlannedStmt>,
+    query_string: &CStr,
+    params: &PgBox<ParamListInfoData>,
+    query_env: &PgBox<QueryEnvironment>,
+) -> u64 {
+    let uri = copy_stmt_uri(p_stmt).expect("uri is None");
+
+    let copy_from = false;
+    ensure_access_privilege_to_uri(&uri, copy_from);
+
+    validate_copy_to_options(p_stmt, &uri);
+
+    let row_group_size = copy_to_stmt_row_group_size(p_stmt);
+    let row_group_size_bytes = copy_to_stmt_row_group_size_bytes(p_stmt);
+    let compression = copy_to_stmt_compression(p_stmt, uri.clone());
+    let compression_level = copy_to_stmt_compression_level(p_stmt, uri.clone());
+
+    PgTryBuilder::new(|| {
+        let parquet_dest = create_copy_to_parquet_dest_receiver(
+            uri_as_string(&uri).as_pg_cstr(),
+            &row_group_size,
+            &row_group_size_bytes,
+            &compression,
+            &compression_level.unwrap_or(INVALID_COMPRESSION_LEVEL),
+        );
+
+        let parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
+
+        execute_copy_to_with_dest_receiver(p_stmt, query_string, params, query_env, parquet_dest)
+    })
+    .catch_others(|cause| {
+        // make sure to pop the parquet writer context
+        // In case we did not push the context, we should not throw an error while popping
+        let throw_error = false;
+        pop_parquet_writer_context(throw_error);
+
+        cause.rethrow()
+    })
+    .execute()
+}
+
+fn process_copy_from_parquet(
+    p_stmt: &PgBox<PlannedStmt>,
+    query_string: &CStr,
+    query_env: &PgBox<QueryEnvironment>,
+) -> u64 {
+    let uri = copy_stmt_uri(p_stmt).expect("uri is None");
+
+    let copy_from = true;
+    ensure_access_privilege_to_uri(&uri, copy_from);
+
+    validate_copy_from_options(p_stmt);
+
+    PgTryBuilder::new(|| execute_copy_from(p_stmt, query_string, query_env, uri))
+        .catch_others(|cause| {
+            // make sure to pop the parquet reader context
+            // In case we did not push the context, we should not throw an error while popping
+            let throw_error = false;
+            pop_parquet_reader_context(throw_error);
+
+            cause.rethrow()
+        })
+        .execute()
+}
+
+#[cfg(any(feature = "pg14", feature = "pg15", feature = "pg16", feature = "pg17"))]
 #[pg_guard]
 #[allow(clippy::too_many_arguments)]
 extern "C" fn parquet_copy_hook(
@@ -59,85 +126,23 @@ extern "C" fn parquet_copy_hook(
     let query_string = unsafe { CStr::from_ptr(query_string) };
     let params = unsafe { PgBox::from_pg(params) };
     let query_env = unsafe { PgBox::from_pg(query_env) };
+    let mut completion_tag = unsafe { PgBox::from_pg(completion_tag) };
 
     if ENABLE_PARQUET_COPY_HOOK.get() && is_copy_to_parquet_stmt(&p_stmt) {
-        let uri = copy_stmt_uri(&p_stmt).expect("uri is None");
-        let copy_from = false;
+        let nprocessed = process_copy_to_parquet(&p_stmt, query_string, &params, &query_env);
 
-        ensure_access_privilege_to_uri(&uri, copy_from);
-
-        validate_copy_to_options(&p_stmt, &uri);
-
-        let row_group_size = copy_to_stmt_row_group_size(&p_stmt);
-        let row_group_size_bytes = copy_to_stmt_row_group_size_bytes(&p_stmt);
-        let compression = copy_to_stmt_compression(&p_stmt, uri.clone());
-        let compression_level = copy_to_stmt_compression_level(&p_stmt, uri.clone());
-
-        PgTryBuilder::new(|| {
-            let parquet_dest = create_copy_to_parquet_dest_receiver(
-                uri_as_string(&uri).as_pg_cstr(),
-                &row_group_size,
-                &row_group_size_bytes,
-                &compression,
-                &compression_level.unwrap_or(INVALID_COMPRESSION_LEVEL),
-            );
-
-            let parquet_dest = unsafe { PgBox::from_pg(parquet_dest) };
-
-            let nprocessed = execute_copy_to_with_dest_receiver(
-                &p_stmt,
-                query_string,
-                params,
-                query_env,
-                parquet_dest,
-            );
-
-            let mut completion_tag = unsafe { PgBox::from_pg(completion_tag) };
-
-            if !completion_tag.is_null() {
-                completion_tag.nprocessed = nprocessed;
-                completion_tag.commandTag = CommandTag::CMDTAG_COPY;
-            }
-        })
-        .catch_others(|cause| {
-            // make sure to pop the parquet writer context
-            // In case we did not push the context, we should not throw an error while popping
-            let throw_error = false;
-            pop_parquet_writer_context(throw_error);
-
-            cause.rethrow()
-        })
-        .execute();
-
+        if !completion_tag.is_null() {
+            completion_tag.nprocessed = nprocessed;
+            completion_tag.commandTag = CommandTag::CMDTAG_COPY;
+        }
         return;
     } else if ENABLE_PARQUET_COPY_HOOK.get() && is_copy_from_parquet_stmt(&p_stmt) {
-        let uri = copy_stmt_uri(&p_stmt).expect("uri is None");
-        let copy_from = true;
+        let nprocessed = process_copy_from_parquet(&p_stmt, query_string, &query_env);
 
-        ensure_access_privilege_to_uri(&uri, copy_from);
-
-        validate_copy_from_options(&p_stmt);
-
-        PgTryBuilder::new(|| {
-            let nprocessed = execute_copy_from(p_stmt, query_string, query_env, uri);
-
-            let mut completion_tag = unsafe { PgBox::from_pg(completion_tag) };
-
-            if !completion_tag.is_null() {
-                completion_tag.nprocessed = nprocessed;
-                completion_tag.commandTag = CommandTag::CMDTAG_COPY;
-            }
-        })
-        .catch_others(|cause| {
-            // make sure to pop the parquet reader context
-            // In case we did not push the context, we should not throw an error while popping
-            let throw_error = false;
-            pop_parquet_reader_context(throw_error);
-
-            cause.rethrow()
-        })
-        .execute();
-
+        if !completion_tag.is_null() {
+            completion_tag.nprocessed = nprocessed;
+            completion_tag.commandTag = CommandTag::CMDTAG_COPY;
+        }
         return;
     }
 
@@ -151,7 +156,7 @@ extern "C" fn parquet_copy_hook(
                 params.into_pg(),
                 query_env.into_pg(),
                 dest,
-                completion_tag,
+                completion_tag.into_pg(),
             )
         } else {
             standard_ProcessUtility(
@@ -162,7 +167,68 @@ extern "C" fn parquet_copy_hook(
                 params.into_pg(),
                 query_env.into_pg(),
                 dest,
-                completion_tag,
+                completion_tag.into_pg(),
+            )
+        }
+    }
+}
+
+#[cfg(feature = "pg13")]
+#[pg_guard]
+#[allow(clippy::too_many_arguments)]
+extern "C" fn parquet_copy_hook(
+    p_stmt: *mut PlannedStmt,
+    query_string: *const c_char,
+    context: u32,
+    params: *mut ParamListInfoData,
+    query_env: *mut QueryEnvironment,
+    dest: *mut DestReceiver,
+    completion_tag: *mut QueryCompletion,
+) {
+    let p_stmt = unsafe { PgBox::from_pg(p_stmt) };
+    let query_string = unsafe { CStr::from_ptr(query_string) };
+    let params = unsafe { PgBox::from_pg(params) };
+    let query_env = unsafe { PgBox::from_pg(query_env) };
+    let mut completion_tag = unsafe { PgBox::from_pg(completion_tag) };
+
+    if ENABLE_PARQUET_COPY_HOOK.get() && is_copy_to_parquet_stmt(&p_stmt) {
+        let nprocessed = process_copy_to_parquet(&p_stmt, query_string, &params, &query_env);
+
+        if !completion_tag.is_null() {
+            completion_tag.nprocessed = nprocessed;
+            completion_tag.commandTag = CommandTag::CMDTAG_COPY;
+        }
+        return;
+    } else if ENABLE_PARQUET_COPY_HOOK.get() && is_copy_from_parquet_stmt(&p_stmt) {
+        let nprocessed = process_copy_from_parquet(&p_stmt, query_string, &query_env);
+
+        if !completion_tag.is_null() {
+            completion_tag.nprocessed = nprocessed;
+            completion_tag.commandTag = CommandTag::CMDTAG_COPY;
+        }
+        return;
+    }
+
+    unsafe {
+        if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
+            prev_hook(
+                p_stmt.into_pg(),
+                query_string.as_ptr(),
+                context,
+                params.into_pg(),
+                query_env.into_pg(),
+                dest,
+                completion_tag.into_pg(),
+            )
+        } else {
+            standard_ProcessUtility(
+                p_stmt.into_pg(),
+                query_string.as_ptr(),
+                context,
+                params.into_pg(),
+                query_env.into_pg(),
+                dest,
+                completion_tag.into_pg(),
             )
         }
     }

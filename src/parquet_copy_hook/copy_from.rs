@@ -5,8 +5,8 @@ use pgrx::{
     pg_sys::{
         addNSItemToQuery, assign_expr_collations, canonicalize_qual, check_enable_rls,
         coerce_to_boolean, eval_const_expressions, make_ands_implicit, transformExpr, AsPgCStr,
-        BeginCopyFrom, CheckEnableRlsResult, CopyFrom, CopyStmt, EndCopyFrom, InvalidOid, Node,
-        Oid, ParseExprKind, ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment,
+        CheckEnableRlsResult, CopyFrom, CopyStmt, EndCopyFrom, InvalidOid, Node, Oid,
+        ParseExprKind, ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment,
     },
     void_mut_ptr, PgBox, PgLogLevel, PgRelation, PgSqlErrorCode,
 };
@@ -19,9 +19,12 @@ use crate::{
     },
 };
 
-use super::copy_utils::{
-    copy_stmt_attribute_list, copy_stmt_create_namespace_item, copy_stmt_create_parse_state,
-    create_filtered_tupledesc_for_relation,
+use super::{
+    copy_utils::{
+        copy_stmt_attribute_list, copy_stmt_create_namespace_item, copy_stmt_create_parse_state,
+        create_filtered_tupledesc_for_relation,
+    },
+    pg_compat::BeginCopyFrom,
 };
 
 // stack to store parquet reader contexts for COPY FROM.
@@ -104,32 +107,32 @@ extern "C" fn copy_parquet_data_to_buffer(
 // 3. Calls the executor's CopyFrom function to read data from the parquet file and write
 //    it to the copy buffer.
 pub(crate) fn execute_copy_from(
-    p_stmt: PgBox<PlannedStmt>,
+    p_stmt: &PgBox<PlannedStmt>,
     query_string: &CStr,
-    query_env: PgBox<QueryEnvironment>,
+    query_env: &PgBox<QueryEnvironment>,
     uri: Url,
 ) -> u64 {
-    let rel_oid = copy_stmt_relation_oid(&p_stmt);
+    let rel_oid = copy_stmt_relation_oid(p_stmt);
 
     copy_from_stmt_ensure_row_level_security(rel_oid);
 
-    let lock_mode = copy_stmt_lock_mode(&p_stmt);
+    let lock_mode = copy_stmt_lock_mode(p_stmt);
 
     let relation = unsafe { PgRelation::with_lock(rel_oid, lock_mode) };
 
-    let p_state = copy_stmt_create_parse_state(query_string, &query_env);
+    let p_state = copy_stmt_create_parse_state(query_string, query_env);
 
-    let ns_item = copy_stmt_create_namespace_item(&p_stmt, &p_state, &relation);
+    let ns_item = copy_stmt_create_namespace_item(p_stmt, &p_state, &relation);
 
-    let mut where_clause = copy_from_stmt_where_clause(&p_stmt);
+    let mut where_clause = copy_from_stmt_where_clause(p_stmt);
 
     if !where_clause.is_null() {
         where_clause = copy_from_stmt_transform_where_clause(&p_state, &ns_item, where_clause);
     }
 
-    let attribute_list = copy_stmt_attribute_list(&p_stmt);
+    let attribute_list = copy_stmt_attribute_list(p_stmt);
 
-    let tupledesc = create_filtered_tupledesc_for_relation(&p_stmt, &relation);
+    let tupledesc = create_filtered_tupledesc_for_relation(p_stmt, &relation);
 
     unsafe {
         // parquet reader context is used throughout the COPY FROM operation.
@@ -137,14 +140,12 @@ pub(crate) fn execute_copy_from(
         push_parquet_reader_context(parquet_reader_context);
 
         // makes sure to set binary format
-        let copy_options = copy_from_stmt_create_option_list(&p_stmt);
+        let copy_options = copy_from_stmt_create_option_list(p_stmt);
 
         let copy_from_state = BeginCopyFrom(
             p_state.as_ptr(),
             relation.as_ptr(),
             where_clause,
-            std::ptr::null(),
-            false,
             Some(copy_parquet_data_to_buffer),
             attribute_list,
             copy_options.as_ptr(),

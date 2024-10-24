@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        postgres: [ 16, 17 ]
+        postgres: [ 13, 14, 15, 16, 17 ]
     env:
       PG_MAJOR: ${{ matrix.postgres }}
 
