@@ -6,10 +6,11 @@ ENV TZ="Europe/Istanbul"
 ARG PG_MAJOR=17
 
 # install deps
-RUN apt-get update && apt-get -y install build-essential libreadline-dev zlib1g-dev    \
-                                         flex bison libxml2-dev libxslt-dev libssl-dev \
-                                         libxml2-utils xsltproc ccache pkg-config wget \
-                                         curl lsb-release sudo nano net-tools git awscli
+RUN apt-get update && apt-get -y install build-essential libreadline-dev zlib1g-dev      \
+                                         flex bison libxml2-dev libxslt-dev libssl-dev   \
+                                         libxml2-utils xsltproc ccache pkg-config wget   \
+                                         curl lsb-release ca-certificates gnupg sudo git \
+                                         nano net-tools awscli
 
 # install Postgres
 RUN sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
@@ -18,6 +19,14 @@ RUN apt-get update && apt-get -y install postgresql-${PG_MAJOR}-postgis-3  \
                                          postgresql-server-dev-${PG_MAJOR} \
                                          postgresql-client-${PG_MAJOR}     \
                                          libpq-dev
+
+# install azure-cli and azurite
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+RUN apt-get update && apt-get install -y nodejs
+RUN curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | tee /etc/apt/trusted.gpg.d/microsoft.gpg > /dev/null
+RUN echo "deb [arch=`dpkg --print-architecture` signed-by=/etc/apt/trusted.gpg.d/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ `lsb_release -cs` main" | tee /etc/apt/sources.list.d/azure-cli.list
+RUN apt-get update && apt-get install -y azure-cli
+RUN npm install -g azurite
 
 # download and install MinIO server and client
 RUN wget https://dl.min.io/server/minio/release/linux-amd64/minio
@@ -58,11 +67,3 @@ ARG PGRX_VERSION=0.12.6
 RUN cargo install --locked cargo-pgrx@${PGRX_VERSION}
 RUN cargo pgrx init --pg${PG_MAJOR} $(which pg_config)
 RUN echo "shared_preload_libraries = 'pg_parquet'" >> $HOME/.pgrx/data-${PG_MAJOR}/postgresql.conf
-
-ENV MINIO_ROOT_USER=admin
-ENV MINIO_ROOT_PASSWORD=admin123
-ENV AWS_S3_TEST_BUCKET=testbucket
-ENV AWS_REGION=us-east-1
-ENV AWS_ACCESS_KEY_ID=admin
-ENV AWS_SECRET_ACCESS_KEY=admin123
-ENV PG_PARQUET_TEST=true

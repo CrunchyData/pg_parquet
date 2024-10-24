@@ -1197,24 +1197,142 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_s3_object_store_from_env() {
-        dotenvy::from_path("/tmp/.env").unwrap();
+    fn test_azure_blob_with_storage_key() {
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
 
-        let test_bucket_name: String =
-            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+        let azure_blob_uris = [format!(
+            "http://localhost:10000/devstoreaccount1/{}/pg_parquet_test.parquet",
+            test_container_name
+        )];
 
-        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+        for azure_blob_uri in azure_blob_uris {
+            let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
 
-        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+            test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+            test_helper(test_table);
+        }
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "403 Forbidden")]
+    fn test_azure_blob_with_wrong_storage_key() {
+        let wrong_account_key = String::from("FFy8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==");
+        std::env::set_var("AZURE_STORAGE_ACCOUNT_KEY", wrong_account_key);
+
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let azure_blob_uris = [format!(
+            "http://localhost:10000/devstoreaccount1/{}/pg_parquet_test.parquet",
+            test_container_name
+        )];
+
+        for azure_blob_uri in azure_blob_uris {
+            let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
+
+            test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+            test_helper(test_table);
+        }
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "404 Not Found")]
+    fn test_azure_blob_write_wrong_container() {
+        let azure_blob_uri =
+            "http://localhost:10000/devstoreaccount1/nonexistentcontainer/pg_parquet_test.parquet";
+
+        let copy_to_command = format!(
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}';",
+            azure_blob_uri
+        );
+        Spi::run(copy_to_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    fn test_azure_blob_read_write_sas() {
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let read_write_sas_token = String::from("se=2100-05-05&sp=rcw&sv=2022-11-02&sr=c&sig=TPz2jEz0t9L651t6rTCQr%2BOjmJHkM76tnCGdcyttnlA%3D");
+
+        std::env::set_var("AZURE_STORAGE_SAS_TOKEN", read_write_sas_token);
+
+        let azure_blob_uri = format!(
+            "http://localhost:10000/devstoreaccount1/{}/pg_parquet_test.parquet",
+            test_container_name
+        );
+
+        let copy_to_command = format!(
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}';",
+            azure_blob_uri
+        );
+        Spi::run(copy_to_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "403 Forbidden")]
+    fn test_azure_blob_read_only_sas() {
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let read_only_sas_token = String::from(
+            "se=2100-05-05&sp=r&sv=2022-11-02&sr=c&sig=YMPFnAHKe9y0o3hFegncbwQTXtAyvsJEgPB2Ne1b9CQ%3D",
+        );
+
+        std::env::set_var("AZURE_STORAGE_SAS_TOKEN", read_only_sas_token);
+
+        let azure_blob_uri = format!(
+            "http://localhost:10000/devstoreaccount1/{}/pg_parquet_test.parquet",
+            test_container_name
+        );
+
+        let copy_to_command = format!(
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}';",
+            azure_blob_uri
+        );
+        Spi::run(copy_to_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "failed to parse container name")]
+    fn test_azure_blob_unsupported_uri() {
+        let fabric_azure_blob_uri = "https://ACCOUNT.dfs.fabric.microsoft.com".into();
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(fabric_azure_blob_uri);
 
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_helper(test_table);
     }
 
     #[pg_test]
-    fn test_s3_object_store_from_config_file() {
-        dotenvy::from_path("/tmp/.env").unwrap();
+    fn test_s3_from_env() {
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
+        let s3_uris = [
+            format!("s3://{}/pg_parquet_test.parquet", test_bucket_name),
+            format!("s3a://{}/pg_parquet_test.parquet", test_bucket_name),
+            format!(
+                "https://s3.amazonaws.com/{}/pg_parquet_test.parquet",
+                test_bucket_name
+            ),
+            format!(
+                "https://{}.s3.amazonaws.com/pg_parquet_test.parquet",
+                test_bucket_name
+            ),
+        ];
+
+        for s3_uri in s3_uris {
+            let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+            test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+            test_helper(test_table);
+        }
+    }
+
+    #[pg_test]
+    fn test_s3_from_config_file() {
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
@@ -1256,6 +1374,38 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "403 Forbidden")]
+    fn test_s3_with_wrong_access_key_id() {
+        std::env::set_var("AWS_ACCESS_KEY_ID", "wrong_access_key_id");
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_helper(test_table);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "403 Forbidden")]
+    fn test_s3_with_wrong_secret_access_key() {
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "wrong_secret_access_key");
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_helper(test_table);
+    }
+
+    #[pg_test]
     #[should_panic(expected = "permission denied to COPY from a remote uri")]
     fn test_s3_no_read_access() {
         // create regular user
@@ -1269,8 +1419,6 @@ mod tests {
 
         // set the current user to the regular user
         Spi::run("SET SESSION AUTHORIZATION regular_user;").unwrap();
-
-        dotenvy::from_path("/tmp/.env").unwrap();
 
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
@@ -1312,8 +1460,6 @@ mod tests {
         // set the current user to the regular user
         Spi::run("SET SESSION AUTHORIZATION regular_user;").unwrap();
 
-        dotenvy::from_path("/tmp/.env").unwrap();
-
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
@@ -1341,7 +1487,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "404 Not Found")]
-    fn test_s3_object_store_write_invalid_uri() {
+    fn test_s3_write_wrong_bucket() {
         let s3_uri = "s3://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
 
         let copy_to_command = format!(
@@ -1353,7 +1499,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "404 Not Found")]
-    fn test_s3_object_store_read_invalid_uri() {
+    fn test_s3_read_wrong_bucket() {
         let s3_uri = "s3://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
 
         let create_table_command = "CREATE TABLE test_table (a int);";
@@ -1361,6 +1507,17 @@ mod tests {
 
         let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri);
         Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "failed to parse bucket name")]
+    fn test_s3_unsupported_uri() {
+        let cloudflare_s3_uri = "https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket".into();
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(cloudflare_s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_helper(test_table);
     }
 
     #[pg_test]

@@ -1,4 +1,7 @@
-use std::{sync::Arc, sync::LazyLock};
+use std::{
+    panic,
+    sync::{Arc, LazyLock},
+};
 
 use arrow::datatypes::SchemaRef;
 use aws_config::{
@@ -9,9 +12,10 @@ use aws_config::{
 use aws_credential_types::provider::ProvideCredentials;
 use object_store::{
     aws::{AmazonS3, AmazonS3Builder},
+    azure::{MicrosoftAzure, MicrosoftAzureBuilder},
     local::LocalFileSystem,
     path::Path,
-    ObjectStore,
+    ObjectStore, ObjectStoreScheme,
 };
 use parquet::{
     arrow::{
@@ -44,64 +48,130 @@ pub(crate) static PG_BACKEND_TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(||
         .unwrap_or_else(|e| panic!("failed to create tokio runtime: {}", e))
 });
 
-fn parse_bucket_and_key(uri: &Url) -> (String, String) {
-    debug_assert!(uri.scheme() == "s3");
+fn parse_azure_blob_container(uri: &Url) -> Option<String> {
+    let host = uri.host_str()?;
 
-    let bucket = uri
-        .host_str()
-        .unwrap_or_else(|| panic!("bucket not found in uri: {}", uri));
+    // https://{account}.blob.core.windows.net/{container}/key
+    if host.ends_with("blob.core.windows.net") {
+        let path_segments: Vec<&str> = uri.path_segments()?.collect();
 
-    let key = uri.path();
+        if !path_segments.is_empty() {
+            return Some(path_segments[0].to_string());
+        } else {
+            return None;
+        }
+    }
+    // http://localhost:10000/{account}/{container}/key
+    else if is_testing() && uri.scheme() == "http" {
+        let path_segments: Vec<&str> = uri.path_segments()?.collect();
 
-    (bucket.to_string(), key.to_string())
+        if path_segments.len() >= 2 {
+            return Some(path_segments[1].to_string());
+        } else {
+            return None;
+        }
+    }
+
+    None
+}
+
+fn parse_s3_bucket(uri: &Url) -> Option<String> {
+    let host = uri.host_str()?;
+
+    // s3(a)://{bucket}/key
+    if uri.scheme() == "s3" || uri.scheme() == "s3a" {
+        return Some(host.to_string());
+    }
+    // https://s3.amazonaws.com/{bucket}/key
+    else if host == "s3.amazonaws.com" {
+        let path_segments: Vec<&str> = uri.path_segments()?.collect();
+        if !path_segments.is_empty() {
+            return Some(path_segments[0].to_string()); // Bucket name is the first part of the path
+        } else {
+            return None;
+        }
+    }
+    // https://{bucket}.s3.amazonaws.com/key
+    else if host.ends_with("s3.amazonaws.com") {
+        let bucket_name = host.split('.').next()?;
+        return Some(bucket_name.to_string());
+    }
+
+    None
 }
 
 fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStore>, Path) {
-    if uri.scheme() == "s3" {
-        ensure_object_store_access_privilege(copy_from);
+    let (scheme, path) =
+        ObjectStoreScheme::parse(uri).unwrap_or_else(|_| panic!("unsupported uri {}", uri));
 
-        let (bucket_name, key) = parse_bucket_and_key(uri);
+    match scheme {
+        ObjectStoreScheme::AmazonS3 => {
+            ensure_object_store_access_privilege(copy_from);
 
-        let storage_container = PG_BACKEND_TOKIO_RUNTIME
-            .block_on(async { Arc::new(get_s3_object_store(&bucket_name).await) });
+            let bucket_name = parse_s3_bucket(uri).unwrap_or_else(|| {
+                panic!("failed to parse bucket name from uri: {}", uri);
+            });
 
-        let location = Path::from(key);
+            let storage_container = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { Arc::new(get_s3_object_store(&bucket_name).await) });
 
-        (storage_container, location)
-    } else {
-        debug_assert!(uri.scheme() == "file");
-
-        ensure_local_file_access_privilege(copy_from);
-
-        let uri = uri_as_string(uri);
-
-        if !copy_from {
-            // create or overwrite the local file
-            std::fs::OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(&uri)
-                .unwrap_or_else(|e| panic!("{}", e));
+            (storage_container, path)
         }
+        ObjectStoreScheme::MicrosoftAzure => {
+            ensure_object_store_access_privilege(copy_from);
 
-        let storage_container = Arc::new(LocalFileSystem::new());
+            let container_name = parse_azure_blob_container(uri).unwrap_or_else(|| {
+                panic!("failed to parse container name from uri: {}", uri);
+            });
 
-        let location = Path::from_filesystem_path(&uri).unwrap_or_else(|e| panic!("{}", e));
+            let storage_container = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { Arc::new(get_azure_object_store(&container_name).await) });
 
-        (storage_container, location)
+            (storage_container, path)
+        }
+        ObjectStoreScheme::Http if is_testing() => {
+            ensure_object_store_access_privilege(copy_from);
+
+            let container_name = parse_azure_blob_container(uri).unwrap_or_else(|| {
+                panic!("failed to parse container name from uri: {}", uri);
+            });
+
+            let storage_container = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { Arc::new(get_azure_object_store(&container_name).await) });
+
+            (storage_container, path)
+        }
+        ObjectStoreScheme::Local => {
+            ensure_local_file_access_privilege(copy_from);
+
+            let uri = uri_as_string(uri);
+
+            if !copy_from {
+                // create or overwrite the local file
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .truncate(true)
+                    .create(true)
+                    .open(&uri)
+                    .unwrap_or_else(|e| panic!("{}", e));
+            }
+
+            let storage_container = Arc::new(LocalFileSystem::new());
+
+            let path = Path::from_filesystem_path(&uri).unwrap_or_else(|e| panic!("{}", e));
+
+            (storage_container, path)
+        }
+        _ => {
+            panic!("unsupported uri {}", uri);
+        }
     }
 }
 
 async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
-    // try loading environment vars from the .env file
-    dotenvy::from_path("/tmp/.env").ok();
-
     let mut aws_s3_builder = AmazonS3Builder::new().with_bucket_name(bucket_name);
 
-    let is_test_running = std::env::var("PG_PARQUET_TEST").is_ok();
-
-    if is_test_running {
+    if is_testing() {
         // use minio for testing
         aws_s3_builder = aws_s3_builder.with_endpoint("http://localhost:9000");
         aws_s3_builder = aws_s3_builder.with_allow_http(true);
@@ -146,6 +216,21 @@ async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
     aws_s3_builder.build().unwrap_or_else(|e| panic!("{}", e))
 }
 
+async fn get_azure_object_store(container_name: &str) -> MicrosoftAzure {
+    let mut azure_builder = MicrosoftAzureBuilder::from_env().with_container_name(container_name);
+
+    if is_testing() {
+        // use azurite for testing
+        azure_builder = azure_builder.with_use_emulator(true);
+    }
+
+    azure_builder.build().unwrap_or_else(|e| panic!("{}", e))
+}
+
+fn is_testing() -> bool {
+    std::env::var("PG_PARQUET_TEST").is_ok()
+}
+
 pub(crate) fn parse_uri(uri: &str) -> Url {
     if !uri.contains("://") {
         // local file
@@ -155,12 +240,25 @@ pub(crate) fn parse_uri(uri: &str) -> Url {
 
     let uri = Url::parse(uri).unwrap_or_else(|e| panic!("{}", e));
 
-    if uri.scheme() != "s3" {
+    let (scheme, _) =
+        ObjectStoreScheme::parse(&uri).unwrap_or_else(|_| panic!("unsupported uri {}", uri));
+
+    if scheme == ObjectStoreScheme::AmazonS3 {
+        parse_s3_bucket(&uri)
+            .unwrap_or_else(|| panic!("failed to parse bucket name from s3 uri {}", uri));
+    } else if scheme == ObjectStoreScheme::MicrosoftAzure || scheme == ObjectStoreScheme::Http {
+        parse_azure_blob_container(&uri).unwrap_or_else(|| {
+            panic!(
+                "failed to parse container name from azure blob storage uri {}",
+                uri
+            )
+        });
+    } else {
         panic!(
-            "unsupported uri {}. Only local files and URIs with s3:// prefix are supported.",
+            "unsupported uri {}. Only Azure and S3 uris are supported.",
             uri
         );
-    }
+    };
 
     uri
 }

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+source setup_test_envs.sh
+
 nohup minio server /tmp/minio-storage > /dev/null 2>&1 &
 
 mc alias set local http://localhost:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD
