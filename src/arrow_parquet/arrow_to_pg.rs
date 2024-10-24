@@ -17,7 +17,8 @@ use pgrx::{
 use crate::{
     pgrx_utils::{
         array_element_typoid, collect_valid_attributes, domain_array_base_elem_typoid,
-        is_array_type, is_composite_type, tuple_desc,
+        is_array_type, is_composite_type, is_supported_array_element_type, is_supported_composite_type,
+        tuple_desc,
     },
     type_compat::{
         fallback_to_text::{reset_fallback_to_text_context, FallbackToText},
@@ -88,6 +89,10 @@ impl ArrowToPgAttributeContext {
         if is_array {
             let element_typoid = array_element_typoid(typoid);
 
+            if !is_supported_array_element_type(typoid) {
+                panic!("unsupported array element type");
+            }
+
             is_composite = is_composite_type(element_typoid);
             is_geometry = is_postgis_geometry_type(element_typoid);
             is_map = is_map_type(element_typoid);
@@ -107,6 +112,10 @@ impl ArrowToPgAttributeContext {
             is_composite = is_composite_type(typoid);
             is_geometry = is_postgis_geometry_type(typoid);
             is_map = is_map_type(typoid);
+
+            if is_composite && !is_supported_composite_type(typoid) {
+                panic!("unsupported composite element type");
+            }
 
             if is_map {
                 let entries_typoid = domain_array_base_elem_typoid(typoid);
