@@ -5,6 +5,8 @@ use pgrx::{
     direct_function_call, pg_sys, AnyNumeric, IntoDatum,
 };
 
+use crate::parquet_copy_hook::pg_compat::extract_timezone_from_timetz;
+
 pub(crate) const MAX_DECIMAL_PRECISION: usize = 38;
 
 pub(crate) fn date_to_i32(date: Date) -> i32 {
@@ -128,17 +130,7 @@ pub(crate) fn i64_to_time(i64_time: i64) -> Time {
 }
 
 pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> i64 {
-    let timezone_as_secs: AnyNumeric = unsafe {
-        direct_function_call(
-            pg_sys::extract_timetz,
-            &["timezone".into_datum(), timetz.into_datum()],
-        )
-    }
-    .expect("cannot extract timezone from timetz");
-
-    let timezone_as_secs: f64 = timezone_as_secs
-        .try_into()
-        .unwrap_or_else(|e| panic!("{}", e));
+    let timezone_as_secs = extract_timezone_from_timetz(timetz);
 
     let timezone_as_interval = Interval::from_seconds(timezone_as_secs);
     let adjusted_timetz: TimeWithTimeZone = unsafe {
