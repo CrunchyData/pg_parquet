@@ -6,8 +6,11 @@ use pgrx::{
     pg_sys::{
         copy_data_source_cb, AsPgCStr, List, Node, ParseState, QueryEnvironment, RawStmt, Relation,
     },
-    AnyNumeric, IntoDatum,
+    IntoDatum,
 };
+
+#[cfg(any(feature = "pg14", feature = "pg15", feature = "pg16", feature = "pg17"))]
+use pgrx::AnyNumeric;
 
 pub(crate) fn pg_analyze_and_rewrite(
     raw_stmt: *mut RawStmt,
