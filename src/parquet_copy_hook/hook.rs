@@ -109,7 +109,6 @@ fn process_copy_from_parquet(
         .execute()
 }
 
-#[cfg(any(feature = "pg14", feature = "pg15", feature = "pg16", feature = "pg17"))]
 #[pg_guard]
 #[allow(clippy::too_many_arguments)]
 extern "C" fn parquet_copy_hook(
@@ -163,67 +162,6 @@ extern "C" fn parquet_copy_hook(
                 p_stmt.into_pg(),
                 query_string.as_ptr(),
                 read_only_tree,
-                context,
-                params.into_pg(),
-                query_env.into_pg(),
-                dest,
-                completion_tag.into_pg(),
-            )
-        }
-    }
-}
-
-#[cfg(feature = "pg13")]
-#[pg_guard]
-#[allow(clippy::too_many_arguments)]
-extern "C" fn parquet_copy_hook(
-    p_stmt: *mut PlannedStmt,
-    query_string: *const c_char,
-    context: u32,
-    params: *mut ParamListInfoData,
-    query_env: *mut QueryEnvironment,
-    dest: *mut DestReceiver,
-    completion_tag: *mut QueryCompletion,
-) {
-    let p_stmt = unsafe { PgBox::from_pg(p_stmt) };
-    let query_string = unsafe { CStr::from_ptr(query_string) };
-    let params = unsafe { PgBox::from_pg(params) };
-    let query_env = unsafe { PgBox::from_pg(query_env) };
-    let mut completion_tag = unsafe { PgBox::from_pg(completion_tag) };
-
-    if ENABLE_PARQUET_COPY_HOOK.get() && is_copy_to_parquet_stmt(&p_stmt) {
-        let nprocessed = process_copy_to_parquet(&p_stmt, query_string, &params, &query_env);
-
-        if !completion_tag.is_null() {
-            completion_tag.nprocessed = nprocessed;
-            completion_tag.commandTag = CommandTag::CMDTAG_COPY;
-        }
-        return;
-    } else if ENABLE_PARQUET_COPY_HOOK.get() && is_copy_from_parquet_stmt(&p_stmt) {
-        let nprocessed = process_copy_from_parquet(&p_stmt, query_string, &query_env);
-
-        if !completion_tag.is_null() {
-            completion_tag.nprocessed = nprocessed;
-            completion_tag.commandTag = CommandTag::CMDTAG_COPY;
-        }
-        return;
-    }
-
-    unsafe {
-        if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
-            prev_hook(
-                p_stmt.into_pg(),
-                query_string.as_ptr(),
-                context,
-                params.into_pg(),
-                query_env.into_pg(),
-                dest,
-                completion_tag.into_pg(),
-            )
-        } else {
-            standard_ProcessUtility(
-                p_stmt.into_pg(),
-                query_string.as_ptr(),
                 context,
                 params.into_pg(),
                 query_env.into_pg(),

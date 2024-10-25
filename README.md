@@ -238,7 +238,6 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 `pg_parquet` supports the following PostgreSQL versions:
 | PostgreSQL Major Version | Supported |
 |--------------------------|-----------|
-| 13                       |    ✅     |
 | 14                       |    ✅     |
 | 15                       |    ✅     |
 | 16                       |    ✅     |
