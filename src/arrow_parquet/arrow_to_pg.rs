@@ -17,8 +17,8 @@ use pgrx::{
 use crate::{
     pgrx_utils::{
         array_element_typoid, collect_valid_attributes, domain_array_base_elem_typoid,
-        is_array_type, is_composite_type, is_supported_array_element_type, is_supported_composite_type,
-        tuple_desc,
+        is_array_type, is_composite_type, is_supported_array_element_type,
+        is_supported_composite_type, tuple_desc,
     },
     type_compat::{
         fallback_to_text::{reset_fallback_to_text_context, FallbackToText},

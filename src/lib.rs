@@ -2353,6 +2353,7 @@ mod tests {
         Spi::run(parquet_metadata_command).unwrap();
     }
 
+    #[cfg(not(feature = "pg13"))]
     #[pg_test]
     #[should_panic(
         expected = "type mismatch for column \"location\" between table and parquet file"

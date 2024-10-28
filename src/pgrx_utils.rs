@@ -59,16 +59,19 @@ pub(crate) fn is_array_type(typoid: Oid) -> bool {
     unsafe { type_is_array(typoid) }
 }
 
-pub(crate) fn is_supported_array_element_type(array_element_id: Oid) -> bool {
+pub(crate) fn is_supported_array_element_type(_array_element_id: Oid) -> bool {
     #[cfg(feature = "pg13")]
-    return u32::from(array_element_id) < FirstNormalObjectId;
-    #[cfg(not(feature = "pg13"))]
+    if u32::from(_array_element_id) >= FirstNormalObjectId {
+        // we don't support arrays of user-defined composite types in pg 13
+        return !is_composite_type(_array_element_id);
+    }
+
     true
 }
 
-pub(crate) fn is_supported_composite_type(composite_id: Oid) -> bool {
+pub(crate) fn is_supported_composite_type(_composite_id: Oid) -> bool {
     #[cfg(feature = "pg13")]
-    return u32::from(composite_id) < FirstNormalObjectId;
+    return !u32::from(_composite_id) >= FirstNormalObjectId;
     #[cfg(not(feature = "pg13"))]
     true
 }
