@@ -8,6 +8,9 @@ use pgrx::{
     PgTupleDesc,
 };
 
+#[cfg(feature = "pg13")]
+use pgrx::pg_sys::FirstNormalObjectId;
+
 // collect_valid_attributes collects not-dropped attributes from the tuple descriptor.
 // If include_generated_columns is false, it will skip generated columns.
 pub(crate) fn collect_valid_attributes(
@@ -54,6 +57,23 @@ pub(crate) fn is_composite_type(typoid: Oid) -> bool {
 
 pub(crate) fn is_array_type(typoid: Oid) -> bool {
     unsafe { type_is_array(typoid) }
+}
+
+pub(crate) fn is_supported_array_element_type(_array_element_id: Oid) -> bool {
+    #[cfg(feature = "pg13")]
+    if u32::from(_array_element_id) >= FirstNormalObjectId {
+        // we don't support arrays of user-defined composite types in pg 13
+        return !is_composite_type(_array_element_id);
+    }
+
+    true
+}
+
+pub(crate) fn is_supported_composite_type(_composite_id: Oid) -> bool {
+    #[cfg(feature = "pg13")]
+    return !u32::from(_composite_id) >= FirstNormalObjectId;
+    #[cfg(not(feature = "pg13"))]
+    true
 }
 
 pub(crate) fn is_domain_of_array_type(typoid: Oid) -> bool {

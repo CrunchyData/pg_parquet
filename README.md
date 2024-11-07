@@ -238,7 +238,11 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 `pg_parquet` supports the following PostgreSQL versions:
 | PostgreSQL Major Version | Supported |
 |--------------------------|-----------|
+| 13                       |    ✅[1]  |
 | 14                       |    ✅     |
 | 15                       |    ✅     |
 | 16                       |    ✅     |
 | 17                       |    ✅     |
+
+[1] Postgres 13 support does not allow `COPY FROM ... WHERE` syntax for parquet files or custom data types stored in arrays or composite types.
+

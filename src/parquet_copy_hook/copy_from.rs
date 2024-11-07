@@ -5,8 +5,8 @@ use pgrx::{
     pg_sys::{
         addNSItemToQuery, assign_expr_collations, canonicalize_qual, check_enable_rls,
         coerce_to_boolean, eval_const_expressions, make_ands_implicit, transformExpr, AsPgCStr,
-        BeginCopyFrom, CheckEnableRlsResult, CopyFrom, CopyStmt, EndCopyFrom, InvalidOid, Node,
-        Oid, ParseExprKind, ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment,
+        CheckEnableRlsResult, CopyFrom, CopyStmt, EndCopyFrom, InvalidOid, Node, Oid,
+        ParseExprKind, ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment,
     },
     void_mut_ptr, PgBox, PgLogLevel, PgRelation, PgSqlErrorCode,
 };
@@ -19,9 +19,12 @@ use crate::{
     },
 };
 
-use super::copy_utils::{
-    copy_stmt_attribute_list, copy_stmt_create_namespace_item, copy_stmt_create_parse_state,
-    create_filtered_tupledesc_for_relation,
+use super::{
+    copy_utils::{
+        copy_stmt_attribute_list, copy_stmt_create_namespace_item, copy_stmt_create_parse_state,
+        create_filtered_tupledesc_for_relation,
+    },
+    pg_compat::BeginCopyFrom,
 };
 
 // stack to store parquet reader contexts for COPY FROM.
@@ -124,6 +127,13 @@ pub(crate) fn execute_copy_from(
     let mut where_clause = copy_from_stmt_where_clause(p_stmt);
 
     if !where_clause.is_null() {
+        #[cfg(feature = "pg13")]
+        ereport!(
+            pgrx::PgLogLevel::ERROR,
+            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+            "COPY FROM ... WHERE is not supported"
+        );
+
         where_clause = copy_from_stmt_transform_where_clause(&p_state, &ns_item, where_clause);
     }
 
@@ -143,8 +153,6 @@ pub(crate) fn execute_copy_from(
             p_state.as_ptr(),
             relation.as_ptr(),
             where_clause,
-            std::ptr::null(),
-            false,
             Some(copy_parquet_data_to_buffer),
             attribute_list,
             copy_options.as_ptr(),

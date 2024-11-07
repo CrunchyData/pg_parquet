@@ -2353,6 +2353,7 @@ mod tests {
         Spi::run(parquet_metadata_command).unwrap();
     }
 
+    #[cfg(not(feature = "pg13"))]
     #[pg_test]
     #[should_panic(
         expected = "type mismatch for column \"location\" between table and parquet file"
@@ -2471,6 +2472,35 @@ mod tests {
         Spi::run(copy_from_parquet).unwrap();
     }
 
+    #[cfg(not(feature = "pg13"))]
+    #[pg_test]
+    fn test_with_where_clause() {
+        let create_table = "create table test(id int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_to_parquet =
+            "copy (select i as id from generate_series(1,5) i) to '/tmp/test.parquet';";
+        Spi::run(copy_to_parquet).unwrap();
+
+        let copy_from_parquet = "copy test from '/tmp/test.parquet' where id > 2;";
+        Spi::run(copy_from_parquet).unwrap();
+
+        let result = Spi::connect(|client| {
+            let tup_table = client.select("select * from test;", None, None).unwrap();
+            let mut results = Vec::new();
+
+            for row in tup_table {
+                let id = row["id"].value::<i32>().unwrap().unwrap();
+                results.push(id);
+            }
+
+            results
+        });
+        assert_eq!(result, vec![3, 4, 5]);
+    }
+
+    #[cfg(feature = "pg13")]
+    #[should_panic(expected = "COPY FROM ... WHERE is not supported")]
     #[pg_test]
     fn test_with_where_clause() {
         let create_table = "create table test(id int);";
