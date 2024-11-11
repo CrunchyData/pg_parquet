@@ -7,5 +7,6 @@ pub(crate) mod copy_to_program;
 pub(crate) mod copy_to_split_dest_receiver;
 pub(crate) mod copy_to_stdout;
 pub(crate) mod copy_utils;
+pub(crate) mod create_table;
 pub(crate) mod hook;
 pub(crate) mod pg_compat;

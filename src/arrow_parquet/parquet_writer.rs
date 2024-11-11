@@ -16,7 +16,7 @@ use crate::{
         compression::PgParquetCompressionWithLevel,
         field_ids::validate_field_ids,
         pg_to_arrow::context::collect_pg_to_arrow_attribute_contexts,
-        schema_parser::{
+        schema::parse_schema::{
             parquet_schema_string_from_attributes, parse_arrow_schema_from_attributes,
         },
         uri_utils::parquet_writer_from_uri,

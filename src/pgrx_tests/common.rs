@@ -8,10 +8,10 @@ use crate::type_compat::map::Map;
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use parquet::arrow::ArrowWriter;
-use pgrx::spi;
 use pgrx::{
     datum::{Time, TimeWithTimeZone},
-    FromDatum, IntoDatum, Spi,
+    pg_sys::Oid,
+    spi, FromDatum, IntoDatum, Spi,
 };
 use pgrx::{Json, JsonB};
 
@@ -379,4 +379,78 @@ pub(crate) fn create_crunchy_map_type(key_type: &str, val_type: &str) -> String 
 
     let command = format!("SELECT crunchy_map.create('{key_type}','{val_type}')::text;",);
     Spi::get_one(&command).unwrap().unwrap()
+}
+
+pub(crate) fn ensure_table_attribute_type(
+    table_name: &str,
+    attribute_name: &str,
+    expected_typoid: Oid,
+    expected_typmod: i32,
+) {
+    let query = format!(
+        "select atttypid, atttypmod from pg_attribute
+          where attrelid = (select oid from pg_class where relname = '{}') and
+                attname = '{}'",
+        table_name, attribute_name
+    );
+
+    let (result_typoid, result_typmod) = Spi::get_two::<Oid, i32>(&query).unwrap();
+    assert_eq!(expected_typoid, result_typoid.unwrap());
+    assert_eq!(expected_typmod, result_typmod.unwrap());
+}
+
+pub(crate) fn copy_to_helper(uri: &str) {
+    let create_type = "CREATE TYPE child AS (id int);
+                       CREATE TYPE parent AS (id int, child child, children child[]);";
+    Spi::run(create_type).unwrap();
+
+    let copy_to = format!("COPY (SELECT 11::smallint AS a,
+                                            array[11::smallint, null] AS a_array,
+                                            232::int AS b,
+                                            array[232::int, null] AS b_array,
+                                            2342::bigint AS c,
+                                            array[2342::bigint, null] AS c_array,
+                                            12.34::float4 AS d,
+                                            array[12.34::float4, null] AS d_array,
+                                            123.325::float8 AS e,
+                                            array[123.325::float8, null] AS e_array,
+                                            123.24535::numeric AS f,
+                                            array[123.24535::numeric, null] AS f_array,
+                                            123.24535::numeric(8,5) AS f_with_typmod,
+                                            array[123.24535::numeric(8,5), null::numeric(8,5)] AS f_with_typmod_array,
+                                            false::bool AS g,
+                                            array[false, null] AS g_array,
+                                            '2022-05-05'::date AS h,
+                                            array['2022-05-05'::date, null] AS h_array,
+                                            '2022-05-05 13:00:00'::timestamp AS i,
+                                            array['2022-05-05 13:00:00'::timestamp, null] AS i_array,
+                                            '2022-05-05 13:00:00-05'::timestamptz AS j,
+                                            array['2022-05-05 13:00:00-05'::timestamptz, null] AS j_array,
+                                            '13:00:00'::time AS k,
+                                            array['13:00:00'::time, null] AS k_array,
+                                            '13:00:00-05'::timetz AS l,
+                                            array['13:00:00-05'::timetz, null] AS l_array,
+                                            '2 years 3 minutes 3 seconds'::interval AS m,
+                                            array['2 years 3 minutes 3 seconds'::interval, null] AS m_array,
+                                            'a'::\"char\" AS n,
+                                            array['a'::\"char\", null] AS n_array,
+                                            'hello'::text AS o,
+                                            array['hello'::text, null] AS o_array,
+                                            'hello'::bytea AS p,
+                                            array['hello'::bytea, null] AS p_array,
+                                            'hello'::varchar AS q,
+                                            array['hello'::varchar, null] AS q_array,
+                                            'hello'::bpchar AS r,
+                                            array['hello'::bpchar, null] AS r_array,
+                                            'hello'::name AS s,
+                                            array['hello'::name, null] AS s_array,
+                                            '{{\"id\": 12, \"name\": \"Doe\"}}'::json AS t,
+                                            array['{{\"id\": 12, \"name\": \"Doe\"}}'::json, null] AS t_array,
+                                            '{{\"id\": 12, \"name\": \"Doe\"}}'::jsonb AS u,
+                                            array['{{\"id\": 12, \"name\": \"Doe\"}}'::jsonb, null] AS u_array,
+                                            123::oid AS v,
+                                            array[123::oid, null] AS v_array,
+                                            row(1, row(10)::child, array[row(10), null]::child[])::parent AS y,
+                                            array[row(1, row(10)::child, array[row(10), null]::child[])::parent, null] AS y_array) TO '{}'", uri);
+    Spi::run(&copy_to).unwrap();
 }

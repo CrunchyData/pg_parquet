@@ -4,7 +4,7 @@ mod tests {
 
     use pgrx::{pg_sys::Timestamp, pg_test, Spi};
 
-    use crate::pgrx_tests::common::{CopyOptionValue, TestTable};
+    use crate::pgrx_tests::common::{copy_to_helper, CopyOptionValue, TestTable};
 
     fn object_store_cache_clear() {
         Spi::run("SELECT parquet_test.object_store_cache_clear();").unwrap();
@@ -454,6 +454,21 @@ mod tests {
         let s3_uri_pattern = format!("s3://{test_bucket_name}/dummy*.parquet");
         let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri_pattern);
         Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    fn test_s3_create_table_from_file() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        copy_to_helper(s3_uri.as_str());
+
+        let create_table = format!("CREATE TABLE test_table () WITH (load_from = '{}')", s3_uri);
+        Spi::run(create_table.as_str()).unwrap();
     }
 
     #[pg_test]

@@ -19,6 +19,7 @@ COPY table FROM 's3://mybucket/data.parquet' WITH (format 'parquet');
 - [Installation From Source](#installation-from-source)
 - [Usage](#usage)
   - [Copy FROM/TO Parquet files TO/FROM Postgres tables](#copy-fromto-parquet-files-tofrom-postgres-tables)
+  - [Create Postgres tables from Parquet files](#create-postgres-tables-from-parquet-files)
   - [COPY FROM/TO Parquet stdin/stdout TO/FROM Postgres tables)](#copy-fromto-parquet-stdinstdout-tofrom-postgres-tables)
   - [COPY FROM/TO Parquet program stream TO/FROM Postgres tables)](#copy-fromto-parquet-program-stream-tofrom-postgres-tables)
   - [Inspect Parquet schema](#inspect-parquet-schema)
@@ -68,7 +69,7 @@ psql> "CREATE EXTENSION pg_parquet;"
 ## Usage
 There are mainly 3 things that you can do with `pg_parquet`:
 1. You can export Postgres tables/queries to Parquet files, stdin/stdout or a program's stream,
-2. You can ingest data from Parquet files to Postgres tables,
+2. You can ingest data from Parquet files to Postgres tables with type coercion and schema inference,
 3. You can inspect the schema and metadata of Parquet files.
 
 ### COPY from/to Parquet files to/from Postgres tables
@@ -109,6 +110,22 @@ COPY product_example FROM '/tmp/product_example.parquet';
 -- show table
 SELECT * FROM product_example;
 ```
+
+### Create Postgres tables from Parquet files
+You can use `CREATE TABLE () WITH (definition_from = <uri>)` command to **infer** the columns of Postgres tables.
+You can even infer + populate the table via `CREATE TABLE () WITH (load_from = <uri>)`.
+
+```sql
+-- create table with inferred columns and populated rows
+CREATE TABLE product_inferred_example () WITH (load_from = '/tmp/product_example.parquet');
+
+-- show table
+SELECT * FROM product_inferred_example;
+```
+
+> [!NOTE]
+> If the inferred column is of composite type, a new type will be created named as `parquet_structs.struct_<hash>`. Hash is determined by
+field types and names of the composite type.
 
 ### COPY from/to Parquet stdin/stdout to/from Postgres tables
 
