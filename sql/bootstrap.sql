@@ -14,3 +14,6 @@ CREATE SCHEMA parquet;
 REVOKE ALL ON SCHEMA parquet FROM public;
 GRANT USAGE ON SCHEMA parquet TO public;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA parquet TO public;
+
+-- error if the schema already exists
+CREATE SCHEMA parquet_structs;
