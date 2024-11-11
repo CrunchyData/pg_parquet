@@ -37,8 +37,11 @@ pub extern "C" fn _PG_init() {
 #[cfg(any(test, feature = "pg_test"))]
 #[pg_schema]
 mod tests {
+    use std::fs::File;
     use std::io::Write;
     use std::marker::PhantomData;
+    use std::sync::Arc;
+    use std::vec;
     use std::{collections::HashMap, fmt::Debug};
 
     use crate::arrow_parquet::compression::PgParquetCompression;
@@ -46,8 +49,19 @@ mod tests {
     use crate::type_compat::geometry::Geometry;
     use crate::type_compat::map::Map;
     use crate::type_compat::pg_arrow_type_conversions::{
+        date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
         DEFAULT_UNBOUNDED_NUMERIC_PRECISION, DEFAULT_UNBOUNDED_NUMERIC_SCALE,
     };
+    use arrow::array::{
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int8Array, LargeBinaryArray, LargeStringArray,
+        ListArray, MapArray, RecordBatch, StringArray, StructArray, Time64MicrosecondArray,
+        TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    };
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+    use arrow::datatypes::UInt16Type;
+    use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
+    use parquet::arrow::ArrowWriter;
     use pgrx::pg_sys::Oid;
     use pgrx::{
         composite_type,
@@ -338,6 +352,14 @@ mod tests {
         );
 
         Spi::get_one(&query).unwrap().unwrap()
+    }
+
+    fn write_record_batch_to_parquet(schema: SchemaRef, record_batch: RecordBatch) {
+        let file = File::create("/tmp/test.parquet").unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+
+        writer.write(&record_batch).unwrap();
+        writer.close().unwrap();
     }
 
     #[pg_test]
@@ -1392,6 +1414,980 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_coerce_primitive_types() {
+        // INT16 => {int, bigint}
+        let x_nullable = false;
+        let y_nullable = true;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int16, x_nullable),
+            Field::new("y", DataType::Int16, y_nullable),
+        ]));
+
+        let x = Arc::new(Int16Array::from(vec![1]));
+        let y = Arc::new(Int16Array::from(vec![2]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x int, y bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_two::<i32, i64>("SELECT x, y FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(1), Some(2)));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // INT32 => {bigint}
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int32, true)]));
+
+        let x = Arc::new(Int32Array::from(vec![1]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<i64>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, 1);
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // FLOAT32 => {double}
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Float32, true)]));
+
+        let x = Arc::new(Float32Array::from(vec![1.123]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x double precision)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<f64>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value as f32, 1.123);
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // FLOAT64 => {float}
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Float64, true)]));
+
+        let x = Arc::new(Float64Array::from(vec![1.123]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x real)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<f32>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, 1.123);
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // DATE32 => {timestamp}
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Date32, true)]));
+
+        let date = Date::new(2022, 5, 5).unwrap();
+
+        let x = Arc::new(Date32Array::from(vec![date_to_i32(date)]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x timestamp)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<Timestamp>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, Timestamp::from(date));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // TIMESTAMP => {timestamptz}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+
+        let timestamp = Timestamp::from(Date::new(2022, 5, 5).unwrap());
+
+        let x = Arc::new(TimestampMicrosecondArray::from(vec![timestamp_to_i64(
+            timestamp,
+        )]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x timestamptz)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<TimestampWithTimeZone>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value.at_timezone("UTC").unwrap(), timestamp);
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // TIMESTAMPTZ => {timestamp}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("Europe/Paris".into())),
+            true,
+        )]));
+
+        let timestamptz =
+            TimestampWithTimeZone::with_timezone(2022, 5, 5, 0, 0, 0.0, "Europe/Paris").unwrap();
+
+        let x = Arc::new(
+            TimestampMicrosecondArray::from(vec![timestamptz_to_i64(timestamptz)])
+                .with_timezone("Europe/Paris"),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x timestamp)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<Timestamp>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, timestamptz.at_timezone("UTC").unwrap());
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // TIME64 => {timetz}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        )]));
+
+        let time = Time::new(13, 0, 0.0).unwrap();
+
+        let x = Arc::new(Time64MicrosecondArray::from(vec![time_to_i64(time)]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x timetz)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<TimeWithTimeZone>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, time.into());
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // TIME64 => {time}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        )
+        .with_metadata(HashMap::from_iter(vec![(
+            "adjusted_to_utc".into(),
+            "true".into(),
+        )]))]));
+
+        let timetz = TimeWithTimeZone::with_timezone(13, 0, 0.0, "UTC").unwrap();
+
+        let x = Arc::new(Time64MicrosecondArray::from(vec![timetz_to_i64(timetz)]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x time)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<Time>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, timetz.into());
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // UINT16 => {smallint, int, bigint}
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::UInt16, true),
+            Field::new("y", DataType::UInt16, true),
+            Field::new("z", DataType::UInt16, true),
+        ]));
+
+        let x = Arc::new(UInt16Array::from(vec![1]));
+        let y = Arc::new(UInt16Array::from(vec![2]));
+        let z = Arc::new(UInt16Array::from(vec![3]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y, z]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x smallint, y int, z bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value =
+            Spi::get_three::<i16, i32, i64>("SELECT x, y, z FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(1), Some(2), Some(3)));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // UINT32 => {int, bigint}
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::UInt32, true),
+            Field::new("y", DataType::UInt32, true),
+        ]));
+
+        let x = Arc::new(UInt32Array::from(vec![1]));
+        let y = Arc::new(UInt32Array::from(vec![2]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x int, y bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_two::<i32, i64>("SELECT x, y FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(1), Some(2)));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // UINT64 => {bigint}
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::UInt64, true)]));
+
+        let x = Arc::new(UInt64Array::from(vec![1]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<i64>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, 1);
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // INT8 => {int64}
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Int8, true)]));
+
+        let x = Arc::new(Int8Array::from(vec![1]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<i64>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, 1);
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // BOOLEAN => {int}
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Boolean, true)]));
+
+        let x = Arc::new(BooleanArray::from(vec![true]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x int)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<i32>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, 1);
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // DECIMAL128 => {float}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Decimal128(8, 5),
+            true,
+        )]));
+
+        let x = Arc::new(
+            Decimal128Array::from(vec!["12345000".parse::<i128>().expect("invalid decimal")])
+                .with_precision_and_scale(8, 5)
+                .unwrap(),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x float8)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<f64>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, 123.45);
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // Binary => {text}
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Binary, true)]));
+
+        let x = Arc::new(BinaryArray::from(vec!["abc".as_bytes()]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x text)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<String>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, "abc");
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // LargeUtf8 => {text}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::LargeUtf8,
+            true,
+        )]));
+
+        let x = Arc::new(LargeStringArray::from(vec!["test"]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x text)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<String>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, "test");
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // LargeBinary => {bytea}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::LargeBinary,
+            true,
+        )]));
+
+        let x = Arc::new(LargeBinaryArray::from(vec!["abc".as_bytes()]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bytea)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<Vec<u8>>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, "abc".as_bytes());
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_list_types() {
+        // [UINT16] => {int[], bigint[]}
+        let x_nullable = false;
+        let field_x = Field::new(
+            "x",
+            DataType::List(Field::new("item", DataType::UInt16, false).into()),
+            x_nullable,
+        );
+
+        let x = Arc::new(UInt16Array::from(vec![1, 2]));
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 2]));
+        let x = Arc::new(ListArray::new(
+            Arc::new(Field::new("item", DataType::UInt16, false)),
+            offsets,
+            x,
+            None,
+        ));
+
+        let y_nullable = true;
+        let field_y = Field::new(
+            "y",
+            DataType::List(Field::new("item", DataType::UInt16, true).into()),
+            y_nullable,
+        );
+
+        let y = Arc::new(ListArray::from_iter_primitive::<UInt16Type, _, _>(vec![
+            Some(vec![Some(3), Some(4)]),
+        ]));
+
+        let schema = Arc::new(Schema::new(vec![field_x, field_y]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x int[], y bigint[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_two::<Vec<Option<i32>>, Vec<Option<i64>>>(
+            "SELECT x, y FROM test_table LIMIT 1",
+        )
+        .unwrap();
+        assert_eq!(
+            value,
+            (Some(vec![Some(1), Some(2)]), Some(vec![Some(3), Some(4)]))
+        );
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_struct_types() {
+        // STRUCT {a: UINT16, b: UINT16} => test_type {a: int, b: bigint}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("a", DataType::UInt16, false),
+                    Field::new("b", DataType::UInt16, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let a: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1)]));
+        let b: ArrayRef = Arc::new(UInt16Array::from(vec![Some(2)]));
+
+        let x = Arc::new(StructArray::try_from(vec![("a", a), ("b", b)]).unwrap());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int, b bigint)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value =
+            Spi::get_two::<i32, i64>("SELECT (x).a, (x).b FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(1), Some(2)));
+    }
+
+    #[pg_test]
+    fn test_coerce_list_of_struct() {
+        // [STRUCT {a: UINT16, b: UINT16}] => test_type {a: int, b: bigint}[]
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::List(
+                Field::new(
+                    "item",
+                    DataType::Struct(
+                        vec![
+                            Field::new("a", DataType::UInt16, false),
+                            Field::new("b", DataType::UInt16, false),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )
+                .into(),
+            ),
+            false,
+        )]));
+
+        let a: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1)]));
+        let b: ArrayRef = Arc::new(UInt16Array::from(vec![Some(2)]));
+
+        let x = Arc::new(StructArray::try_from(vec![("a", a), ("b", b)]).unwrap());
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1]));
+        let x = Arc::new(ListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::Struct(
+                    vec![
+                        Field::new("a", DataType::UInt16, false),
+                        Field::new("b", DataType::UInt16, false),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            offsets,
+            x,
+            None,
+        ));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int, b bigint)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value =
+            Spi::get_two::<i32, i64>("SELECT (x[1]).a, (x[1]).b FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(1), Some(2)));
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    fn test_not_coercable_list_of_struct() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::List(
+                Field::new(
+                    "item",
+                    DataType::Struct(vec![Field::new("a", DataType::UInt16, false)].into()),
+                    false,
+                )
+                .into(),
+            ),
+            false,
+        )]));
+
+        let a: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1)]));
+
+        let x = Arc::new(StructArray::try_from(vec![("a", a)]).unwrap());
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1]));
+        let x = Arc::new(ListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::Struct(vec![Field::new("a", DataType::UInt16, false)].into()),
+                false,
+            )),
+            offsets,
+            x,
+            None,
+        ));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int, b bigint)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+
+        let value =
+            Spi::get_two::<i32, i64>("SELECT (x[1]).a, (x[1]).b FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(1), Some(2)));
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    fn test_coerce_struct_type_with_less_field() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(vec![Field::new("a", DataType::UInt16, false)].into()),
+            false,
+        )]));
+
+        let a: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1)]));
+
+        let x = Arc::new(StructArray::try_from(vec![("a", a)]).unwrap());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int, b bigint)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    fn test_coerce_struct_type_with_different_field_name() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("b", DataType::UInt16, false),
+                    Field::new("a", DataType::UInt16, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let a: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1)]));
+        let b: ArrayRef = Arc::new(UInt16Array::from(vec![Some(2)]));
+
+        let x = Arc::new(StructArray::try_from(vec![("b", a), ("a", b)]).unwrap());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int, b bigint)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    fn test_coerce_struct_type_with_not_castable_field_type() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("a", DataType::UInt16, false),
+                    Field::new("b", DataType::Boolean, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let a: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1)]));
+        let b: ArrayRef = Arc::new(BooleanArray::from(vec![Some(false)]));
+
+        let x = Arc::new(StructArray::try_from(vec![("a", a), ("b", b)]).unwrap());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int, b date)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_map_types() {
+        // Skip the test if crunchy_map extension is not available
+        if !extension_exists("crunchy_map") {
+            return;
+        }
+
+        // MAP<TEXT, UINT16> => crunchy_map {key: text, val: bigint}
+        let entries_field = Arc::new(Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("val", DataType::UInt16, false),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Map(entries_field.clone(), false),
+            false,
+        )]));
+
+        let keys: ArrayRef = Arc::new(StringArray::from(vec![Some("aa"), Some("bb")]));
+        let values: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1), Some(2)]));
+
+        let entries = StructArray::try_from(vec![("key", keys), ("val", values)]).unwrap();
+
+        let map_offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 2]));
+
+        let map_nulls = NullBuffer::from(vec![true]);
+
+        let x = Arc::new(MapArray::new(
+            entries_field,
+            map_offsets,
+            entries,
+            Some(map_nulls),
+            false,
+        ));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        Spi::run("DROP EXTENSION IF EXISTS crunchy_map; CREATE EXTENSION crunchy_map;").unwrap();
+
+        Spi::run("SELECT crunchy_map.create('text','bigint');").unwrap();
+
+        let create_table = "CREATE TABLE test_table (x crunchy_map.key_text_val_bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>("select x = array[('aa',1),('bb',2)]::crunchy_map.key_text_val_bigint from test_table LIMIT 1;").unwrap().unwrap();
+        assert!(value);
+    }
+
+    #[pg_test]
+    fn test_coerce_list_of_map() {
+        // Skip the test if crunchy_map extension is not available
+        if !extension_exists("crunchy_map") {
+            return;
+        }
+
+        // [MAP<TEXT, UINT16>] => crunchy_map {key: text, val: bigint}[]
+        let entries_field = Arc::new(Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("val", DataType::UInt16, false),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::List(
+                Field::new("item", DataType::Map(entries_field.clone(), false), false).into(),
+            ),
+            false,
+        )]));
+
+        let keys: ArrayRef = Arc::new(StringArray::from(vec![Some("aa"), Some("bb")]));
+        let values: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1), Some(2)]));
+
+        let entries = StructArray::try_from(vec![("key", keys), ("val", values)]).unwrap();
+
+        let map_offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 2]));
+
+        let map_nulls = NullBuffer::from(vec![true]);
+
+        let map = Arc::new(MapArray::new(
+            entries_field.clone(),
+            map_offsets,
+            entries,
+            Some(map_nulls),
+            false,
+        ));
+
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 1]));
+        let x = Arc::new(ListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::Map(entries_field, false),
+                false,
+            )),
+            offsets,
+            map,
+            None,
+        ));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        Spi::run("DROP EXTENSION IF EXISTS crunchy_map; CREATE EXTENSION crunchy_map;").unwrap();
+
+        Spi::run("SELECT crunchy_map.create('text','bigint');").unwrap();
+
+        let create_table = "CREATE TABLE test_table (x crunchy_map.key_text_val_bigint[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>("select x = array[array[('aa',1),('bb',2)]::crunchy_map.key_text_val_bigint] from test_table LIMIT 1;").unwrap().unwrap();
+        assert!(value);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "violates not-null constraint")]
+    fn test_copy_not_null_table() {
+        let create_table = "CREATE TABLE test_table (x int NOT NULL)";
+        Spi::run(create_table).unwrap();
+
+        // first copy non-null value to file
+        let copy_to = "COPY (SELECT 1 as x) TO '/tmp/test.parquet'";
+        Spi::run(copy_to).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let result = Spi::get_one::<i32>("SELECT x FROM test_table")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, 1);
+
+        // then copy null value to file
+        let copy_to = "COPY (SELECT NULL::int as x) TO '/tmp/test.parquet'";
+        Spi::run(copy_to).unwrap();
+
+        // this should panic
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+    }
+
+    #[pg_test]
+    fn test_table_with_different_field_position() {
+        let copy_to = "COPY (SELECT 1 as x, 'hello' as y) TO '/tmp/test.parquet'";
+        Spi::run(copy_to).unwrap();
+
+        let create_table = "CREATE TABLE test_table (y text, x int)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+
+        let result = Spi::get_two::<&str, i32>("SELECT y, x FROM test_table LIMIT 1").unwrap();
+        assert_eq!(result, (Some("hello"), Some(1)));
+    }
+
+    #[pg_test]
+    fn test_table_with_relaxed_cast() {
+        // INT64 => int
+        let copy_to = "COPY (SELECT 1::bigint as x) TO '/tmp/test.parquet'";
+        Spi::run(copy_to).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x int)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        Spi::run(copy_from).unwrap();
+
+        let result = Spi::get_one::<i32>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, 1);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    fn test_table_with_strict_cast_fail() {
+        // INT64 => int
+        let copy_to = "COPY (SELECT 1::bigint as x) TO '/tmp/test.parquet'";
+        Spi::run(copy_to).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x int)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        Spi::run(copy_from).unwrap();
+    }
+
+    #[pg_test]
     fn test_copy_with_empty_options() {
         let test_table = TestTable::<i32>::new("int4".into())
             .with_copy_to_options(HashMap::new())
@@ -1704,6 +2700,20 @@ mod tests {
         copy_options.insert(
             "format".to_string(),
             CopyOptionValue::StringOption("invalid_format".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_helper(test_table);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "invalid_cast_mode is not a valid cast_mode")]
+    fn test_invalid_cast_mode_copy_from() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "cast_mode".to_string(),
+            CopyOptionValue::StringOption("invalid_cast_mode".to_string()),
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
