@@ -110,7 +110,7 @@ SELECT * FROM parquet.schema('/tmp/product_example.parquet') LIMIT 10;
  /tmp/product_example.parquet | name         | BYTE_ARRAY |             | OPTIONAL        |              | UTF8           |       |           |        3 | STRING
  /tmp/product_example.parquet | items        |            |             | OPTIONAL        |            1 | LIST           |       |           |        4 | LIST
  /tmp/product_example.parquet | list         |            |             | REPEATED        |            1 |                |       |           |          | 
- /tmp/product_example.parquet | items        |            |             | OPTIONAL        |            3 |                |       |           |        5 | 
+ /tmp/product_example.parquet | element        |            |             | OPTIONAL        |            3 |                |       |           |        5 | 
  /tmp/product_example.parquet | id           | INT32      |             | OPTIONAL        |              |                |       |           |        6 | 
  /tmp/product_example.parquet | name         | BYTE_ARRAY |             | OPTIONAL        |              | UTF8           |       |           |        7 | STRING
 (10 rows)

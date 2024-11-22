@@ -155,14 +155,16 @@ fn parse_list_schema(typoid: Oid, typmod: i32, array_name: &str, field_id: &mut 
 
     *field_id += 1;
 
+    let element_name = "element";
+
     let elem_field = if is_composite_type(typoid) {
         let tupledesc = tuple_desc(typoid, typmod);
-        parse_struct_schema(tupledesc, array_name, field_id)
+        parse_struct_schema(tupledesc, element_name, field_id)
     } else if is_map_type(typoid) {
         let base_elem_typoid = domain_array_base_elem_typoid(typoid);
-        parse_map_schema(base_elem_typoid, typmod, array_name, field_id)
+        parse_map_schema(base_elem_typoid, typmod, element_name, field_id)
     } else {
-        parse_primitive_schema(typoid, typmod, array_name, field_id)
+        parse_primitive_schema(typoid, typmod, element_name, field_id)
     };
 
     let nullable = true;
@@ -292,14 +294,10 @@ fn parse_primitive_schema(
 }
 
 fn adjust_map_entries_field(field: FieldRef) -> FieldRef {
-    let name = field.deref().name();
-    let data_type = field.deref().data_type();
-    let metadata = field.deref().metadata().clone();
-
     let not_nullable_key_field;
     let nullable_value_field;
 
-    match data_type {
+    match field.deref().data_type() {
         arrow::datatypes::DataType::Struct(fields) => {
             let key_field = fields.find("key").expect("expected key field").1;
             let value_field = fields.find("val").expect("expected val field").1;
@@ -323,14 +321,18 @@ fn adjust_map_entries_field(field: FieldRef) -> FieldRef {
             .with_metadata(value_field.metadata().clone());
         }
         _ => {
-            panic!("expected struct data type for map entries")
+            panic!("expected struct data type for map key_value field")
         }
     };
 
     let entries_nullable = false;
 
+    let entries_name = "key_value";
+
+    let metadata = field.deref().metadata().clone();
+
     let entries_field = Field::new(
-        name,
+        entries_name,
         arrow::datatypes::DataType::Struct(Fields::from(vec![
             not_nullable_key_field,
             nullable_value_field,
@@ -392,7 +394,7 @@ pub(crate) fn ensure_arrow_schema_match_tupledesc_schema(
                     pgrx::PgLogLevel::ERROR,
                     PgSqlErrorCode::ERRCODE_CANNOT_COERCE,
                     type_mismatch_message,
-                    "Try COPY FROM '..' WITH (cast_mode = 'relaxed') to allow lossy casts with runtime checks."
+                    "Try COPY FROM '..' WITH (cast_mode 'relaxed') to allow lossy casts with runtime checks."
                 ),
                 CoercionError::NoCoercionPath => ereport!(
                     pgrx::PgLogLevel::ERROR,
