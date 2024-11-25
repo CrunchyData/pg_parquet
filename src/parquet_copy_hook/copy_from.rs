@@ -20,8 +20,8 @@ use crate::{
 };
 
 use super::copy_utils::{
-    copy_from_stmt_cast_mode, copy_stmt_attribute_list, copy_stmt_create_namespace_item,
-    copy_stmt_create_parse_state, create_filtered_tupledesc_for_relation,
+    copy_stmt_attribute_list, copy_stmt_create_namespace_item, copy_stmt_create_parse_state,
+    create_filtered_tupledesc_for_relation,
 };
 
 // stack to store parquet reader contexts for COPY FROM.
@@ -131,11 +131,9 @@ pub(crate) fn execute_copy_from(
 
     let tupledesc = create_filtered_tupledesc_for_relation(p_stmt, &relation);
 
-    let cast_mode = copy_from_stmt_cast_mode(p_stmt);
-
     unsafe {
         // parquet reader context is used throughout the COPY FROM operation.
-        let parquet_reader_context = ParquetReaderContext::new(uri, cast_mode, &tupledesc);
+        let parquet_reader_context = ParquetReaderContext::new(uri, &tupledesc);
         push_parquet_reader_context(parquet_reader_context);
 
         // makes sure to set binary format

@@ -193,7 +193,6 @@ Alternatively, you can use the following environment variables when starting pos
 
 `pg_parquet` supports the following options in the `COPY FROM` command:
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<compression>]` extension,
-- `cast_mode <string>`: Specifies the casting behavior, which can be set to either `strict` or `relaxed`. This determines whether lossy conversions are allowed. By default, the mode is `strict`, which does not permit lossy conversions (e.g., `bigint => int` causes a schema mismatch error during schema validation). When set to `relaxed`, lossy conversions are allowed, and errors will only be raised at runtime if a value cannot be properly converted. This option provides flexibility to handle schema mismatches by deferring error checks to runtime.
 
 ## Configuration
 There is currently only one GUC parameter to enable/disable the `pg_parquet`:

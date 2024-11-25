@@ -14,7 +14,6 @@ use pgrx::{
 use url::Url;
 
 use crate::arrow_parquet::{
-    cast_mode::CastMode,
     compression::{all_supported_compressions, PgParquetCompression},
     parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
     uri_utils::parse_uri,
@@ -110,7 +109,7 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri: &Url) {
 }
 
 pub(crate) fn validate_copy_from_options(p_stmt: &PgBox<PlannedStmt>) {
-    validate_copy_option_names(p_stmt, &["format", "cast_mode", "freeze"]);
+    validate_copy_option_names(p_stmt, &["format", "freeze"]);
 
     let format_option = copy_stmt_get_option(p_stmt, "format");
 
@@ -129,25 +128,6 @@ pub(crate) fn validate_copy_from_options(p_stmt: &PgBox<PlannedStmt>) {
                 format
             );
         }
-    }
-
-    let cast_mode_option = copy_stmt_get_option(p_stmt, "cast_mode");
-
-    if !cast_mode_option.is_null() {
-        let cast_mode = unsafe { defGetString(cast_mode_option.as_ptr()) };
-
-        let cast_mode = unsafe {
-            CStr::from_ptr(cast_mode)
-                .to_str()
-                .expect("cast_mode option is not a valid CString")
-        };
-
-        CastMode::from_str(cast_mode).unwrap_or_else(|_| {
-            panic!(
-                "{} is not a valid cast_mode. Set it to either 'strict' or 'relaxed'.",
-                cast_mode
-            );
-        });
     }
 }
 
@@ -271,24 +251,6 @@ pub(crate) fn copy_from_stmt_create_option_list(p_stmt: &PgBox<PlannedStmt>) -> 
     }
 
     new_copy_options
-}
-
-pub(crate) fn copy_from_stmt_cast_mode(p_stmt: &PgBox<PlannedStmt>) -> CastMode {
-    let cast_mode_option = copy_stmt_get_option(p_stmt, "cast_mode");
-
-    if cast_mode_option.is_null() {
-        CastMode::Strict
-    } else {
-        let cast_mode = unsafe { defGetString(cast_mode_option.as_ptr()) };
-
-        let cast_mode = unsafe {
-            CStr::from_ptr(cast_mode)
-                .to_str()
-                .expect("cast_mode option is not a valid CString")
-        };
-
-        CastMode::from_str(cast_mode).unwrap_or_else(|e| panic!("{}", e))
-    }
 }
 
 pub(crate) fn copy_stmt_get_option(

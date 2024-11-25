@@ -1499,7 +1499,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x real)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
         Spi::run(copy_from).unwrap();
 
         let value = Spi::get_one::<f32>("SELECT x FROM test_table LIMIT 1")
@@ -1588,7 +1588,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x timestamp)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
         Spi::run(copy_from).unwrap();
 
         let value = Spi::get_one::<Timestamp>("SELECT x FROM test_table LIMIT 1")
@@ -1768,7 +1768,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x int)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
         Spi::run(copy_from).unwrap();
 
         let value = Spi::get_one::<i32>("SELECT x FROM test_table LIMIT 1")
@@ -1820,7 +1820,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x text)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
         Spi::run(copy_from).unwrap();
 
         let value = Spi::get_one::<String>("SELECT x FROM test_table LIMIT 1")
@@ -2078,7 +2078,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type[])";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
         Spi::run(copy_from).unwrap();
 
         let value =
@@ -2108,7 +2108,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
         Spi::run(copy_from).unwrap();
     }
 
@@ -2141,7 +2141,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
         Spi::run(copy_from).unwrap();
     }
 
@@ -2174,7 +2174,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
         Spi::run(copy_from).unwrap();
     }
 
@@ -2357,38 +2357,6 @@ mod tests {
 
         let result = Spi::get_two::<&str, i32>("SELECT y, x FROM test_table LIMIT 1").unwrap();
         assert_eq!(result, (Some("hello"), Some(1)));
-    }
-
-    #[pg_test]
-    fn test_table_with_relaxed_cast() {
-        // INT64 => int
-        let copy_to = "COPY (SELECT 1::bigint as x) TO '/tmp/test.parquet'";
-        Spi::run(copy_to).unwrap();
-
-        let create_table = "CREATE TABLE test_table (x int)";
-        Spi::run(create_table).unwrap();
-
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (cast_mode 'relaxed')";
-        Spi::run(copy_from).unwrap();
-
-        let result = Spi::get_one::<i32>("SELECT x FROM test_table LIMIT 1")
-            .unwrap()
-            .unwrap();
-        assert_eq!(result, 1);
-    }
-
-    #[pg_test]
-    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
-    fn test_table_with_strict_cast_fail() {
-        // INT64 => int
-        let copy_to = "COPY (SELECT 1::bigint as x) TO '/tmp/test.parquet'";
-        Spi::run(copy_to).unwrap();
-
-        let create_table = "CREATE TABLE test_table (x int)";
-        Spi::run(create_table).unwrap();
-
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
-        Spi::run(copy_from).unwrap();
     }
 
     #[pg_test]
@@ -2724,20 +2692,6 @@ mod tests {
         copy_options.insert(
             "format".to_string(),
             CopyOptionValue::StringOption("invalid_format".to_string()),
-        );
-
-        let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
-        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
-        test_helper(test_table);
-    }
-
-    #[pg_test]
-    #[should_panic(expected = "invalid_cast_mode is not a valid cast_mode")]
-    fn test_invalid_cast_mode_copy_from() {
-        let mut copy_options = HashMap::new();
-        copy_options.insert(
-            "cast_mode".to_string(),
-            CopyOptionValue::StringOption("invalid_cast_mode".to_string()),
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);

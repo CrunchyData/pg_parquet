@@ -24,9 +24,8 @@ use crate::{
 
 use super::{
     arrow_to_pg::{collect_arrow_to_pg_attribute_contexts, ArrowToPgAttributeContext},
-    cast_mode::CastMode,
     schema_parser::{
-        ensure_arrow_schema_match_tupledesc_schema, parse_arrow_schema_from_attributes,
+        ensure_file_schema_match_tupledesc_schema, parse_arrow_schema_from_attributes,
     },
     uri_utils::{parquet_reader_from_uri, PG_BACKEND_TOKIO_RUNTIME},
 };
@@ -42,7 +41,7 @@ pub(crate) struct ParquetReaderContext {
 }
 
 impl ParquetReaderContext {
-    pub(crate) fn new(uri: Url, cast_mode: CastMode, tupledesc: &PgTupleDesc) -> Self {
+    pub(crate) fn new(uri: Url, tupledesc: &PgTupleDesc) -> Self {
         // Postgis and Map contexts are used throughout reading the parquet file.
         // We need to reset them to avoid reading the stale data. (e.g. extension could be dropped)
         reset_postgis_context();
@@ -63,14 +62,13 @@ impl ParquetReaderContext {
 
         let tupledesc_schema = Arc::new(tupledesc_schema);
 
-        // Ensure that the arrow schema matches the tupledesc.
+        // Ensure that the file schema matches the tupledesc schema.
         // Gets cast_to_types for each attribute if a cast is needed for the attribute's columnar array
         // to match the expected columnar array for its tupledesc type.
-        let cast_to_types = ensure_arrow_schema_match_tupledesc_schema(
+        let cast_to_types = ensure_file_schema_match_tupledesc_schema(
             parquet_file_schema.clone(),
             tupledesc_schema.clone(),
             &attributes,
-            cast_mode,
         );
 
         let attribute_contexts = collect_arrow_to_pg_attribute_contexts(

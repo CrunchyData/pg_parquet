@@ -1,6 +1,5 @@
 pub(crate) mod arrow_to_pg;
 pub(crate) mod arrow_utils;
-pub(crate) mod cast_mode;
 pub(crate) mod compression;
 pub(crate) mod parquet_reader;
 pub(crate) mod parquet_writer;

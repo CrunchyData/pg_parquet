@@ -6,7 +6,7 @@ use arrow_schema::{DataType, FieldRef};
 use parquet::arrow::{arrow_to_parquet_schema, PARQUET_FIELD_ID_META_KEY};
 use pg_sys::{
     can_coerce_type,
-    CoercionContext::{self, COERCION_EXPLICIT, COERCION_IMPLICIT},
+    CoercionContext::{self, COERCION_EXPLICIT},
     FormData_pg_attribute, InvalidOid, Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID,
     FLOAT8OID, INT2OID, INT4OID, INT8OID, NUMERICOID, OIDOID, TEXTOID, TIMEOID, TIMESTAMPOID,
     TIMESTAMPTZOID, TIMETZOID,
@@ -26,8 +26,6 @@ use crate::{
         },
     },
 };
-
-use super::cast_mode::CastMode;
 
 pub(crate) fn parquet_schema_string_from_attributes(
     attributes: &[FormData_pg_attribute],
@@ -344,31 +342,32 @@ fn adjust_map_entries_field(field: FieldRef) -> FieldRef {
     Arc::new(entries_field)
 }
 
-// ensure_arrow_schema_match_tupledesc_schema throws an error if the arrow schema does not match the table schema.
-// If the arrow schema is castable to the table schema, it returns a vector of Option<DataType> to cast to
-// for each field.
-pub(crate) fn ensure_arrow_schema_match_tupledesc_schema(
-    arrow_schema: Arc<Schema>,
+// ensure_file_schema_match_tupledesc_schema throws an error if the file's schema does not match the table schema.
+// If the file's arrow schema is castable to the table's arrow schema, it returns a vector of Option<DataType>
+// to cast to for each field.
+pub(crate) fn ensure_file_schema_match_tupledesc_schema(
+    file_schema: Arc<Schema>,
     tupledesc_schema: Arc<Schema>,
     attributes: &[FormData_pg_attribute],
-    cast_mode: CastMode,
 ) -> Vec<Option<DataType>> {
     let mut cast_to_types = Vec::new();
 
-    for (tupledesc_field, attribute) in tupledesc_schema.fields().iter().zip(attributes.iter()) {
-        let field_name = tupledesc_field.name();
+    for (tupledesc_schema_field, attribute) in
+        tupledesc_schema.fields().iter().zip(attributes.iter())
+    {
+        let field_name = tupledesc_schema_field.name();
 
-        let arrow_field = arrow_schema.column_with_name(field_name);
+        let file_schema_field = file_schema.column_with_name(field_name);
 
-        if arrow_field.is_none() {
+        if file_schema_field.is_none() {
             panic!("column \"{}\" is not found in parquet file", field_name);
         }
 
-        let (_, arrow_field) = arrow_field.unwrap();
-        let arrow_field = Arc::new(arrow_field.clone());
+        let (_, file_schema_field) = file_schema_field.unwrap();
+        let file_schema_field = Arc::new(file_schema_field.clone());
 
-        let from_type = arrow_field.data_type();
-        let to_type = tupledesc_field.data_type();
+        let from_type = file_schema_field.data_type();
+        let to_type = tupledesc_schema_field.data_type();
 
         // no cast needed
         if from_type == to_type {
@@ -376,37 +375,12 @@ pub(crate) fn ensure_arrow_schema_match_tupledesc_schema(
             continue;
         }
 
-        if let Err(coercion_error) = is_coercible(
-            from_type,
-            to_type,
-            attribute.atttypid,
-            attribute.atttypmod,
-            cast_mode,
-        ) {
-            let type_mismatch_message = format!(
+        if !is_coercible(from_type, to_type, attribute.atttypid, attribute.atttypmod) {
+            panic!(
                 "type mismatch for column \"{}\" between table and parquet file.\n\n\
                 table has \"{}\"\n\nparquet file has \"{}\"",
                 field_name, to_type, from_type
             );
-
-            match coercion_error {
-                CoercionError::NoStrictCoercionPath => ereport!(
-                    pgrx::PgLogLevel::ERROR,
-                    PgSqlErrorCode::ERRCODE_CANNOT_COERCE,
-                    type_mismatch_message,
-                    "Try COPY FROM '..' WITH (cast_mode 'relaxed') to allow lossy casts with runtime checks."
-                ),
-                CoercionError::NoCoercionPath => ereport!(
-                    pgrx::PgLogLevel::ERROR,
-                    PgSqlErrorCode::ERRCODE_CANNOT_COERCE,
-                    type_mismatch_message
-                ),
-                CoercionError::MapEntriesNullable => ereport!(
-                    pgrx::PgLogLevel::ERROR,
-                    PgSqlErrorCode::ERRCODE_CANNOT_COERCE,
-                    format!("entries field in map type cannot be nullable for column \"{}\"", field_name)
-                ),
-            }
         }
 
         pgrx::debug2!(
@@ -422,12 +396,6 @@ pub(crate) fn ensure_arrow_schema_match_tupledesc_schema(
     cast_to_types
 }
 
-enum CoercionError {
-    NoStrictCoercionPath,
-    NoCoercionPath,
-    MapEntriesNullable,
-}
-
 // is_coercible first checks if "from_type" can be cast to "to_type" by arrow-cast.
 // Then, it checks if the cast is meaningful at Postgres by seeing if there is
 // an explicit coercion from "from_typoid" to "to_typoid".
@@ -436,17 +404,11 @@ enum CoercionError {
 // Arrow supports casting struct fields by field position instead of field name,
 // which is not the intended behavior for pg_parquet. Hence, we make sure the field names
 // match for structs.
-fn is_coercible(
-    from_type: &DataType,
-    to_type: &DataType,
-    to_typoid: Oid,
-    to_typmod: i32,
-    cast_mode: CastMode,
-) -> Result<(), CoercionError> {
+fn is_coercible(from_type: &DataType, to_type: &DataType, to_typoid: Oid, to_typmod: i32) -> bool {
     match (from_type, to_type) {
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
             if from_fields.len() != to_fields.len() {
-                return Err(CoercionError::NoCoercionPath);
+                return false;
             }
 
             let tupledesc = tuple_desc(to_typoid, to_typmod);
@@ -458,19 +420,20 @@ fn is_coercible(
                 .zip(to_fields.iter().zip(attributes.iter()))
             {
                 if from_field.name() != to_field.name() {
-                    return Err(CoercionError::NoCoercionPath);
+                    return false;
                 }
 
-                is_coercible(
+                if !is_coercible(
                     from_field.data_type(),
                     to_field.data_type(),
                     to_attribute.type_oid().value(),
                     to_attribute.type_mod(),
-                    cast_mode,
-                )?;
+                ) {
+                    return false;
+                }
             }
 
-            Ok(())
+            true
         }
         (DataType::List(from_field), DataType::List(to_field)) => {
             let element_oid = array_element_typoid(to_typoid);
@@ -481,13 +444,12 @@ fn is_coercible(
                 to_field.data_type(),
                 element_oid,
                 element_typmod,
-                cast_mode,
             )
         }
         (DataType::Map(from_entries_field, _), DataType::Map(to_entries_field, _)) => {
             // entries field cannot be null
             if from_entries_field.is_nullable() {
-                return Err(CoercionError::MapEntriesNullable);
+                return false;
             }
 
             let entries_typoid = domain_array_base_elem_typoid(to_typoid);
@@ -497,47 +459,23 @@ fn is_coercible(
                 to_entries_field.data_type(),
                 entries_typoid,
                 to_typmod,
-                cast_mode,
             )
         }
         _ => {
             // check if arrow-cast can cast the types
             if !can_cast_types(from_type, to_type) {
-                return Err(CoercionError::NoCoercionPath);
+                return false;
             }
 
             let from_typoid = pg_type_for_arrow_primitive_type(from_type);
 
             // pg_parquet could not recognize that arrow type
             if from_typoid == InvalidOid {
-                return Err(CoercionError::NoCoercionPath);
+                return false;
             }
-
-            let can_coerce_via_relaxed_mode =
-                can_pg_coerce_types(from_typoid, to_typoid, COERCION_EXPLICIT);
 
             // check if coercion is meaningful at Postgres (it has a coercion path)
-            match cast_mode {
-                CastMode::Strict => {
-                    let can_coerce_via_strict_mode =
-                        can_pg_coerce_types(from_typoid, to_typoid, COERCION_IMPLICIT);
-
-                    if !can_coerce_via_strict_mode && can_coerce_via_relaxed_mode {
-                        Err(CoercionError::NoStrictCoercionPath)
-                    } else if !can_coerce_via_strict_mode {
-                        Err(CoercionError::NoCoercionPath)
-                    } else {
-                        Ok(())
-                    }
-                }
-                CastMode::Relaxed => {
-                    if !can_coerce_via_relaxed_mode {
-                        Err(CoercionError::NoCoercionPath)
-                    } else {
-                        Ok(())
-                    }
-                }
-            }
+            can_pg_coerce_types(from_typoid, to_typoid, COERCION_EXPLICIT)
         }
     }
 }
