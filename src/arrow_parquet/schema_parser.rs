@@ -16,7 +16,7 @@ use pgrx::{check_for_interrupts, prelude::*, PgTupleDesc};
 use crate::{
     pgrx_utils::{
         array_element_typoid, collect_attributes_for, domain_array_base_elem_typoid, is_array_type,
-        is_composite_type, tuple_desc, CollectAttributesFor,
+        is_composite_type, is_generated_attribute, tuple_desc, CollectAttributesFor,
     },
     type_compat::{
         geometry::is_postgis_geometry_type,
@@ -95,7 +95,7 @@ fn parse_struct_schema(tupledesc: PgTupleDesc, elem_name: &str, field_id: &mut i
 
     let mut child_fields: Vec<Arc<Field>> = vec![];
 
-    let attributes = collect_attributes_for(CollectAttributesFor::Struct, &tupledesc);
+    let attributes = collect_attributes_for(CollectAttributesFor::Other, &tupledesc);
 
     for attribute in attributes {
         if attribute.is_dropped() {
@@ -342,6 +342,30 @@ fn adjust_map_entries_field(field: FieldRef) -> FieldRef {
     Arc::new(entries_field)
 }
 
+pub(crate) fn error_if_copy_from_match_by_position_with_generated_columns(
+    tupledesc: &PgTupleDesc,
+    match_by_name: bool,
+) {
+    // match_by_name can handle generated columns
+    if match_by_name {
+        return;
+    }
+
+    let attributes = collect_attributes_for(CollectAttributesFor::Other, tupledesc);
+
+    for attribute in attributes {
+        if is_generated_attribute(&attribute) {
+            ereport!(
+                PgLogLevel::ERROR,
+                PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+                "COPY FROM parquet with generated columns is not supported",
+                "Try COPY FROM parquet WITH (match_by_name true). \"
+                 It works only if the column names match with parquet file's.",
+            );
+        }
+    }
+}
+
 // ensure_file_schema_match_tupledesc_schema throws an error if the file's schema does not match the table schema.
 // If the file's arrow schema is castable to the table's arrow schema, it returns a vector of Option<DataType>
 // to cast to for each field.
@@ -349,21 +373,38 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
     file_schema: Arc<Schema>,
     tupledesc_schema: Arc<Schema>,
     attributes: &[FormData_pg_attribute],
+    match_by_name: bool,
 ) -> Vec<Option<DataType>> {
     let mut cast_to_types = Vec::new();
+
+    if !match_by_name && tupledesc_schema.fields().len() != file_schema.fields().len() {
+        panic!(
+            "column count mismatch between table and parquet file. \
+             parquet file has {} columns, but table has {} columns",
+            file_schema.fields().len(),
+            tupledesc_schema.fields().len()
+        );
+    }
 
     for (tupledesc_schema_field, attribute) in
         tupledesc_schema.fields().iter().zip(attributes.iter())
     {
         let field_name = tupledesc_schema_field.name();
 
-        let file_schema_field = file_schema.column_with_name(field_name);
+        let file_schema_field = if match_by_name {
+            let file_schema_field = file_schema.column_with_name(field_name);
 
-        if file_schema_field.is_none() {
-            panic!("column \"{}\" is not found in parquet file", field_name);
-        }
+            if file_schema_field.is_none() {
+                panic!("column \"{}\" is not found in parquet file", field_name);
+            }
 
-        let (_, file_schema_field) = file_schema_field.unwrap();
+            let (_, file_schema_field) = file_schema_field.unwrap();
+
+            file_schema_field
+        } else {
+            file_schema.field(attribute.attnum as usize - 1)
+        };
+
         let file_schema_field = Arc::new(file_schema_field.clone());
 
         let from_type = file_schema_field.data_type();
@@ -378,7 +419,7 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
         if !is_coercible(from_type, to_type, attribute.atttypid, attribute.atttypmod) {
             panic!(
                 "type mismatch for column \"{}\" between table and parquet file.\n\n\
-                table has \"{}\"\n\nparquet file has \"{}\"",
+                 table has \"{}\"\n\nparquet file has \"{}\"",
                 field_name, to_type, from_type
             );
         }
@@ -413,7 +454,7 @@ fn is_coercible(from_type: &DataType, to_type: &DataType, to_typoid: Oid, to_typ
 
             let tupledesc = tuple_desc(to_typoid, to_typmod);
 
-            let attributes = collect_attributes_for(CollectAttributesFor::Struct, &tupledesc);
+            let attributes = collect_attributes_for(CollectAttributesFor::Other, &tupledesc);
 
             for (from_field, (to_field, to_attribute)) in from_fields
                 .iter()

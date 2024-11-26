@@ -3,11 +3,12 @@ use std::{ffi::CStr, str::FromStr};
 use pgrx::{
     is_a,
     pg_sys::{
-        addRangeTableEntryForRelation, defGetInt32, defGetInt64, defGetString, get_namespace_name,
-        get_rel_namespace, makeDefElem, makeString, make_parsestate, quote_qualified_identifier,
-        AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc, DefElem, List, NoLock, Node,
-        NodeTag::T_CopyStmt, Oid, ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment,
-        RangeVar, RangeVarGetRelidExtended, RowExclusiveLock, TupleDescInitEntry,
+        addRangeTableEntryForRelation, defGetBoolean, defGetInt32, defGetInt64, defGetString,
+        get_namespace_name, get_rel_namespace, makeDefElem, makeString, make_parsestate,
+        quote_qualified_identifier, AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc,
+        DefElem, List, NoLock, Node, NodeTag::T_CopyStmt, Oid, ParseNamespaceItem, ParseState,
+        PlannedStmt, QueryEnvironment, RangeVar, RangeVarGetRelidExtended, RowExclusiveLock,
+        TupleDescInitEntry,
     },
     PgBox, PgList, PgRelation, PgTupleDesc,
 };
@@ -109,7 +110,7 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri: &Url) {
 }
 
 pub(crate) fn validate_copy_from_options(p_stmt: &PgBox<PlannedStmt>) {
-    validate_copy_option_names(p_stmt, &["format", "freeze"]);
+    validate_copy_option_names(p_stmt, &["format", "match_by_name", "freeze"]);
 
     let format_option = copy_stmt_get_option(p_stmt, "format");
 
@@ -251,6 +252,16 @@ pub(crate) fn copy_from_stmt_create_option_list(p_stmt: &PgBox<PlannedStmt>) -> 
     }
 
     new_copy_options
+}
+
+pub(crate) fn copy_from_stmt_match_by_name(p_stmt: &PgBox<PlannedStmt>) -> bool {
+    let match_by_name_option = copy_stmt_get_option(p_stmt, "match_by_name");
+
+    if match_by_name_option.is_null() {
+        false
+    } else {
+        unsafe { defGetBoolean(match_by_name_option.as_ptr()) }
+    }
 }
 
 pub(crate) fn copy_stmt_get_option(

@@ -193,6 +193,7 @@ Alternatively, you can use the following environment variables when starting pos
 
 `pg_parquet` supports the following options in the `COPY FROM` command:
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<compression>]` extension,
+- `match_by_name <bool>`: matches Parquet file fields to PostgreSQL table columns by their name rather than by their position in the schema (default). By default, the option is `false`. The option is useful when field order differs between the Parquet file and the table, but their names match.
 
 ## Configuration
 There is currently only one GUC parameter to enable/disable the `pg_parquet`:
