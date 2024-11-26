@@ -900,7 +900,7 @@ mod tests {
         test_table.insert(
             "INSERT INTO test_expected (a) VALUES (1234567.1231244), (123.23223), (12.0), (-12.12303), (null), (0);",
         );
-        test_table.test_helper();
+        test_table.assert_expected_and_result_rows();
     }
 
     #[cfg(not(feature = "pg14"))]
