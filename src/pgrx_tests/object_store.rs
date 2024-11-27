@@ -39,7 +39,7 @@ mod tests {
         );
         std::env::set_var("AWS_PROFILE", "pg_parquet_test");
 
-        let aws_config_file = "/tmp/aws_config";
+        let aws_config_file = "/tmp/pg_parquet_aws_config";
         std::env::set_var("AWS_CONFIG_FILE", aws_config_file);
 
         let mut aws_config_file = std::fs::OpenOptions::new()
@@ -52,6 +52,84 @@ mod tests {
         aws_config_file
             .write_all(aws_config_file_content.as_bytes())
             .unwrap();
+
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_s3_object_store_from_config_file_via_guc() {
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        // remove these to make sure the config file is used
+        let access_key_id = std::env::var("AWS_ACCESS_KEY_ID").unwrap();
+        std::env::remove_var("AWS_ACCESS_KEY_ID");
+        let secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap();
+        std::env::remove_var("AWS_SECRET_ACCESS_KEY");
+        let region = std::env::var("AWS_REGION").unwrap();
+        std::env::remove_var("AWS_REGION");
+
+        let profile_name = "pg_parquet_test";
+
+        // create a config file
+        let aws_config_file_content = format!("[profile {}]\nregion = {}\n", profile_name, region,);
+
+        let aws_config_file_name = "/tmp/pg_parquet_aws_config";
+
+        let mut aws_config_file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(aws_config_file_name)
+            .unwrap();
+
+        aws_config_file
+            .write_all(aws_config_file_content.as_bytes())
+            .unwrap();
+
+        // create a shared credentials file
+        let aws_shared_credentials_file_content = format!(
+            "[{}]\naws_access_key_id = {}\naws_secret_access_key = {}\n",
+            profile_name, access_key_id, secret_access_key
+        );
+
+        let aws_shared_credentials_file_name = "/tmp/pg_parquet_aws_shared_credentials";
+
+        let mut aws_shared_credentials_file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(aws_shared_credentials_file_name)
+            .unwrap();
+
+        aws_shared_credentials_file
+            .write_all(aws_shared_credentials_file_content.as_bytes())
+            .unwrap();
+
+        Spi::run(
+            format!(
+                "SET pg_parquet.aws_config_file TO '{}';",
+                aws_config_file_name
+            )
+            .as_str(),
+        )
+        .unwrap();
+
+        Spi::run(
+            format!(
+                "SET pg_parquet.aws_shared_credentials_file TO '{}';",
+                aws_shared_credentials_file_name
+            )
+            .as_str(),
+        )
+        .unwrap();
+
+        Spi::run(format!("SET pg_parquet.aws_profile TO '{}';", profile_name).as_str()).unwrap();
 
         let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
 

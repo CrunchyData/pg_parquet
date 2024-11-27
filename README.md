@@ -23,7 +23,7 @@ COPY table FROM 's3://mybucket/data.parquet' WITH (format 'parquet');
   - [Inspect Parquet metadata](#inspect-parquet-metadata)
 - [Object Store Support](#object-store-support)
 - [Copy Options](#copy-options)
-- [Configuration](#configuration)
+- [Misc Configuration](#misc-configuration)
 - [Supported Types](#supported-types)
   - [Nested Types](#nested-types)
 - [Postgres Support Matrix](#postgres-support-matrix)
@@ -179,6 +179,14 @@ Alternatively, you can use the following environment variables when starting pos
 - `AWS_CONFIG_FILE`: an alternative location for the config file
 - `AWS_PROFILE`: the name of the profile from the credentials and config file (default profile name is `default`)
 
+To make it more Postgres way, `pg_parquet` also defines GUCs to configure s3 client. These GUCs can only be set by a superuser. You can easily set these GUCs to use different configurations per session. You do not need to restart your session to change the config path or profile name.
+- `pg_parquet.aws_config_file`: an absolute path to the configuration file used by s3 client. Note that when set, the GUC overrides `AWS_CONFIG_FILE` environment variable. By default the GUC is unset,
+- `pg_parquet.aws_shared_credentials_file`: an absolute path to the shared credentials file used by s3 client. Note that when set, the GUC overrides `AWS_SHARED_CREDENTIALS_FILE` environment variable. By default the GUC is unset,
+- `pg_parquet.aws_profile`: the profile name used by s3 client. Note that when set, the GUC overrides `AWS_PROFILE` environment variable. By default the GUC is unset.
+
+> [!NOTE]
+> GUCs override environment variables. And environment variables override configuration files. You can use any or combination of them to configure s3 client as you wish.
+
 > [!NOTE]
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
 > Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
@@ -195,8 +203,8 @@ Alternatively, you can use the following environment variables when starting pos
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<compression>]` extension,
 - `match_by_name <bool>`: matches Parquet file fields to PostgreSQL table columns by their name rather than by their position in the schema (default). By default, the option is `false`. The option is useful when field order differs between the Parquet file and the table, but their names match.
 
-## Configuration
-There is currently only one GUC parameter to enable/disable the `pg_parquet`:
+## Misc Configuration
+Some of the general purpose configuration parameters (GUCs) that are defined by the `pg_parquet` are shown below:
 - `pg_parquet.enable_copy_hooks`: you can set this parameter to `on` or `off` to enable or disable the `pg_parquet` extension. The default value is `on`.
 
 ## Supported Types

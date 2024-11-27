@@ -1,3 +1,4 @@
+use arrow_parquet::uri_utils::{AWS_CONFIG_FILE, AWS_PROFILE, AWS_SHARED_CREDENTIALS_FILE};
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
 use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
 use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry};
@@ -27,6 +28,33 @@ pub extern "C" fn _PG_init() {
         "Enable parquet copy hooks",
         &ENABLE_PARQUET_COPY_HOOK,
         GucContext::Userset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        "pg_parquet.aws_config_file",
+        "Path to the AWS config file",
+        "Path to the AWS config file",
+        &AWS_CONFIG_FILE,
+        GucContext::Suset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        "pg_parquet.aws_shared_credentials_file",
+        "Path to the AWS shared credentials file",
+        "Path to the AWS shared credentials file",
+        &AWS_SHARED_CREDENTIALS_FILE,
+        GucContext::Suset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_string_guc(
+        "pg_parquet.aws_profile",
+        "The default AWS profile to use",
+        "The default AWS profile to use",
+        &AWS_PROFILE,
+        GucContext::Suset,
         GucFlags::default(),
     );
 

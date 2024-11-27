@@ -1,4 +1,7 @@
-use std::{sync::Arc, sync::LazyLock};
+use std::{
+    ffi::CStr,
+    sync::{Arc, LazyLock},
+};
 
 use arrow::datatypes::SchemaRef;
 use aws_config::{
@@ -26,9 +29,17 @@ use parquet::{
 use pgrx::{
     ereport,
     pg_sys::{get_role_oid, has_privs_of_role, superuser, AsPgCStr, GetUserId},
+    GucSetting,
 };
 use tokio::runtime::Runtime;
 use url::Url;
+
+pub(crate) static AWS_CONFIG_FILE: GucSetting<Option<&'static CStr>> =
+    GucSetting::<Option<&'static CStr>>::new(None);
+pub(crate) static AWS_SHARED_CREDENTIALS_FILE: GucSetting<Option<&'static CStr>> =
+    GucSetting::<Option<&'static CStr>>::new(None);
+pub(crate) static AWS_PROFILE: GucSetting<Option<&'static CStr>> =
+    GucSetting::<Option<&'static CStr>>::new(None);
 
 use crate::arrow_parquet::parquet_writer::DEFAULT_ROW_GROUP_SIZE;
 
@@ -100,7 +111,43 @@ async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
         aws_s3_builder = aws_s3_builder.with_allow_http(true);
     }
 
-    let aws_profile_name = std::env::var("AWS_PROFILE").unwrap_or("default".to_string());
+    // GUC overrides the environment variable for AWS_CONFIG_FILE.
+    // when the environment variable is not set, the default value
+    // (~/.aws/config) is used by object_store
+    if let Some(aws_config_file) = AWS_CONFIG_FILE.get() {
+        std::env::set_var(
+            "AWS_CONFIG_FILE",
+            aws_config_file
+                .to_str()
+                .expect("invalid GUC AWS_CONFIG_FILE CStr"),
+        );
+    }
+
+    // GUC overrides the environment variable for AWS_SHARED_CREDENTIALS_FILE.
+    // when the environment variable is not set, the default value
+    // (~/.aws/credentials) is used by object_store.
+    if let Some(aws_shared_credentials_file) = AWS_SHARED_CREDENTIALS_FILE.get() {
+        std::env::set_var(
+            "AWS_SHARED_CREDENTIALS_FILE",
+            aws_shared_credentials_file
+                .to_str()
+                .expect("invalid GUC AWS_SHARED_CREDENTIALS_FILE CStr"),
+        );
+    }
+
+    // GUC overrides the environment variable for AWS_PROFILE.
+    let aws_profile_name = if let Some(profile_name) = AWS_PROFILE.get() {
+        std::env::set_var(
+            "AWS_PROFILE",
+            profile_name.to_str().expect("invalid GUC AWS_PROFILE CStr"),
+        );
+        profile_name
+            .to_str()
+            .expect("invalid GUC AWS_PROFILE CStr")
+            .to_string()
+    } else {
+        std::env::var("AWS_PROFILE").unwrap_or("default".to_string())
+    };
 
     let region_provider = RegionProviderChain::first_try(EnvironmentVariableRegionProvider::new())
         .or_else(
