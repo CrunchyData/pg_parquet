@@ -977,7 +977,7 @@ mod tests {
         Spi::run(create_table).unwrap();
 
         let copy_from = format!(
-            "COPY test_table FROM '{}' WITH (match_by_name true)",
+            "COPY test_table FROM '{}' WITH (match_by 'name')",
             LOCAL_TEST_FILE_PATH
         );
         Spi::run(&copy_from).unwrap();
@@ -994,7 +994,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x bigint, y varchar)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = "COPY test_table FROM '/tmp/test.parquet'";
+        let copy_from = "COPY test_table FROM '/tmp/test.parquet' WITH (match_by 'position')";
         Spi::run(copy_from).unwrap();
 
         let result = Spi::get_two::<i64, &str>("SELECT x, y FROM test_table LIMIT 1").unwrap();
@@ -1024,7 +1024,7 @@ mod tests {
         Spi::run(&copy_to_parquet).unwrap();
 
         let copy_from = format!(
-            "COPY test_table FROM '{}' with (match_by_name true)",
+            "COPY test_table FROM '{}' with (match_by 'name')",
             LOCAL_TEST_FILE_PATH
         );
         Spi::run(&copy_from).unwrap();

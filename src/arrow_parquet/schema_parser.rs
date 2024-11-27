@@ -27,6 +27,8 @@ use crate::{
     },
 };
 
+use super::match_by::MatchBy;
+
 pub(crate) fn parquet_schema_string_from_attributes(
     attributes: &[FormData_pg_attribute],
 ) -> String {
@@ -344,10 +346,10 @@ fn adjust_map_entries_field(field: FieldRef) -> FieldRef {
 
 pub(crate) fn error_if_copy_from_match_by_position_with_generated_columns(
     tupledesc: &PgTupleDesc,
-    match_by_name: bool,
+    match_by: MatchBy,
 ) {
-    // match_by_name can handle generated columns
-    if match_by_name {
+    // match_by 'name' can handle generated columns
+    if let MatchBy::Name = match_by {
         return;
     }
 
@@ -359,7 +361,7 @@ pub(crate) fn error_if_copy_from_match_by_position_with_generated_columns(
                 PgLogLevel::ERROR,
                 PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
                 "COPY FROM parquet with generated columns is not supported",
-                "Try COPY FROM parquet WITH (match_by_name true). \"
+                "Try COPY FROM parquet WITH (match_by 'name'). \"
                  It works only if the column names match with parquet file's.",
             );
         }
@@ -373,11 +375,13 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
     file_schema: Arc<Schema>,
     tupledesc_schema: Arc<Schema>,
     attributes: &[FormData_pg_attribute],
-    match_by_name: bool,
+    match_by: MatchBy,
 ) -> Vec<Option<DataType>> {
     let mut cast_to_types = Vec::new();
 
-    if !match_by_name && tupledesc_schema.fields().len() != file_schema.fields().len() {
+    if match_by == MatchBy::Position
+        && tupledesc_schema.fields().len() != file_schema.fields().len()
+    {
         panic!(
             "column count mismatch between table and parquet file. \
              parquet file has {} columns, but table has {} columns",
@@ -391,18 +395,20 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
     {
         let field_name = tupledesc_schema_field.name();
 
-        let file_schema_field = if match_by_name {
-            let file_schema_field = file_schema.column_with_name(field_name);
+        let file_schema_field = match match_by {
+            MatchBy::Position => file_schema.field(attribute.attnum as usize - 1),
 
-            if file_schema_field.is_none() {
-                panic!("column \"{}\" is not found in parquet file", field_name);
+            MatchBy::Name => {
+                let file_schema_field = file_schema.column_with_name(field_name);
+
+                if file_schema_field.is_none() {
+                    panic!("column \"{}\" is not found in parquet file", field_name);
+                }
+
+                let (_, file_schema_field) = file_schema_field.unwrap();
+
+                file_schema_field
             }
-
-            let (_, file_schema_field) = file_schema_field.unwrap();
-
-            file_schema_field
-        } else {
-            file_schema.field(attribute.attnum as usize - 1)
         };
 
         let file_schema_field = Arc::new(file_schema_field.clone());

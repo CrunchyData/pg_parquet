@@ -138,7 +138,7 @@ mod tests {
         Spi::run("TRUNCATE test_table;").unwrap();
 
         let copy_from_query = format!(
-            "COPY test_table FROM '{}' WITH (format parquet, match_by_name true);",
+            "COPY test_table FROM '{}' WITH (format parquet, match_by 'name');",
             LOCAL_TEST_FILE_PATH
         );
         Spi::run(copy_from_query.as_str()).unwrap();
