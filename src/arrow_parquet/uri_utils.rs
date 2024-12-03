@@ -15,6 +15,7 @@ use ini::Ini;
 use object_store::{
     aws::{AmazonS3, AmazonS3Builder},
     azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder},
+    gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder},
     local::LocalFileSystem,
     path::Path,
     ObjectStore, ObjectStoreScheme,
@@ -96,6 +97,17 @@ fn parse_s3_bucket(uri: &Url) -> Option<String> {
     None
 }
 
+fn parse_gcs_bucket(uri: &Url) -> Option<String> {
+    let host = uri.host_str()?;
+
+    // gs://{bucket}/key
+    if uri.scheme() == "gs" {
+        return Some(host.to_string());
+    }
+
+    None
+}
+
 fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStore>, Path) {
     let (scheme, path) =
         ObjectStoreScheme::parse(uri).unwrap_or_else(|_| panic!("unsupported uri {}", uri));
@@ -118,6 +130,16 @@ fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStor
 
             let storage_container = PG_BACKEND_TOKIO_RUNTIME
                 .block_on(async { Arc::new(get_azure_object_store(&container_name).await) });
+
+            (storage_container, path)
+        }
+        ObjectStoreScheme::GoogleCloudStorage => {
+            let bucket_name = parse_gcs_bucket(uri).unwrap_or_else(|| {
+                panic!("failed to parse bucket name from uri: {}", uri);
+            });
+
+            let storage_container = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { Arc::new(get_gcs_object_store(&bucket_name).await) });
 
             (storage_container, path)
         }
@@ -262,6 +284,25 @@ async fn get_azure_object_store(container_name: &str) -> MicrosoftAzure {
     azure_builder.build().unwrap_or_else(|e| panic!("{}", e))
 }
 
+async fn get_gcs_object_store(bucket_name: &str) -> GoogleCloudStorage {
+    let mut gcs_builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(bucket_name);
+
+    if is_testing() {
+        // use fake-gcp-server for testing
+        gcs_builder = gcs_builder.with_service_account_key(
+            "{
+                \"gcs_base_url\": \"http://localhost:4443\",
+                \"disable_oauth\": true,
+                \"client_email\": \"\",
+                \"private_key_id\": \"\",
+                \"private_key\": \"\"
+            }",
+        );
+    }
+
+    gcs_builder.build().unwrap_or_else(|e| panic!("{}", e))
+}
+
 fn is_testing() -> bool {
     std::env::var("PG_PARQUET_TEST").is_ok()
 }
@@ -284,13 +325,20 @@ pub(crate) fn parse_uri(uri: &str) -> Url {
     } else if scheme == ObjectStoreScheme::MicrosoftAzure {
         parse_azure_blob_container(&uri).unwrap_or_else(|| {
             panic!(
-                "failed to parse container name from azure blob storage uri {}",
+                "failed to parse container name from Azure Blob Storage uri {}",
+                uri
+            )
+        });
+    } else if scheme == ObjectStoreScheme::GoogleCloudStorage {
+        parse_gcs_bucket(&uri).unwrap_or_else(|| {
+            panic!(
+                "failed to parse bucket name from Google Cloud Storage uri {}",
                 uri
             )
         });
     } else {
         panic!(
-            "unsupported uri {}. Only Azure and S3 uris are supported.",
+            "unsupported uri {}. Only Azure Blob Storage, S3 and Google Cloud Storage uris are supported.",
             uri
         );
     };

@@ -132,6 +132,17 @@ jobs:
 
           az storage container create -n $AZURE_TEST_CONTAINER_NAME --connection-string $AZURE_STORAGE_CONNECTION_STRING
 
+      - name: Start fake-gcs-server for Google Cloud Storage emulator tests
+        run: |
+          docker run -d --env-file .devcontainer/.env -p 4443:4443 tustvold/fake-gcs-server -scheme http -filesystem-root /tmp/gcs -public-host localhost:4443
+
+          while ! nc -z localhost 4443; do   
+            echo "Waiting for localhost:4443..."
+            sleep 1
+          done
+
+          curl -v -X POST --data-binary "{\"name\":\"$GOOGLE_TEST_BUCKET\"}" -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
+
       - name: Run tests
         run: |
           # Run tests with coverage tool

@@ -5,6 +5,6 @@
     "rust-analyzer.checkOnSave": true,
     "editor.inlayHints.enabled": "offUnlessPressed",
     "files.watcherExclude": {
-         "**/target/**": true
-     }
+        "**/target/**": true
+    }
 }
