@@ -85,6 +85,11 @@ jobs:
                                   postgresql-client-${{ env.PG_MAJOR }} \
                                   libpq-dev
 
+      - name: Install azure-cli
+        run: |
+          curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | sudo tee /etc/apt/keyrings/microsoft.gpg > /dev/null
+          echo "deb [arch=`dpkg --print-architecture` signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ `lsb_release -cs` main" | sudo tee /etc/apt/sources.list.d/azure-cli.list
+          sudo apt-get update && sudo apt-get install -y azure-cli
 
       - name: Install and configure pgrx
         run: |
@@ -115,6 +120,17 @@ jobs:
           done
 
           aws --endpoint-url http://localhost:9000 s3 mb s3://$AWS_S3_TEST_BUCKET
+
+      - name: Start Azurite for Azure Blob Storage emulator tests
+        run: |
+          docker run -d --env-file .devcontainer/.env -p 10000:10000 mcr.microsoft.com/azure-storage/azurite
+
+          while ! nc -z localhost 10000; do
+            echo "Waiting for localhost:10000..."
+            sleep 1
+          done
+
+          az storage container create -n $AZURE_TEST_CONTAINER_NAME --connection-string $AZURE_STORAGE_CONNECTION_STRING
 
       - name: Run tests
         run: |
