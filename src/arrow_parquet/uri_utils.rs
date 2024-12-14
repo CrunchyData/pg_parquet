@@ -85,16 +85,16 @@ fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStor
     }
 }
 
+// get_s3_object_store creates an AmazonS3 object store with the given bucket name.
+// It is configured by environment variables and aws config files as fallback method.
+// We need to read the config files to make the fallback method work since object_store
+// does not provide a way to read them. Currently, we only support to extract
+// "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ENDPOINT_URL",
+// and "AWS_REGION" from the config files.
 async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
-    let mut aws_s3_builder = AmazonS3Builder::new().with_bucket_name(bucket_name);
+    let mut aws_s3_builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
 
-    // AWS_ALLOW_HTTP
-    if let Ok(aws_allow_http) = std::env::var("AWS_ALLOW_HTTP") {
-        aws_s3_builder = aws_s3_builder
-            .with_allow_http(aws_allow_http.parse().unwrap_or_else(|e| panic!("{}", e)));
-    };
-
-    // first tries to load the profile files from the environment variables and then from the profile
+    // first tries environment variables and then the config files
     let sdk_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
         .load()
         .await;
