@@ -89,7 +89,7 @@ jobs:
       - name: Install and configure pgrx
         run: |
           cargo install --locked cargo-pgrx@0.12.9
-          cargo pgrx init --pg${{ env.PG_MAJOR }} $(which pg_config)
+          cargo pgrx init --pg${{ env.PG_MAJOR }} /usr/lib/postgresql/${{ env.PG_MAJOR }}/bin/pg_config
 
       - name: Install cargo-llvm-cov for coverage report
         run: cargo install --locked cargo-llvm-cov@0.6.12
@@ -101,8 +101,8 @@ jobs:
 
       - name: Set up permissions for PostgreSQL
         run: |
-          sudo chmod a+rwx $(pg_config --pkglibdir)          \
-                           $(pg_config --sharedir)/extension \
+          sudo chmod a+rwx $(/usr/lib/postgresql/${{ env.PG_MAJOR }}/bin/pg_config --pkglibdir)          \
+                           $(/usr/lib/postgresql/${{ env.PG_MAJOR }}/bin/pg_config --sharedir)/extension \
                            /var/run/postgresql/
 
       - name: Start Minio for s3 emulator tests
