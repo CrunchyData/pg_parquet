@@ -180,10 +180,14 @@ region = eu-central-1
 Alternatively, you can use the following environment variables when starting postgres to configure the S3 client:
 - `AWS_ACCESS_KEY_ID`: the access key ID of the AWS account
 - `AWS_SECRET_ACCESS_KEY`: the secret access key of the AWS account
+- `AWS_SESSION_TOKEN`: the session token for the AWS account
 - `AWS_REGION`: the default region of the AWS account
-- `AWS_SHARED_CREDENTIALS_FILE`: an alternative location for the credentials file
-- `AWS_CONFIG_FILE`: an alternative location for the config file
-- `AWS_PROFILE`: the name of the profile from the credentials and config file (default profile name is `default`)
+- `AWS_ENDPOINT_URL`: the endpoint
+- `AWS_SHARED_CREDENTIALS_FILE`: an alternative location for the credentials file **(only via environment variables)**
+- `AWS_CONFIG_FILE`: an alternative location for the config file **(only via environment variables)**
+- `AWS_PROFILE`: the name of the profile from the credentials and config file (default profile name is `default`) **(only via environment variables)**
+- `AWS_ALLOW_HTTP`: allows http endpoints **(only via environment variables)**
+
 
 Supported S3 uri formats are shown below:
 - s3:// \<bucket\> / \<path\>
