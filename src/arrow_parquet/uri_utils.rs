@@ -185,14 +185,7 @@ async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
 }
 
 async fn get_azure_object_store(container_name: &str) -> MicrosoftAzure {
-    let mut azure_builder = MicrosoftAzureBuilder::new().with_container_name(container_name);
-
-    if is_testing() {
-        // use azurite for testing
-        azure_builder =
-            azure_builder.with_endpoint("http://localhost:10000/devstoreaccount1".into());
-        azure_builder = azure_builder.with_allow_http(true);
-    }
+    let mut azure_builder = MicrosoftAzureBuilder::from_env().with_container_name(container_name);
 
     // ~/.azure/config
     let azure_config_file_path = std::env::var("AZURE_CONFIG_FILE").unwrap_or(
@@ -250,10 +243,6 @@ async fn get_azure_object_store(container_name: &str) -> MicrosoftAzure {
     }
 
     azure_builder.build().unwrap_or_else(|e| panic!("{}", e))
-}
-
-fn is_testing() -> bool {
-    std::env::var("PG_PARQUET_TEST").is_ok()
 }
 
 pub(crate) fn parse_uri(uri: &str) -> Url {

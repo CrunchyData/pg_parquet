@@ -117,7 +117,6 @@ jobs:
             -p 9000:9000 \
             --entrypoint "./entrypoint.sh" \
             --volume ./.devcontainer/minio-entrypoint.sh:/entrypoint.sh \
-            --name miniocontainer \
             minio/minio
 
           while ! curl $AWS_ENDPOINT_URL; do
@@ -127,12 +126,18 @@ jobs:
 
       - name: Start Azurite for Azure Blob Storage emulator tests
         run: |
-          docker run -d --env-file .devcontainer/.env -p 10000:10000 mcr.microsoft.com/azure-storage/azurite
+          docker run -d \
+            --env-file .devcontainer/.env \
+            -p 10000:10000 \
+            mcr.microsoft.com/azure-storage/azurite
 
-          while ! nc -z localhost 10000; do
-            echo "Waiting for localhost:10000..."
+          while ! curl $AZURITE_URL; do
+            echo "Waiting for $AZURITE_URL..."
             sleep 1
           done
+
+          # create container
+          az storage container create -n $AZURE_TEST_CONTAINER_NAME --connection-string $AZURE_STORAGE_CONNECTION_STRING
 
       - name: Run tests
         run: |

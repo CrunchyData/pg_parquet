@@ -210,7 +210,9 @@ Alternatively, you can use the following environment variables when starting pos
 - `AZURE_STORAGE_ACCOUNT`: the storage account name of the Azure Blob
 - `AZURE_STORAGE_KEY`: the storage key of the Azure Blob
 - `AZURE_STORAGE_SAS_TOKEN`: the storage SAS token for the Azure Blob
-- `AZURE_CONFIG_FILE`: an alternative location for the config file
+- `AZURE_STORAGE_ENDPOINT`: the endpoint **(only via environment variables)**
+- `AZURE_CONFIG_FILE`: an alternative location for the config file **(only via environment variables)**
+- `AZURE_ALLOW_HTTP`: allows http endpoints **(only via environment variables)**
 
 Supported Azure Blob Storage uri formats are shown below:
 - az:// \<container\> / \<path\>
