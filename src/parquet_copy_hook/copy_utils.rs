@@ -13,14 +13,17 @@ use pgrx::{
 };
 use url::Url;
 
-use crate::arrow_parquet::{
-    compression::{all_supported_compressions, PgParquetCompression},
-    match_by::MatchBy,
-    parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
-    uri_utils::parse_uri,
+use crate::{
+    arrow_parquet::{
+        compression::{all_supported_compressions, PgParquetCompression},
+        match_by::MatchBy,
+        parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
+        uri_utils::parse_uri,
+    },
+    pgrx_utils::extension_exists,
 };
 
-use super::pg_compat::strVal;
+use super::{hook::ENABLE_PARQUET_COPY_HOOK, pg_compat::strVal};
 
 pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri: &Url) {
     validate_copy_option_names(
@@ -298,6 +301,11 @@ pub(crate) fn copy_stmt_get_option(
 }
 
 pub(crate) fn is_copy_to_parquet_stmt(p_stmt: &PgBox<PlannedStmt>) -> bool {
+    // the GUC pg_parquet.enable_copy_hook must be set to true
+    if !ENABLE_PARQUET_COPY_HOOK.get() {
+        return false;
+    }
+
     let is_copy_stmt = unsafe { is_a(p_stmt.utilityStmt, T_CopyStmt) };
 
     if !is_copy_stmt {
@@ -320,10 +328,21 @@ pub(crate) fn is_copy_to_parquet_stmt(p_stmt: &PgBox<PlannedStmt>) -> bool {
 
     let uri = copy_stmt_uri(p_stmt).expect("uri is None");
 
-    is_parquet_format_option(p_stmt) || is_parquet_uri(uri)
+    if !is_parquet_format_option(p_stmt) && !is_parquet_uri(uri) {
+        return false;
+    }
+
+    // extension checks are done via catalog (not yet searched via cache by postgres till pg18)
+    // this is why we check them after the uri checks
+    extension_exists("pg_parquet") && !extension_exists("crunchy_query_engine")
 }
 
 pub(crate) fn is_copy_from_parquet_stmt(p_stmt: &PgBox<PlannedStmt>) -> bool {
+    // the GUC pg_parquet.enable_copy_hook must be set to true
+    if !ENABLE_PARQUET_COPY_HOOK.get() {
+        return false;
+    }
+
     let is_copy_stmt = unsafe { is_a(p_stmt.utilityStmt, T_CopyStmt) };
 
     if !is_copy_stmt {
@@ -346,7 +365,13 @@ pub(crate) fn is_copy_from_parquet_stmt(p_stmt: &PgBox<PlannedStmt>) -> bool {
 
     let uri = copy_stmt_uri(p_stmt).expect("uri is None");
 
-    is_parquet_format_option(p_stmt) || is_parquet_uri(uri)
+    if !is_parquet_format_option(p_stmt) && !is_parquet_uri(uri) {
+        return false;
+    }
+
+    // extension checks are done via catalog (not yet searched via cache by postgres till pg18)
+    // this is why we check them after the uri checks
+    extension_exists("pg_parquet") && !extension_exists("crunchy_query_engine")
 }
 
 fn is_parquet_format_option(p_stmt: &PgBox<PlannedStmt>) -> bool {
