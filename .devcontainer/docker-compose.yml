@@ -55,11 +55,10 @@ services:
     env_file:
       - .env
     network_mode: host
-    entrypoint: "./entrypoint.sh"
     command: -scheme http -public-host localhost:4443
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "http://localhost:4443"]
+      test: ["CMD", "nc", "-z", "localhost", "4443"]
       interval: 6s
       timeout: 2s
       retries: 3

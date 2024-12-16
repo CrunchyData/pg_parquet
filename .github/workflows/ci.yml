@@ -148,12 +148,12 @@ jobs:
             --volume ./.devcontainer/gcs-entrypoint.sh:/entrypoint.sh \
             tustvold/fake-gcs-server
 
-          while ! nc -z localhost 4443; do   
-            echo "Waiting for localhost:4443..."
+          while ! curl $GOOGLE_SERVICE_ENDPOINT; do   
+            echo "Waiting for $GOOGLE_SERVICE_ENDPOINT..."
             sleep 1
           done
 
-          curl -v -X POST --data-binary "{\"name\":\"$GOOGLE_TEST_BUCKET\"}" -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
+          curl -v -X POST --data-binary "{\"name\":\"$GOOGLE_TEST_BUCKET\"}" -H "Content-Type: application/json" "$GOOGLE_SERVICE_ENDPOINT/storage/v1/b"
 
       - name: Run tests
         run: |
