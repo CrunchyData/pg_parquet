@@ -156,7 +156,7 @@ SELECT uri, encode(key, 'escape') as key, encode(value, 'escape') as value FROM 
 ```
 
 ## Object Store Support
-`pg_parquet` supports reading and writing Parquet files from/to `S3` and `Azure Blob Storage` object stores.
+`pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage` and `Google Cloud Service` object stores.
 
 > [!NOTE]
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
