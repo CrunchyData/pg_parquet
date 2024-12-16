@@ -180,10 +180,14 @@ region = eu-central-1
 Alternatively, you can use the following environment variables when starting postgres to configure the S3 client:
 - `AWS_ACCESS_KEY_ID`: the access key ID of the AWS account
 - `AWS_SECRET_ACCESS_KEY`: the secret access key of the AWS account
+- `AWS_SESSION_TOKEN`: the session token for the AWS account
 - `AWS_REGION`: the default region of the AWS account
-- `AWS_SHARED_CREDENTIALS_FILE`: an alternative location for the credentials file
-- `AWS_CONFIG_FILE`: an alternative location for the config file
-- `AWS_PROFILE`: the name of the profile from the credentials and config file (default profile name is `default`)
+- `AWS_ENDPOINT_URL`: the endpoint
+- `AWS_SHARED_CREDENTIALS_FILE`: an alternative location for the credentials file **(only via environment variables)**
+- `AWS_CONFIG_FILE`: an alternative location for the config file **(only via environment variables)**
+- `AWS_PROFILE`: the name of the profile from the credentials and config file (default profile name is `default`) **(only via environment variables)**
+- `AWS_ALLOW_HTTP`: allows http endpoints **(only via environment variables)**
+
 
 Supported S3 uri formats are shown below:
 - s3:// \<bucket\> / \<path\>
@@ -206,7 +210,9 @@ Alternatively, you can use the following environment variables when starting pos
 - `AZURE_STORAGE_ACCOUNT`: the storage account name of the Azure Blob
 - `AZURE_STORAGE_KEY`: the storage key of the Azure Blob
 - `AZURE_STORAGE_SAS_TOKEN`: the storage SAS token for the Azure Blob
-- `AZURE_CONFIG_FILE`: an alternative location for the config file
+- `AZURE_STORAGE_ENDPOINT`: the endpoint **(only via environment variables)**
+- `AZURE_CONFIG_FILE`: an alternative location for the config file **(only via environment variables)**
+- `AZURE_ALLOW_HTTP`: allows http endpoints **(only via environment variables)**
 
 Supported Azure Blob Storage uri formats are shown below:
 - az:// \<container\> / \<path\>
@@ -229,8 +235,8 @@ $ cat /tmp/gcs.json
 ```
 
 Alternatively, you can use the following environment variables when starting postgres to configure the Google Cloud Storage client:
-- `GOOGLE_SERVICE_ACCOUNT_KEY`: json serialized service account key
-- `GOOGLE_SERVICE_ACCOUNT_PATH`: an alternative location for the config file
+- `GOOGLE_SERVICE_ACCOUNT_KEY`: json serialized service account key **(only via environment variables)**
+- `GOOGLE_SERVICE_ACCOUNT_PATH`: an alternative location for the config file **(only via environment variables)**
 
 Supported Google Cloud Storage uri formats are shown below:
 - gs:// \<bucket\> / \<path\>
