@@ -131,8 +131,8 @@ jobs:
             -p 10000:10000 \
             mcr.microsoft.com/azure-storage/azurite
 
-          while ! curl $AZURITE_URL; do
-            echo "Waiting for $AZURITE_URL..."
+          while ! curl $AZURE_STORAGE_ENDPOINT; do
+            echo "Waiting for $AZURE_STORAGE_ENDPOINT..."
             sleep 1
           done
 
