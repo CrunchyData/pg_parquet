@@ -156,7 +156,7 @@ SELECT uri, encode(key, 'escape') as key, encode(value, 'escape') as value FROM 
 ```
 
 ## Object Store Support
-`pg_parquet` supports reading and writing Parquet files from/to `S3` and `Azure Blob Storage` object stores.
+`pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage` and `Google Cloud Service` object stores.
 
 > [!NOTE]
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
@@ -218,6 +218,28 @@ Supported Azure Blob Storage uri formats are shown below:
 - az:// \<container\> / \<path\>
 - azure:// \<container\> / \<path\>
 - https:// \<account\>.blob.core.windows.net / \<container\>
+
+#### Google Cloud Storage
+
+The simplest way to configure object storage is by creating a json config file like [`/tmp/gcs.json`]:
+
+```bash
+$ cat /tmp/gcs.json
+{
+  "gcs_base_url": "http://localhost:4443",     
+  "disable_oauth": true,
+  "client_email": "",
+  "private_key_id": "",
+  "private_key": ""
+}
+```
+
+Alternatively, you can use the following environment variables when starting postgres to configure the Google Cloud Storage client:
+- `GOOGLE_SERVICE_ACCOUNT_KEY`: json serialized service account key **(only via environment variables)**
+- `GOOGLE_SERVICE_ACCOUNT_PATH`: an alternative location for the config file **(only via environment variables)**
+
+Supported Google Cloud Storage uri formats are shown below:
+- gs:// \<bucket\> / \<path\>
 
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:

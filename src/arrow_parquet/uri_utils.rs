@@ -11,6 +11,7 @@ use ini::Ini;
 use object_store::{
     aws::{AmazonS3, AmazonS3Builder},
     azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder},
+    gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder},
     local::LocalFileSystem,
     path::Path,
     ObjectStore, ObjectStoreScheme,
@@ -97,12 +98,23 @@ fn parse_s3_bucket(uri: &Url) -> Option<String> {
     None
 }
 
+fn parse_gcs_bucket(uri: &Url) -> Option<String> {
+    let host = uri.host_str()?;
+
+    // gs://{bucket}/key
+    if uri.scheme() == "gs" {
+        return Some(host.to_string());
+    }
+
+    None
+}
+
 fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStore>, Path) {
     let (scheme, path) =
         ObjectStoreScheme::parse(uri).unwrap_or_else(|_| panic!("unrecognized uri {}", uri));
 
     // object_store crate can recognize a bunch of different schemes and paths, but we only support
-    // local, azure, and s3 schemes with a subset of all supported paths.
+    // local, s3, azure and gcs schemes with a subset of all supported paths.
     match scheme {
         ObjectStoreScheme::AmazonS3 => {
             let bucket_name = parse_s3_bucket(uri).unwrap_or_else(|| {
@@ -121,6 +133,16 @@ fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStor
 
             let storage_container = PG_BACKEND_TOKIO_RUNTIME
                 .block_on(async { Arc::new(get_azure_object_store(&container_name).await) });
+
+            (storage_container, path)
+        }
+        ObjectStoreScheme::GoogleCloudStorage => {
+            let bucket_name = parse_gcs_bucket(uri).unwrap_or_else(|| {
+                panic!("unsupported gcs uri: {}", uri);
+            });
+
+            let storage_container = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { Arc::new(get_gcs_object_store(&bucket_name).await) });
 
             (storage_container, path)
         }
@@ -250,6 +272,13 @@ async fn get_azure_object_store(container_name: &str) -> MicrosoftAzure {
     }
 
     azure_builder.build().unwrap_or_else(|e| panic!("{}", e))
+}
+
+async fn get_gcs_object_store(bucket_name: &str) -> GoogleCloudStorage {
+    GoogleCloudStorageBuilder::from_env()
+        .with_bucket_name(bucket_name)
+        .build()
+        .unwrap_or_else(|e| panic!("{}", e))
 }
 
 pub(crate) fn parse_uri(uri: &str) -> Url {
