@@ -54,14 +54,16 @@ fn parse_azure_blob_container(uri: &Url) -> Option<String> {
         return Some(host.to_string());
     }
     // https://{account}.blob.core.windows.net/{container}
-    else if host.ends_with("blob.core.windows.net") {
+    else if host.ends_with(".blob.core.windows.net") {
         let path_segments: Vec<&str> = uri.path_segments()?.collect();
 
-        if !path_segments.is_empty() {
-            return Some(path_segments[0].to_string());
-        } else {
-            return None;
-        }
+        // Container name is the first part of the path
+        return Some(
+            path_segments
+                .first()
+                .expect("unexpected error during parsing azure blob uri")
+                .to_string(),
+        );
     }
 
     None
@@ -77,14 +79,17 @@ fn parse_s3_bucket(uri: &Url) -> Option<String> {
     // https://s3.amazonaws.com/{bucket}/key
     else if host == "s3.amazonaws.com" {
         let path_segments: Vec<&str> = uri.path_segments()?.collect();
-        if !path_segments.is_empty() {
-            return Some(path_segments[0].to_string()); // Bucket name is the first part of the path
-        } else {
-            return None;
-        }
+
+        // Bucket name is the first part of the path
+        return Some(
+            path_segments
+                .first()
+                .expect("unexpected error during parsing s3 uri")
+                .to_string(),
+        );
     }
     // https://{bucket}.s3.amazonaws.com/key
-    else if host.ends_with("s3.amazonaws.com") {
+    else if host.ends_with(".s3.amazonaws.com") {
         let bucket_name = host.split('.').next()?;
         return Some(bucket_name.to_string());
     }
@@ -94,12 +99,14 @@ fn parse_s3_bucket(uri: &Url) -> Option<String> {
 
 fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStore>, Path) {
     let (scheme, path) =
-        ObjectStoreScheme::parse(uri).unwrap_or_else(|_| panic!("unsupported uri {}", uri));
+        ObjectStoreScheme::parse(uri).unwrap_or_else(|_| panic!("unrecognized uri {}", uri));
 
+    // object_store crate can recognize a bunch of different schemes and paths, but we only support
+    // local, azure, and s3 schemes with a subset of all supported paths.
     match scheme {
         ObjectStoreScheme::AmazonS3 => {
             let bucket_name = parse_s3_bucket(uri).unwrap_or_else(|| {
-                panic!("failed to parse bucket name from uri: {}", uri);
+                panic!("unsupported s3 uri: {}", uri);
             });
 
             let storage_container = PG_BACKEND_TOKIO_RUNTIME
@@ -109,7 +116,7 @@ fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStor
         }
         ObjectStoreScheme::MicrosoftAzure => {
             let container_name = parse_azure_blob_container(uri).unwrap_or_else(|| {
-                panic!("failed to parse container name from uri: {}", uri);
+                panic!("unsupported azure blob storage uri: {}", uri);
             });
 
             let storage_container = PG_BACKEND_TOKIO_RUNTIME
@@ -137,7 +144,7 @@ fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStor
             (storage_container, path)
         }
         _ => {
-            panic!("unsupported uri {}", uri);
+            panic!("unsupported scheme {} in uri {}", uri.scheme(), uri);
         }
     }
 }
@@ -252,29 +259,7 @@ pub(crate) fn parse_uri(uri: &str) -> Url {
             .unwrap_or_else(|_| panic!("not a valid file path: {}", uri));
     }
 
-    let uri = Url::parse(uri).unwrap_or_else(|e| panic!("{}", e));
-
-    let (scheme, _) =
-        ObjectStoreScheme::parse(&uri).unwrap_or_else(|_| panic!("unsupported uri {}", uri));
-
-    if scheme == ObjectStoreScheme::AmazonS3 {
-        parse_s3_bucket(&uri)
-            .unwrap_or_else(|| panic!("failed to parse bucket name from s3 uri {}", uri));
-    } else if scheme == ObjectStoreScheme::MicrosoftAzure {
-        parse_azure_blob_container(&uri).unwrap_or_else(|| {
-            panic!(
-                "failed to parse container name from azure blob storage uri {}",
-                uri
-            )
-        });
-    } else {
-        panic!(
-            "unsupported uri {}. Only Azure and S3 uris are supported.",
-            uri
-        );
-    };
-
-    uri
+    Url::parse(uri).unwrap_or_else(|e| panic!("{}", e))
 }
 
 pub(crate) fn uri_as_string(uri: &Url) -> String {

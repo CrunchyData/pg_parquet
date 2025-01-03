@@ -291,7 +291,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "failed to parse bucket name")]
+    #[should_panic(expected = "unsupported s3 uri")]
     fn test_s3_unsupported_uri() {
         let cloudflare_s3_uri = "https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket".into();
 
@@ -478,7 +478,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "failed to parse container name")]
+    #[should_panic(expected = "unsupported azure blob storage uri")]
     fn test_azure_blob_unsupported_uri() {
         let fabric_azure_blob_uri = "https://ACCOUNT.dfs.fabric.microsoft.com".into();
 
@@ -489,7 +489,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "unsupported uri gs://testbucket")]
+    #[should_panic(expected = "unsupported scheme gs in uri gs://testbucket")]
     fn test_unsupported_uri() {
         let test_table =
             TestTable::<i32>::new("int4".into()).with_uri("gs://testbucket".to_string());
