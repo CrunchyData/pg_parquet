@@ -14,7 +14,6 @@ mod tests {
 
         let s3_uris = [
             format!("s3://{}/pg_parquet_test.parquet", test_bucket_name),
-            format!("s3a://{}/pg_parquet_test.parquet", test_bucket_name),
             format!(
                 "https://s3.amazonaws.com/{}/pg_parquet_test.parquet",
                 test_bucket_name
@@ -81,7 +80,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "403 Forbidden")]
-    fn test_s3_with_wrong_access_key_id() {
+    fn test_s3_wrong_access_key_id() {
         std::env::set_var("AWS_ACCESS_KEY_ID", "wrong_access_key_id");
 
         let test_bucket_name: String =
@@ -97,7 +96,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "403 Forbidden")]
-    fn test_s3_with_wrong_secret_access_key() {
+    fn test_s3_wrong_secret_access_key() {
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "wrong_secret_access_key");
 
         let test_bucket_name: String =
@@ -216,7 +215,7 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_s3_object_store_with_temporary_token() {
+    fn test_s3_temporary_token() {
         let tokio_rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -254,7 +253,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "403 Forbidden")]
-    fn test_s3_object_store_with_missing_temporary_token_fail() {
+    fn test_s3_missing_temporary_token() {
         let tokio_rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -303,6 +302,9 @@ mod tests {
 
     #[pg_test]
     fn test_azure_blob_from_env() {
+        // unset AZURE_STORAGE_CONNECTION_STRING to make sure the account name and key are used
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
+
         let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
             .expect("AZURE_TEST_CONTAINER_NAME not found");
 
@@ -336,6 +338,7 @@ mod tests {
         std::env::remove_var("AZURE_STORAGE_ACCOUNT");
         let account_key = std::env::var("AZURE_STORAGE_KEY").unwrap();
         std::env::remove_var("AZURE_STORAGE_KEY");
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
 
         // create a config file
         let azure_config_file_content = format!(
@@ -366,8 +369,65 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_azure_from_env_via_connection_string() {
+        // unset AZURE_STORAGE_ACCOUNT AND AZURE_STORAGE_KEY to make sure the connection string is used
+        std::env::remove_var("AZURE_STORAGE_ACCOUNT");
+        std::env::remove_var("AZURE_STORAGE_KEY");
+
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let azure_blob_uri = format!("az://{}/pg_parquet_test.parquet", test_container_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_azure_from_config_via_connection_string() {
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        // remove these to make sure the config file is used
+        std::env::remove_var("AZURE_STORAGE_ACCOUNT");
+        std::env::remove_var("AZURE_STORAGE_KEY");
+        let connection_string = std::env::var("AZURE_STORAGE_CONNECTION_STRING").unwrap();
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
+
+        // create a config file
+        let azure_config_file_content =
+            format!("[storage]\nconnection_string = {}\n", connection_string);
+
+        let azure_config_file = "/tmp/pg_parquet_azure_config";
+        std::env::set_var("AZURE_CONFIG_FILE", azure_config_file);
+
+        let mut azure_config_file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(azure_config_file)
+            .unwrap();
+
+        azure_config_file
+            .write_all(azure_config_file_content.as_bytes())
+            .unwrap();
+
+        let azure_blob_uri = format!("az://{}/pg_parquet_test.parquet", test_container_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
     #[should_panic(expected = "Account must be specified")]
-    fn test_azure_with_no_storage_account() {
+    fn test_azure_no_storage_account() {
+        // unset AZURE_STORAGE_CONNECTION_STRING to make sure the account name and key are used
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
+
         std::env::remove_var("AZURE_STORAGE_ACCOUNT");
 
         let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
@@ -383,7 +443,10 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "403 Forbidden")]
-    fn test_azure_blob_with_wrong_storage_key() {
+    fn test_azure_wrong_storage_key() {
+        // unset AZURE_STORAGE_CONNECTION_STRING to make sure the account name and key are used
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
+
         let wrong_account_key = String::from("FFy8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==");
         std::env::set_var("AZURE_STORAGE_KEY", wrong_account_key);
 
@@ -406,7 +469,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "404 Not Found")]
-    fn test_azure_blob_write_wrong_container() {
+    fn test_azure_write_wrong_container() {
         let test_account_name: String =
             std::env::var("AZURE_STORAGE_ACCOUNT").expect("AZURE_STORAGE_ACCOUNT not found");
 
@@ -423,7 +486,7 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_azure_blob_read_write_sas() {
+    fn test_azure_read_write_sas() {
         let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
             .expect("AZURE_TEST_CONTAINER_NAME not found");
 
@@ -433,8 +496,9 @@ mod tests {
         let read_write_sas_token = std::env::var("AZURE_TEST_READ_WRITE_SAS")
             .expect("AZURE_TEST_READ_WRITE_SAS not found");
 
-        // remove account key to make sure the sas token is used
+        // remove account key and connection string to make sure the sas token is used
         std::env::remove_var("AZURE_STORAGE_KEY");
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
         std::env::set_var("AZURE_STORAGE_SAS_TOKEN", read_write_sas_token);
 
         let azure_blob_uri = format!(
@@ -451,7 +515,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "403 Forbidden")]
-    fn test_azure_blob_read_only_sas() {
+    fn test_azure_read_only_sas() {
         let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
             .expect("AZURE_TEST_CONTAINER_NAME not found");
 
@@ -461,8 +525,9 @@ mod tests {
         let read_only_sas_token: String =
             std::env::var("AZURE_TEST_READ_ONLY_SAS").expect("AZURE_TEST_READ_ONLY_SAS not found");
 
-        // remove account key to make sure the sas token is used
+        // remove account key and connection string to make sure the sas token is used
         std::env::remove_var("AZURE_STORAGE_KEY");
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
         std::env::set_var("AZURE_STORAGE_SAS_TOKEN", read_only_sas_token);
 
         let azure_blob_uri = format!(
@@ -479,7 +544,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "unsupported azure blob storage uri")]
-    fn test_azure_blob_unsupported_uri() {
+    fn test_azure_unsupported_uri() {
         let fabric_azure_blob_uri = "https://ACCOUNT.dfs.fabric.microsoft.com".into();
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(fabric_azure_blob_uri);

@@ -191,7 +191,6 @@ Alternatively, you can use the following environment variables when starting pos
 
 Supported S3 uri formats are shown below:
 - s3:// \<bucket\> / \<path\>
-- s3a:// \<bucket\> / \<path\>
 - https:// \<bucket\>.s3.amazonaws.com / \<path\>
 - https:// s3.amazonaws.com / \<bucket\> / \<path\>
 
@@ -209,6 +208,7 @@ key = Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/
 Alternatively, you can use the following environment variables when starting postgres to configure the Azure Blob Storage client:
 - `AZURE_STORAGE_ACCOUNT`: the storage account name of the Azure Blob
 - `AZURE_STORAGE_KEY`: the storage key of the Azure Blob
+- `AZURE_STORAGE_CONNECTION_STRING`: the connection string for the Azure Blob (this can be set instead of specifying account name and key)
 - `AZURE_STORAGE_SAS_TOKEN`: the storage SAS token for the Azure Blob
 - `AZURE_STORAGE_ENDPOINT`: the endpoint **(only via environment variables)**
 - `AZURE_CONFIG_FILE`: an alternative location for the config file **(only via environment variables)**

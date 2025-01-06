@@ -1,20 +1,6 @@
-use std::{
-    panic,
-    sync::{Arc, LazyLock},
-};
+use std::{panic, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
-use aws_config::BehaviorVersion;
-use aws_credential_types::provider::ProvideCredentials;
-use home::home_dir;
-use ini::Ini;
-use object_store::{
-    aws::{AmazonS3, AmazonS3Builder},
-    azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder},
-    local::LocalFileSystem,
-    path::Path,
-    ObjectStore, ObjectStoreScheme,
-};
 use parquet::{
     arrow::{
         arrow_to_parquet_schema,
@@ -29,228 +15,15 @@ use pgrx::{
     ereport,
     pg_sys::{get_role_oid, has_privs_of_role, superuser, AsPgCStr, GetUserId},
 };
-use tokio::runtime::Runtime;
 use url::Url;
 
-use crate::arrow_parquet::parquet_writer::DEFAULT_ROW_GROUP_SIZE;
+use crate::{
+    arrow_parquet::parquet_writer::DEFAULT_ROW_GROUP_SIZE, object_store::create_object_store,
+    PG_BACKEND_TOKIO_RUNTIME,
+};
 
 const PARQUET_OBJECT_STORE_READ_ROLE: &str = "parquet_object_store_read";
 const PARQUET_OBJECT_STORE_WRITE_ROLE: &str = "parquet_object_store_write";
-
-// PG_BACKEND_TOKIO_RUNTIME creates a tokio runtime that uses the current thread
-// to run the tokio reactor. This uses the same thread that is running the Postgres backend.
-pub(crate) static PG_BACKEND_TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap_or_else(|e| panic!("failed to create tokio runtime: {}", e))
-});
-
-fn parse_azure_blob_container(uri: &Url) -> Option<String> {
-    let host = uri.host_str()?;
-
-    // az(ure)://{container}/key
-    if uri.scheme() == "az" || uri.scheme() == "azure" {
-        return Some(host.to_string());
-    }
-    // https://{account}.blob.core.windows.net/{container}
-    else if host.ends_with(".blob.core.windows.net") {
-        let path_segments: Vec<&str> = uri.path_segments()?.collect();
-
-        // Container name is the first part of the path
-        return Some(
-            path_segments
-                .first()
-                .expect("unexpected error during parsing azure blob uri")
-                .to_string(),
-        );
-    }
-
-    None
-}
-
-fn parse_s3_bucket(uri: &Url) -> Option<String> {
-    let host = uri.host_str()?;
-
-    // s3(a)://{bucket}/key
-    if uri.scheme() == "s3" || uri.scheme() == "s3a" {
-        return Some(host.to_string());
-    }
-    // https://s3.amazonaws.com/{bucket}/key
-    else if host == "s3.amazonaws.com" {
-        let path_segments: Vec<&str> = uri.path_segments()?.collect();
-
-        // Bucket name is the first part of the path
-        return Some(
-            path_segments
-                .first()
-                .expect("unexpected error during parsing s3 uri")
-                .to_string(),
-        );
-    }
-    // https://{bucket}.s3.amazonaws.com/key
-    else if host.ends_with(".s3.amazonaws.com") {
-        let bucket_name = host.split('.').next()?;
-        return Some(bucket_name.to_string());
-    }
-
-    None
-}
-
-fn object_store_with_location(uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStore>, Path) {
-    let (scheme, path) =
-        ObjectStoreScheme::parse(uri).unwrap_or_else(|_| panic!("unrecognized uri {}", uri));
-
-    // object_store crate can recognize a bunch of different schemes and paths, but we only support
-    // local, azure, and s3 schemes with a subset of all supported paths.
-    match scheme {
-        ObjectStoreScheme::AmazonS3 => {
-            let bucket_name = parse_s3_bucket(uri).unwrap_or_else(|| {
-                panic!("unsupported s3 uri: {}", uri);
-            });
-
-            let storage_container = PG_BACKEND_TOKIO_RUNTIME
-                .block_on(async { Arc::new(get_s3_object_store(&bucket_name).await) });
-
-            (storage_container, path)
-        }
-        ObjectStoreScheme::MicrosoftAzure => {
-            let container_name = parse_azure_blob_container(uri).unwrap_or_else(|| {
-                panic!("unsupported azure blob storage uri: {}", uri);
-            });
-
-            let storage_container = PG_BACKEND_TOKIO_RUNTIME
-                .block_on(async { Arc::new(get_azure_object_store(&container_name).await) });
-
-            (storage_container, path)
-        }
-        ObjectStoreScheme::Local => {
-            let uri = uri_as_string(uri);
-
-            if !copy_from {
-                // create or overwrite the local file
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .truncate(true)
-                    .create(true)
-                    .open(&uri)
-                    .unwrap_or_else(|e| panic!("{}", e));
-            }
-
-            let storage_container = Arc::new(LocalFileSystem::new());
-
-            let path = Path::from_filesystem_path(&uri).unwrap_or_else(|e| panic!("{}", e));
-
-            (storage_container, path)
-        }
-        _ => {
-            panic!("unsupported scheme {} in uri {}", uri.scheme(), uri);
-        }
-    }
-}
-
-// get_s3_object_store creates an AmazonS3 object store with the given bucket name.
-// It is configured by environment variables and aws config files as fallback method.
-// We need to read the config files to make the fallback method work since object_store
-// does not provide a way to read them. Currently, we only support to extract
-// "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ENDPOINT_URL",
-// and "AWS_REGION" from the config files.
-async fn get_s3_object_store(bucket_name: &str) -> AmazonS3 {
-    let mut aws_s3_builder = AmazonS3Builder::from_env().with_bucket_name(bucket_name);
-
-    // first tries environment variables and then the config files
-    let sdk_config = aws_config::defaults(BehaviorVersion::v2024_03_28())
-        .load()
-        .await;
-
-    if let Some(credential_provider) = sdk_config.credentials_provider() {
-        if let Ok(credentials) = credential_provider.provide_credentials().await {
-            // AWS_ACCESS_KEY_ID
-            aws_s3_builder = aws_s3_builder.with_access_key_id(credentials.access_key_id());
-
-            // AWS_SECRET_ACCESS_KEY
-            aws_s3_builder = aws_s3_builder.with_secret_access_key(credentials.secret_access_key());
-
-            if let Some(token) = credentials.session_token() {
-                // AWS_SESSION_TOKEN
-                aws_s3_builder = aws_s3_builder.with_token(token);
-            }
-        }
-    }
-
-    // AWS_ENDPOINT_URL
-    if let Some(aws_endpoint_url) = sdk_config.endpoint_url() {
-        aws_s3_builder = aws_s3_builder.with_endpoint(aws_endpoint_url);
-    }
-
-    // AWS_REGION
-    if let Some(aws_region) = sdk_config.region() {
-        aws_s3_builder = aws_s3_builder.with_region(aws_region.as_ref());
-    }
-
-    aws_s3_builder.build().unwrap_or_else(|e| panic!("{}", e))
-}
-
-async fn get_azure_object_store(container_name: &str) -> MicrosoftAzure {
-    let mut azure_builder = MicrosoftAzureBuilder::from_env().with_container_name(container_name);
-
-    // ~/.azure/config
-    let azure_config_file_path = std::env::var("AZURE_CONFIG_FILE").unwrap_or(
-        home_dir()
-            .expect("failed to get home directory")
-            .join(".azure")
-            .join("config")
-            .to_str()
-            .expect("failed to convert path to string")
-            .to_string(),
-    );
-
-    let azure_config_content = Ini::load_from_file(&azure_config_file_path).ok();
-
-    // storage account
-    let azure_blob_account = match std::env::var("AZURE_STORAGE_ACCOUNT") {
-        Ok(account) => Some(account),
-        Err(_) => azure_config_content
-            .as_ref()
-            .and_then(|ini| ini.section(Some("storage")))
-            .and_then(|section| section.get("account"))
-            .map(|account| account.to_string()),
-    };
-
-    if let Some(azure_blob_account) = azure_blob_account {
-        azure_builder = azure_builder.with_account(azure_blob_account);
-    }
-
-    // storage key
-    let azure_blob_key = match std::env::var("AZURE_STORAGE_KEY") {
-        Ok(key) => Some(key),
-        Err(_) => azure_config_content
-            .as_ref()
-            .and_then(|ini| ini.section(Some("storage")))
-            .and_then(|section| section.get("key"))
-            .map(|key| key.to_string()),
-    };
-
-    if let Some(azure_blob_key) = azure_blob_key {
-        azure_builder = azure_builder.with_access_key(azure_blob_key);
-    }
-
-    // sas token
-    let azure_blob_sas_token = match std::env::var("AZURE_STORAGE_SAS_TOKEN") {
-        Ok(token) => Some(token),
-        Err(_) => azure_config_content
-            .as_ref()
-            .and_then(|ini| ini.section(Some("storage")))
-            .and_then(|section| section.get("sas_token"))
-            .map(|token| token.to_string()),
-    };
-
-    if let Some(azure_blob_sas_token) = azure_blob_sas_token {
-        azure_builder = azure_builder.with_config(AzureConfigKey::SasKey, azure_blob_sas_token);
-    }
-
-    azure_builder.build().unwrap_or_else(|e| panic!("{}", e))
-}
 
 pub(crate) fn parse_uri(uri: &str) -> Url {
     if !uri.contains("://") {
@@ -285,7 +58,7 @@ pub(crate) fn parquet_schema_from_uri(uri: &Url) -> SchemaDescriptor {
 
 pub(crate) fn parquet_metadata_from_uri(uri: &Url) -> Arc<ParquetMetaData> {
     let copy_from = true;
-    let (parquet_object_store, location) = object_store_with_location(uri, copy_from);
+    let (parquet_object_store, location) = create_object_store(uri, copy_from);
 
     PG_BACKEND_TOKIO_RUNTIME.block_on(async {
         let object_store_meta = parquet_object_store
@@ -308,7 +81,7 @@ pub(crate) fn parquet_metadata_from_uri(uri: &Url) -> Arc<ParquetMetaData> {
 
 pub(crate) fn parquet_reader_from_uri(uri: &Url) -> ParquetRecordBatchStream<ParquetObjectReader> {
     let copy_from = true;
-    let (parquet_object_store, location) = object_store_with_location(uri, copy_from);
+    let (parquet_object_store, location) = create_object_store(uri, copy_from);
 
     PG_BACKEND_TOKIO_RUNTIME.block_on(async {
         let object_store_meta = parquet_object_store
@@ -340,7 +113,7 @@ pub(crate) fn parquet_writer_from_uri(
     writer_props: WriterProperties,
 ) -> AsyncArrowWriter<ParquetObjectWriter> {
     let copy_from = false;
-    let (parquet_object_store, location) = object_store_with_location(uri, copy_from);
+    let (parquet_object_store, location) = create_object_store(uri, copy_from);
 
     let parquet_object_writer = ParquetObjectWriter::new(parquet_object_store, location);
 
