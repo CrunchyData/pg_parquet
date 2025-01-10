@@ -2,7 +2,6 @@
 mod tests {
     use std::io::Write;
 
-    use aws_config::BehaviorVersion;
     use pgrx::{pg_test, Spi};
 
     use crate::pgrx_tests::common::TestTable;
@@ -51,19 +50,22 @@ mod tests {
 
         // create a config file
         let aws_config_file_content = format!(
-            "[profile {profile}]\nregion = {}\naws_access_key_id = {}\naws_secret_access_key = {}\nendpoint_url = {}\n",
-            region, access_key_id, secret_access_key, endpoint
+            "[profile {profile}]\n\
+            region={region}\n\
+            aws_access_key_id={access_key_id}\n\
+            aws_secret_access_key={secret_access_key}\n\
+            endpoint_url={endpoint}\n"
         );
         std::env::set_var("AWS_PROFILE", profile);
 
-        let aws_config_file = "/tmp/pg_parquet_aws_config";
-        std::env::set_var("AWS_CONFIG_FILE", aws_config_file);
+        let aws_config_file_path = "/tmp/pg_parquet_aws_config";
+        std::env::set_var("AWS_CONFIG_FILE", aws_config_file_path);
 
         let mut aws_config_file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
-            .open(aws_config_file)
+            .open(aws_config_file_path)
             .unwrap();
 
         aws_config_file
@@ -76,6 +78,9 @@ mod tests {
 
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
+
+        // remove the config file
+        std::fs::remove_file(aws_config_file_path).unwrap();
     }
 
     #[pg_test]
@@ -216,77 +221,58 @@ mod tests {
 
     #[pg_test]
     fn test_s3_temporary_token() {
-        let tokio_rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap_or_else(|e| panic!("failed to create tokio runtime: {}", e));
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
-        let s3_uri = tokio_rt.block_on(async {
-            let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
-            let client = aws_sdk_sts::Client::new(&config);
+        // remove these to make sure the config file is used
+        let access_key_id = std::env::var("AWS_ACCESS_KEY_ID").unwrap();
+        std::env::remove_var("AWS_ACCESS_KEY_ID");
+        let secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap();
+        std::env::remove_var("AWS_SECRET_ACCESS_KEY");
+        let region = std::env::var("AWS_REGION").unwrap();
+        std::env::remove_var("AWS_REGION");
+        let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap();
+        std::env::remove_var("AWS_ENDPOINT_URL");
 
-            let assume_role_result = client
-                .assume_role()
-                .role_session_name("testsession")
-                .role_arn("arn:xxx:xxx:xxx:xxxx")
-                .send()
-                .await
-                .unwrap();
+        let profile = "pg_parquet_test";
 
-            let assumed_creds = assume_role_result.credentials().unwrap();
+        // create a config file
+        let aws_config_file_content = format!(
+            "[profile {profile}-source]\n\
+            aws_access_key_id={access_key_id}\n\
+            aws_secret_access_key={secret_access_key}\n\
+            \n\
+            [profile {profile}]\n\
+            region={region}\n\
+            source_profile={profile}-source\n\
+            role_arn=arn:aws:iam::123456789012:dummy\n\
+            endpoint_url={endpoint}\n"
+        );
+        std::env::set_var("AWS_PROFILE", profile);
 
-            std::env::set_var("AWS_ACCESS_KEY_ID", assumed_creds.access_key_id());
-            std::env::set_var("AWS_SECRET_ACCESS_KEY", assumed_creds.secret_access_key());
-            std::env::set_var("AWS_SESSION_TOKEN", assumed_creds.session_token());
+        let aws_config_file_path = "/tmp/pg_parquet_aws_config";
+        std::env::set_var("AWS_CONFIG_FILE", aws_config_file_path);
 
-            let test_bucket_name: String =
-                std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+        let mut aws_config_file = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(aws_config_file_path)
+            .unwrap();
 
-            format!("s3://{}/pg_parquet_test.parquet", test_bucket_name)
-        });
+        aws_config_file
+            .write_all(aws_config_file_content.as_bytes())
+            .unwrap();
 
-        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
-
-        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
-        test_table.assert_expected_and_result_rows();
-    }
-
-    #[pg_test]
-    #[should_panic(expected = "403 Forbidden")]
-    fn test_s3_missing_temporary_token() {
-        let tokio_rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap_or_else(|e| panic!("failed to create tokio runtime: {}", e));
-
-        let s3_uri = tokio_rt.block_on(async {
-            let config = aws_config::load_defaults(BehaviorVersion::v2024_03_28()).await;
-            let client = aws_sdk_sts::Client::new(&config);
-
-            let assume_role_result = client
-                .assume_role()
-                .role_session_name("testsession")
-                .role_arn("arn:xxx:xxx:xxx:xxxx")
-                .send()
-                .await
-                .unwrap();
-
-            let assumed_creds = assume_role_result.credentials().unwrap();
-
-            // we do not set the session token on purpose
-            std::env::set_var("AWS_ACCESS_KEY_ID", assumed_creds.access_key_id());
-            std::env::set_var("AWS_SECRET_ACCESS_KEY", assumed_creds.secret_access_key());
-
-            let test_bucket_name: String =
-                std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
-
-            format!("s3://{}/pg_parquet_test.parquet", test_bucket_name)
-        });
+        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
 
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
+
+        // remove the config file
+        std::fs::remove_file(aws_config_file_path).unwrap();
     }
 
     #[pg_test]
@@ -342,18 +328,19 @@ mod tests {
 
         // create a config file
         let azure_config_file_content = format!(
-            "[storage]\naccount = {}\nkey = {}\n",
-            account_name, account_key
+            "[storage]\n\
+            account={account_name}\n\
+            key={account_key}"
         );
 
-        let azure_config_file = "/tmp/pg_parquet_azure_config";
-        std::env::set_var("AZURE_CONFIG_FILE", azure_config_file);
+        let azure_config_file_path = "/tmp/pg_parquet_azure_config";
+        std::env::set_var("AZURE_CONFIG_FILE", azure_config_file_path);
 
         let mut azure_config_file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
-            .open(azure_config_file)
+            .open(azure_config_file_path)
             .unwrap();
 
         azure_config_file
@@ -366,6 +353,9 @@ mod tests {
 
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
+
+        // remove the config file
+        std::fs::remove_file(azure_config_file_path).unwrap();
     }
 
     #[pg_test]
@@ -398,16 +388,16 @@ mod tests {
 
         // create a config file
         let azure_config_file_content =
-            format!("[storage]\nconnection_string = {}\n", connection_string);
+            format!("[storage]\nconnection_string = {connection_string}\n");
 
-        let azure_config_file = "/tmp/pg_parquet_azure_config";
-        std::env::set_var("AZURE_CONFIG_FILE", azure_config_file);
+        let azure_config_file_path = "/tmp/pg_parquet_azure_config";
+        std::env::set_var("AZURE_CONFIG_FILE", azure_config_file_path);
 
         let mut azure_config_file = std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
-            .open(azure_config_file)
+            .open(azure_config_file_path)
             .unwrap();
 
         azure_config_file
@@ -420,6 +410,9 @@ mod tests {
 
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
+
+        // remove the config file
+        std::fs::remove_file(azure_config_file_path).unwrap();
     }
 
     #[pg_test]
@@ -558,6 +551,15 @@ mod tests {
     fn test_unsupported_uri() {
         let test_table =
             TestTable::<i32>::new("int4".into()).with_uri("gs://testbucket".to_string());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "unrecognized uri dummy://testbucket")]
+    fn test_unrecognized_uri() {
+        let test_table =
+            TestTable::<i32>::new("int4".into()).with_uri("dummy://testbucket".to_string());
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
     }

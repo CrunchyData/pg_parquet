@@ -1,5 +1,5 @@
 use aws_config::BehaviorVersion;
-use aws_sdk_sts::config::ProvideCredentials;
+use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::{AmazonS3, AmazonS3Builder};
 use url::Url;
 
@@ -28,42 +28,34 @@ pub(crate) fn create_s3_object_store(uri: &Url) -> AmazonS3 {
     // a fallback to the config files
     let mut aws_s3_builder = AmazonS3Builder::new().with_bucket_name(bucket_name);
 
-    if let Ok(allow_http) = std::env::var("AWS_ALLOW_HTTP") {
-        aws_s3_builder = aws_s3_builder.with_allow_http(allow_http.parse().unwrap_or(false));
+    let aws_s3_config = AwsS3Config::load();
+
+    // allow http
+    aws_s3_builder = aws_s3_builder.with_allow_http(aws_s3_config.allow_http);
+
+    // access key id
+    if let Some(access_key_id) = aws_s3_config.access_key_id {
+        aws_s3_builder = aws_s3_builder.with_access_key_id(access_key_id);
     }
 
-    // first tries environment variables and then the config files
-    let sdk_config = PG_BACKEND_TOKIO_RUNTIME.block_on(async {
-        aws_config::defaults(BehaviorVersion::v2024_03_28())
-            .load()
-            .await
-    });
-
-    if let Some(credential_provider) = sdk_config.credentials_provider() {
-        if let Ok(credentials) = PG_BACKEND_TOKIO_RUNTIME
-            .block_on(async { credential_provider.provide_credentials().await })
-        {
-            // AWS_ACCESS_KEY_ID
-            aws_s3_builder = aws_s3_builder.with_access_key_id(credentials.access_key_id());
-
-            // AWS_SECRET_ACCESS_KEY
-            aws_s3_builder = aws_s3_builder.with_secret_access_key(credentials.secret_access_key());
-
-            if let Some(token) = credentials.session_token() {
-                // AWS_SESSION_TOKEN
-                aws_s3_builder = aws_s3_builder.with_token(token);
-            }
-        }
+    // secret access key
+    if let Some(secret_access_key) = aws_s3_config.secret_access_key {
+        aws_s3_builder = aws_s3_builder.with_secret_access_key(secret_access_key);
     }
 
-    // AWS_ENDPOINT_URL
-    if let Some(aws_endpoint_url) = sdk_config.endpoint_url() {
-        aws_s3_builder = aws_s3_builder.with_endpoint(aws_endpoint_url);
+    // session token
+    if let Some(session_token) = aws_s3_config.session_token {
+        aws_s3_builder = aws_s3_builder.with_token(session_token);
     }
 
-    // AWS_REGION
-    if let Some(aws_region) = sdk_config.region() {
-        aws_s3_builder = aws_s3_builder.with_region(aws_region.as_ref());
+    // endpoint url
+    if let Some(endpoint_url) = aws_s3_config.endpoint_url {
+        aws_s3_builder = aws_s3_builder.with_endpoint(endpoint_url);
+    }
+
+    // region
+    if let Some(region) = aws_s3_config.region {
+        aws_s3_builder = aws_s3_builder.with_region(region);
     }
 
     aws_s3_builder.build().unwrap_or_else(|e| panic!("{}", e))
@@ -95,4 +87,62 @@ fn parse_s3_bucket(uri: &Url) -> Option<String> {
     }
 
     None
+}
+
+// AwsS3Config is a struct that holds the configuration that is
+// used to configure the AmazonS3 object store. object_store does
+// not provide a way to read the config files, so we need to read
+// them ourselves via aws sdk.
+struct AwsS3Config {
+    region: Option<String>,
+    access_key_id: Option<String>,
+    secret_access_key: Option<String>,
+    session_token: Option<String>,
+    endpoint_url: Option<String>,
+    allow_http: bool,
+}
+
+impl AwsS3Config {
+    // load reads the s3 config from the environment variables first and config files as fallback.
+    fn load() -> Self {
+        let allow_http = if let Ok(allow_http) = std::env::var("AWS_ALLOW_HTTP") {
+            allow_http.parse().unwrap_or(false)
+        } else {
+            false
+        };
+
+        // first tries environment variables and then the config files
+        let sdk_config = PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+            aws_config::defaults(BehaviorVersion::v2024_03_28())
+                .load()
+                .await
+        });
+
+        let mut access_key_id = None;
+        let mut secret_access_key = None;
+        let mut session_token = None;
+
+        if let Some(credential_provider) = sdk_config.credentials_provider() {
+            if let Ok(credentials) = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { credential_provider.provide_credentials().await })
+            {
+                access_key_id = Some(credentials.access_key_id().to_string());
+                secret_access_key = Some(credentials.secret_access_key().to_string());
+                session_token = credentials.session_token().map(|t| t.to_string());
+            }
+        }
+
+        let endpoint_url = sdk_config.endpoint_url().map(|u| u.to_string());
+
+        let region = sdk_config.region().map(|r| r.as_ref().to_string());
+
+        Self {
+            region,
+            access_key_id,
+            secret_access_key,
+            session_token,
+            endpoint_url,
+            allow_http,
+        }
+    }
 }

@@ -1,3 +1,4 @@
+use azure_storage::{ConnectionString, EndpointProtocol};
 use home::home_dir;
 use ini::Ini;
 use object_store::azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder};
@@ -24,6 +25,19 @@ pub(crate) fn create_azure_object_store(uri: &Url) -> MicrosoftAzure {
 
     let azure_blob_config = AzureStorageConfig::load();
 
+    // allow http
+    azure_builder = azure_builder.with_allow_http(azure_blob_config.allow_http);
+
+    // endpoint
+    if let Some(endpoint) = azure_blob_config.endpoint {
+        azure_builder = azure_builder.with_endpoint(endpoint);
+    }
+
+    // sas token
+    if let Some(sas_token) = azure_blob_config.sas_token {
+        azure_builder = azure_builder.with_config(AzureConfigKey::SasKey, sas_token);
+    }
+
     // account name
     if let Some(account_name) = azure_blob_config.account_name {
         azure_builder = azure_builder.with_account(account_name);
@@ -34,17 +48,19 @@ pub(crate) fn create_azure_object_store(uri: &Url) -> MicrosoftAzure {
         azure_builder = azure_builder.with_access_key(account_key);
     }
 
-    // sas token
-    if let Some(sas_token) = azure_blob_config.sas_token {
-        azure_builder = azure_builder.with_config(AzureConfigKey::SasKey, sas_token);
+    // tenant id
+    if let Some(tenant_id) = azure_blob_config.tenant_id {
+        azure_builder = azure_builder.with_tenant_id(tenant_id);
     }
 
-    // allow http
-    azure_builder = azure_builder.with_allow_http(azure_blob_config.allow_http);
+    // client id
+    if let Some(client_id) = azure_blob_config.client_id {
+        azure_builder = azure_builder.with_client_id(client_id);
+    }
 
-    // endpoint
-    if let Some(endpoint) = azure_blob_config.endpoint {
-        azure_builder = azure_builder.with_endpoint(endpoint);
+    // client secret
+    if let Some(client_secret) = azure_blob_config.client_secret {
+        azure_builder = azure_builder.with_client_secret(client_secret);
     }
 
     azure_builder.build().unwrap_or_else(|e| panic!("{}", e))
@@ -73,20 +89,26 @@ fn parse_azure_blob_container(uri: &Url) -> Option<String> {
     None
 }
 
-// AzureStorageConfig represents the configuration for Azure Blob Storage.
-// There is no proper azure sdk config crate that can read the config files.
-// So, we need to read the config files manually from azure's ini config.
-// See https://learn.microsoft.com/en-us/cli/azure/azure-cli-configuration?view=azure-cli-latest
+// AzureStorageConfig is a struct that holds the configuration that is
+// used to configure the Azure Blob Storage object store. object_store does
+// not provide a way to read the config files, so we need to read
+// them ourselves via rust-ini and azure sdk.
 struct AzureStorageConfig {
     account_name: Option<String>,
     account_key: Option<String>,
     sas_token: Option<String>,
+    tenant_id: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
     endpoint: Option<String>,
     allow_http: bool,
 }
 
 impl AzureStorageConfig {
     // load reads the azure config from the environment variables first and config files as fallback.
+    // There is no proper azure sdk config crate that can read the config files.
+    // So, we need to read the config files manually from azure's ini config.
+    // See https://learn.microsoft.com/en-us/cli/azure/azure-cli-configuration?view=azure-cli-latest
     fn load() -> Self {
         // ~/.azure/config
         let azure_config_file_path = std::env::var("AZURE_CONFIG_FILE").unwrap_or(
@@ -101,7 +123,6 @@ impl AzureStorageConfig {
 
         let azure_config_content = Ini::load_from_file(&azure_config_file_path).ok();
 
-        // connection string
         let connection_string = match std::env::var("AZURE_STORAGE_CONNECTION_STRING") {
             Ok(connection_string) => Some(connection_string),
             Err(_) => azure_config_content
@@ -111,12 +132,13 @@ impl AzureStorageConfig {
                 .map(|connection_string| connection_string.to_string()),
         };
 
-        // connection string has the highest priority
+        // connection string overrides everything
         if let Some(connection_string) = connection_string {
-            return Self::from_connection_string(&connection_string);
+            if let Ok(connection_string) = ConnectionString::new(&connection_string) {
+                return connection_string.into();
+            }
         }
 
-        // account name
         let account_name = match std::env::var("AZURE_STORAGE_ACCOUNT") {
             Ok(account) => Some(account),
             Err(_) => azure_config_content
@@ -126,7 +148,6 @@ impl AzureStorageConfig {
                 .map(|account| account.to_string()),
         };
 
-        // account key
         let account_key = match std::env::var("AZURE_STORAGE_KEY") {
             Ok(key) => Some(key),
             Err(_) => azure_config_content
@@ -136,7 +157,6 @@ impl AzureStorageConfig {
                 .map(|key| key.to_string()),
         };
 
-        // sas token
         let sas_token = match std::env::var("AZURE_STORAGE_SAS_TOKEN") {
             Ok(token) => Some(token),
             Err(_) => azure_config_content
@@ -155,47 +175,56 @@ impl AzureStorageConfig {
             .map(|allow_http| allow_http.parse().unwrap_or(false))
             .unwrap_or(false);
 
+        // tenant id, object_store specific
+        let tenant_id = std::env::var("AZURE_TENANT_ID").ok();
+
+        // client id, object_store specific
+        let client_id = std::env::var("AZURE_CLIENT_ID").ok();
+
+        // client secret, object_store specific
+        let client_secret = std::env::var("AZURE_CLIENT_SECRET").ok();
+
         AzureStorageConfig {
             account_name,
             account_key,
             sas_token,
+            tenant_id,
+            client_id,
+            client_secret,
             endpoint,
             allow_http,
         }
     }
+}
 
-    // from_connection_string parses AzureBlobConfig from the given connection string.
-    // See https://learn.microsoft.com/en-us/azure/storage/common/storage-configure-connection-string#create-a-connection-string-for-an-explicit-storage-endpoint
-    fn from_connection_string(connection_string: &str) -> Self {
-        let mut account_name = None;
-        let mut account_key = None;
-        let mut sas_token = None;
-        let mut endpoint = None;
-        let mut allow_http = false;
+impl From<ConnectionString<'_>> for AzureStorageConfig {
+    fn from(connection_string: ConnectionString) -> Self {
+        let account_name = connection_string
+            .account_name
+            .map(|account_name| account_name.to_string());
 
-        for pair in connection_string.trim_end_matches(';').split(';') {
-            let (key, value) = pair
-                .split_once('=')
-                .expect("invalid azure connection string format");
+        let account_key = connection_string
+            .account_key
+            .map(|account_key| account_key.to_string());
 
-            match key {
-                "AccountName" => account_name = Some(value.to_string()),
-                "AccountKey" => account_key = Some(value.to_string()),
-                "SharedAccessSignature" => sas_token = Some(value.to_string()),
-                "BlobEndpoint" => endpoint = Some(value.to_string()),
-                "DefaultEndpointsProtocol" => {
-                    allow_http = value.to_lowercase() == "http";
-                }
-                _ => {
-                    panic!("unsupported config key in azure connection string: {}", key);
-                }
-            }
-        }
+        let sas_token = connection_string.sas.map(|sas| sas.to_string());
+
+        let endpoint = connection_string
+            .blob_endpoint
+            .map(|blob_endpoint| blob_endpoint.to_string());
+
+        let allow_http = matches!(
+            connection_string.default_endpoints_protocol,
+            Some(EndpointProtocol::Http)
+        );
 
         AzureStorageConfig {
             account_name,
             account_key,
             sas_token,
+            tenant_id: None,
+            client_id: None,
+            client_secret: None,
             endpoint,
             allow_http,
         }
