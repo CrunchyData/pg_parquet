@@ -19,7 +19,7 @@ use crate::{
     type_compat::{
         fallback_to_text::{reset_fallback_to_text_context, FallbackToText},
         geometry::{is_postgis_geometry_type, Geometry},
-        map::{is_map_type, Map},
+        map::{is_map_type, reset_map_type_context, Map},
     },
 };
 
@@ -55,6 +55,7 @@ pub(crate) struct ArrowToPgAttributeContext {
     needs_cast: bool,
     typoid: Oid,
     typmod: i32,
+    map_typoid: Option<Oid>,
     is_geometry: bool,
     attribute_contexts: Option<Vec<ArrowToPgAttributeContext>>,
     attribute_tupledesc: Option<PgTupleDesc<'static>>,
@@ -82,21 +83,24 @@ impl ArrowToPgAttributeContext {
         let is_array = is_array_type(typoid);
         let is_composite;
         let is_geometry;
-        let is_map;
         let attribute_typoid;
         let attribute_field;
+        let map_typoid;
 
         if is_array {
             let element_typoid = array_element_typoid(typoid);
 
             is_composite = is_composite_type(element_typoid);
             is_geometry = is_postgis_geometry_type(element_typoid);
-            is_map = is_map_type(element_typoid);
 
-            if is_map {
+            if is_map_type(element_typoid) {
+                map_typoid = Some(element_typoid);
+
                 let entries_typoid = domain_array_base_elem_typoid(element_typoid);
                 attribute_typoid = entries_typoid;
             } else {
+                map_typoid = None;
+
                 attribute_typoid = element_typoid;
             }
 
@@ -107,19 +111,21 @@ impl ArrowToPgAttributeContext {
         } else {
             is_composite = is_composite_type(typoid);
             is_geometry = is_postgis_geometry_type(typoid);
-            is_map = is_map_type(typoid);
 
-            if is_map {
+            if is_map_type(typoid) {
+                map_typoid = Some(typoid);
+
                 let entries_typoid = domain_array_base_elem_typoid(typoid);
                 attribute_typoid = entries_typoid;
             } else {
+                map_typoid = None;
                 attribute_typoid = typoid;
             }
 
             attribute_field = field.clone();
         }
 
-        let attribute_tupledesc = if is_composite || is_map {
+        let attribute_tupledesc = if is_composite || map_typoid.is_some() {
             Some(tuple_desc(attribute_typoid, typmod))
         } else {
             None
@@ -183,6 +189,7 @@ impl ArrowToPgAttributeContext {
             needs_cast,
             typoid: attribute_typoid,
             typmod,
+            map_typoid,
             is_geometry,
             attribute_contexts,
             attribute_tupledesc,
@@ -367,6 +374,8 @@ fn to_pg_nonarray_datum(
             )
         }
         DataType::Map(_, _) => {
+            reset_map_type_context(attribute_context.map_typoid.expect("missing map typoid"));
+
             to_pg_datum!(MapArray, Map, primitive_array, attribute_context)
         }
         _ => {
@@ -525,6 +534,8 @@ fn to_pg_array_datum(
             )
         }
         DataType::Map(_, _) => {
+            reset_map_type_context(attribute_context.map_typoid.expect("missing map typoid"));
+
             to_pg_datum!(MapArray, Vec<Option<Map>>, list_array, attribute_context)
         }
         _ => {
