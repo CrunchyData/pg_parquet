@@ -40,6 +40,7 @@ pub(crate) fn comma_separated_copy_options(options: &HashMap<String, CopyOptionV
 }
 
 pub(crate) const LOCAL_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test.parquet";
+pub(crate) const LOCAL_TEST_FOLDER_PATH: &str = "/tmp/pg_parquet_test";
 
 pub(crate) struct TestTable<T: IntoDatum + FromDatum> {
     uri: String,
