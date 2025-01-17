@@ -273,6 +273,7 @@ Supported authorization methods' priority order is shown below:
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<compression>]` extension,
+- `file_size_bytes <int>`: the total byte size per Parquet file. When set, the parquet files, with target size, are created under parent directory (named the same as file name without file extension). By default, when not specified, a single file is generated without creating a parent folder.
 - `row_group_size <int>`: the number of rows in each row group while writing Parquet files. The default row group size is `122880`,
 - `row_group_size_bytes <int>`: the total byte size of rows in each row group while writing Parquet files. The default row group size bytes is `row_group_size * 1024`,
 - `compression <string>`: the compression format to use while writing Parquet files. The supported compression formats are `uncompressed`, `snappy`, `gzip`, `brotli`, `lz4`, `lz4raw` and `zstd`. The default compression format is `snappy`. If not specified, the compression format is determined by the file extension,
