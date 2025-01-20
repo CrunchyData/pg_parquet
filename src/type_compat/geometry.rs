@@ -61,8 +61,7 @@ pub(crate) enum GeometryType {
 
 impl GeometryType {
     fn from_typmod(typmod: i32) -> Option<Self> {
-        // taken from Postgis source code
-        // https://github.com/postgis/postgis/blob/2845d3f37896e64ad24a2ee6863213b297da1301/liblwgeom/liblwgeom.h.in#L194
+        // see postgis: https://github.com/postgis/postgis/blob/2845d3f37896e64ad24a2ee6863213b297da1301/liblwgeom/liblwgeom.h.in#L194
         let geom_type = (typmod & 0x000000FC) >> 2;
 
         match geom_type {
