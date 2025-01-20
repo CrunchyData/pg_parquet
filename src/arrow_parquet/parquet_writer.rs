@@ -27,7 +27,10 @@ use crate::{
     PG_BACKEND_TOKIO_RUNTIME,
 };
 
-use super::pg_to_arrow::{context::PgToArrowAttributeContext, to_arrow_array};
+use super::{
+    field_ids::FieldIds,
+    pg_to_arrow::{context::PgToArrowAttributeContext, to_arrow_array},
+};
 
 pub(crate) const DEFAULT_ROW_GROUP_SIZE: i64 = 122880;
 pub(crate) const DEFAULT_ROW_GROUP_SIZE_BYTES: i64 = DEFAULT_ROW_GROUP_SIZE * 1024;
@@ -41,6 +44,7 @@ pub(crate) struct ParquetWriterContext {
 impl ParquetWriterContext {
     pub(crate) fn new(
         uri: Url,
+        field_ids: FieldIds,
         compression: PgParquetCompression,
         compression_level: i32,
         tupledesc: &PgTupleDesc,
@@ -57,7 +61,7 @@ impl ParquetWriterContext {
             parquet_schema_string_from_attributes(&attributes)
         );
 
-        let schema = parse_arrow_schema_from_attributes(&attributes);
+        let schema = parse_arrow_schema_from_attributes(&attributes, field_ids);
         let schema = Arc::new(schema);
 
         let writer_props = Self::writer_props(tupledesc, compression, compression_level);

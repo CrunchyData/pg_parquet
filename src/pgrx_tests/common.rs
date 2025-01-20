@@ -314,3 +314,10 @@ pub(crate) fn write_record_batch_to_parquet(schema: SchemaRef, record_batch: Rec
     writer.write(&record_batch).unwrap();
     writer.close().unwrap();
 }
+
+pub(crate) fn create_crunchy_map_type(key_type: &str, val_type: &str) -> String {
+    assert!(extension_exists("crunchy_map"));
+
+    let command = format!("SELECT crunchy_map.create('{key_type}','{val_type}')::text;",);
+    Spi::get_one(&command).unwrap().unwrap()
+}
