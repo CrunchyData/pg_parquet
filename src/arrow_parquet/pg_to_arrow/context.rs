@@ -7,7 +7,7 @@ use pgrx::{
 };
 
 use super::{
-    array_element_typoid, collect_attributes_for, domain_array_base_elem_typoid,
+    array_element_typoid, collect_attributes_for, domain_array_base_elem_type,
     extract_precision_and_scale_from_numeric_typmod, is_array_type, is_composite_type, is_map_type,
     is_postgis_geometry_type, tuple_desc, CollectAttributesFor,
 };
@@ -100,7 +100,7 @@ impl PgToArrowAttributeTypeContext {
         } else if is_composite_type(typoid) {
             Self::new_composite(typoid, typmod, field)
         } else if is_map_type(typoid) {
-            Self::new_map(attnum, typoid, typmod, field)
+            Self::new_map(attnum, typoid, field)
         } else {
             Self::new_primitive(typoid, typmod)
         }
@@ -171,8 +171,8 @@ impl PgToArrowAttributeTypeContext {
         }
     }
 
-    fn new_map(attnum: i16, typoid: Oid, typmod: i32, field: FieldRef) -> Self {
-        let entries_typoid = domain_array_base_elem_typoid(typoid);
+    fn new_map(attnum: i16, typoid: Oid, field: FieldRef) -> Self {
+        let (entries_typoid, entries_typmod) = domain_array_base_elem_type(typoid);
 
         let entries_field = match field.data_type() {
             arrow::datatypes::DataType::Map(entries_field, _) => entries_field.clone(),
@@ -182,14 +182,14 @@ impl PgToArrowAttributeTypeContext {
         let entries_type_context = PgToArrowAttributeTypeContext::new(
             attnum,
             entries_typoid,
-            typmod,
+            entries_typmod,
             entries_field.clone(),
         );
 
         let entries_context = Box::new(PgToArrowAttributeContext {
             attnum,
             typoid: entries_typoid,
-            typmod,
+            typmod: entries_typmod,
             field: entries_field.clone(),
             type_context: entries_type_context,
         });
