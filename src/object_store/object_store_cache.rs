@@ -103,17 +103,10 @@ impl ObjectStoreWithExpiration {
             let expired = expire_at < SystemTime::now();
 
             if expired {
-                let expiration_warn_msg =
-                    format!("credentials for {bucket} expired at {expire_at:?}");
-
-                let expiration_hint = "New credentials will be automatically retrieved if configured.\n\
-                                       Otherwise, please create a new postgres session to refresh the credentials.";
-
                 ereport!(
-                    PgLogLevel::WARNING,
+                    PgLogLevel::DEBUG2,
                     PgSqlErrorCode::ERRCODE_WARNING,
-                    expiration_warn_msg,
-                    expiration_hint,
+                    format!("credentials for {bucket} expired at {expire_at:?}"),
                 );
             }
 
