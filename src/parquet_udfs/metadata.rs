@@ -1,4 +1,3 @@
-use ::parquet::file::statistics::Statistics;
 use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
 
 use crate::arrow_parquet::uri_utils::{
@@ -7,6 +6,8 @@ use crate::arrow_parquet::uri_utils::{
 
 #[pg_schema]
 mod parquet {
+    use crate::parquet_udfs::stats::{stats_max_value_to_pg_str, stats_min_value_to_pg_str};
+
     use super::*;
 
     #[pg_extern]
@@ -69,10 +70,12 @@ mod parquet {
                 let mut stats_null_count = None;
                 let mut stats_distinct_count = None;
 
-                if let Some(statistics) = column.statistics() {
-                    stats_min = stats_min_value_to_str(statistics);
+                let column_descriptor = column.column_descr();
 
-                    stats_max = stats_max_value_to_str(statistics);
+                if let Some(statistics) = column.statistics() {
+                    stats_min = stats_min_value_to_pg_str(statistics, column_descriptor);
+
+                    stats_max = stats_max_value_to_pg_str(statistics, column_descriptor);
 
                     stats_null_count = statistics.null_count_opt().map(|v| v as i64);
 
@@ -213,47 +216,5 @@ mod parquet {
         }
 
         TableIterator::new(rows)
-    }
-}
-
-fn stats_min_value_to_str(statistics: &Statistics) -> Option<String> {
-    match &statistics {
-        Statistics::Boolean(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
-        Statistics::Int32(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
-        Statistics::Int64(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
-        Statistics::Int96(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
-        Statistics::Float(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
-        Statistics::Double(val_stats) => val_stats.min_opt().map(|v| v.to_string()),
-        Statistics::ByteArray(val_stats) => val_stats.min_opt().map(|v| match v.as_utf8() {
-            Ok(v) => v.to_string(),
-            Err(_) => v.to_string(),
-        }),
-        Statistics::FixedLenByteArray(val_stats) => {
-            val_stats.min_opt().map(|v| match v.as_utf8() {
-                Ok(v) => v.to_string(),
-                Err(_) => v.to_string(),
-            })
-        }
-    }
-}
-
-fn stats_max_value_to_str(statistics: &Statistics) -> Option<String> {
-    match statistics {
-        Statistics::Boolean(statistics) => statistics.max_opt().map(|v| v.to_string()),
-        Statistics::Int32(statistics) => statistics.max_opt().map(|v| v.to_string()),
-        Statistics::Int64(statistics) => statistics.max_opt().map(|v| v.to_string()),
-        Statistics::Int96(statistics) => statistics.max_opt().map(|v| v.to_string()),
-        Statistics::Float(statistics) => statistics.max_opt().map(|v| v.to_string()),
-        Statistics::Double(statistics) => statistics.max_opt().map(|v| v.to_string()),
-        Statistics::ByteArray(statistics) => statistics.max_opt().map(|v| match v.as_utf8() {
-            Ok(v) => v.to_string(),
-            Err(_) => v.to_string(),
-        }),
-        Statistics::FixedLenByteArray(statistics) => {
-            statistics.max_opt().map(|v| match v.as_utf8() {
-                Ok(v) => v.to_string(),
-                Err(_) => v.to_string(),
-            })
-        }
     }
 }
