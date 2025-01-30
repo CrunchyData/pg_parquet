@@ -119,6 +119,10 @@ impl ParquetWriterContext {
             .unwrap_or_else(|e| panic!("failed to flush record batch: {}", e));
     }
 
+    pub(crate) fn bytes_written(&self) -> usize {
+        self.parquet_writer.bytes_written()
+    }
+
     fn pg_tuples_to_record_batch(
         tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
         attribute_contexts: &[PgToArrowAttributeContext],
