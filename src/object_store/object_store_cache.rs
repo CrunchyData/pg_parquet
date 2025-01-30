@@ -11,8 +11,10 @@ use pgrx::{ereport, PgLogLevel, PgSqlErrorCode};
 use url::Url;
 
 use super::{
-    aws::parse_s3_bucket, azure::parse_azure_blob_container, create_azure_object_store,
-    create_local_file_object_store, create_s3_object_store,
+    aws::parse_s3_bucket,
+    azure::parse_azure_blob_container,
+    create_azure_object_store, create_local_file_object_store, create_s3_object_store,
+    gcs::{create_gcs_object_store, parse_gcs_bucket},
 };
 
 // OBJECT_STORE_CACHE is a global cache for object stores per Postgres session.
@@ -44,7 +46,7 @@ impl ObjectStoreCache {
     fn get_or_create(&mut self, uri: &Url, copy_from: bool) -> (Arc<dyn ObjectStore>, Path) {
         let (scheme, path) = ObjectStoreScheme::parse(uri).unwrap_or_else(|_| {
             panic!(
-                "unrecognized uri {}. pg_parquet supports local paths, s3:// or azure:// schemes.",
+                "unrecognized uri {}. pg_parquet supports local paths, s3://, azure:// or gs:// schemes.",
                 uri
             )
         });
@@ -74,13 +76,14 @@ impl ObjectStoreCache {
 
     fn create(scheme: ObjectStoreScheme, uri: &Url, copy_from: bool) -> ObjectStoreWithExpiration {
         // object_store crate can recognize a bunch of different schemes and paths, but we only support
-        // local, azure, and s3 schemes with a subset of all supported paths.
+        // local, s3, azure and gs schemes with a subset of all supported paths.
         match scheme {
             ObjectStoreScheme::AmazonS3 => create_s3_object_store(uri),
             ObjectStoreScheme::MicrosoftAzure => create_azure_object_store(uri),
+            ObjectStoreScheme::GoogleCloudStorage => create_gcs_object_store(uri),
             ObjectStoreScheme::Local => create_local_file_object_store(uri, copy_from),
             _ => panic!(
-                    "unsupported scheme {} in uri {}. pg_parquet supports local paths, s3:// or azure:// schemes.",
+                    "unsupported scheme {} in uri {}. pg_parquet supports local paths, s3://, azure:// or gs:// schemes.",
                     uri.scheme(),
                     uri
                 ),
@@ -131,9 +134,10 @@ impl ObjectStoreCacheKey {
         let bucket = match scheme {
             ObjectStoreScheme::AmazonS3 => parse_s3_bucket(uri).unwrap_or_else(|| panic!("unsupported s3 uri: {uri}")),
             ObjectStoreScheme::MicrosoftAzure => parse_azure_blob_container(uri).unwrap_or_else(|| panic!("unsupported azure blob storage uri: {uri}")),
+            ObjectStoreScheme::GoogleCloudStorage => parse_gcs_bucket(uri).unwrap_or_else(|| panic!("unsupported gs uri: {uri}")),
             ObjectStoreScheme::Local => panic!("local paths should not be cached"),
             _ => panic!(
-                "unsupported scheme {} in uri {}. pg_parquet supports local paths, s3:// or azure:// schemes.",
+                "unsupported scheme {} in uri {}. pg_parquet supports local paths, s3://, azure:// or gs:// schemes.",
                 uri.scheme(),
                 uri
             ),

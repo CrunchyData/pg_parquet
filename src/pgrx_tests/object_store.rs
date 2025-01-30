@@ -553,7 +553,7 @@ mod tests {
         );
 
         let copy_to_command = format!(
-            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}' WITH (format parquet);;",
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}' WITH (format parquet);",
             azure_blob_uri
         );
         Spi::run(copy_to_command.as_str()).unwrap();
@@ -583,7 +583,7 @@ mod tests {
         );
 
         let copy_to_command = format!(
-            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}' WITH (format parquet);;",
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}' WITH (format parquet);",
             azure_blob_uri
         );
         Spi::run(copy_to_command.as_str()).unwrap();
@@ -634,12 +634,49 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "unsupported scheme gs in uri gs://testbucket")]
+    fn test_gcs_from_env() {
+        let test_bucket_name: String =
+            std::env::var("GOOGLE_TEST_BUCKET").expect("GOOGLE_TEST_BUCKET not found");
+
+        let gcs_uri = format!("gs://{}/pg_parquet_test.parquet", test_bucket_name);
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(gcs_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "404 Not Found")]
+    fn test_gcs_write_wrong_bucket() {
+        let s3_uri = "gs://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
+
+        let copy_to_command = format!(
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}';",
+            s3_uri
+        );
+        Spi::run(copy_to_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "404 Not Found")]
+    fn test_gcs_read_wrong_bucket() {
+        let gcs_uri = "gs://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
+
+        let create_table_command = "CREATE TABLE test_table (a int);";
+        Spi::run(create_table_command).unwrap();
+
+        let copy_from_command = format!("COPY test_table FROM '{}';", gcs_uri);
+        Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "unsupported scheme http in uri http://testbucket")]
     fn test_unsupported_uri() {
         object_store_cache_clear();
 
         let test_table =
-            TestTable::<i32>::new("int4".into()).with_uri("gs://testbucket".to_string());
+            TestTable::<i32>::new("int4".into()).with_uri("http://testbucket".to_string());
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
     }
@@ -691,7 +728,7 @@ mod tests {
             object_store_cache_items(),
             vec![
                 ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None)
+                ("AmazonS3", "testbucket2", None),
             ]
         );
 
@@ -706,7 +743,7 @@ mod tests {
             vec![
                 ("AmazonS3", "testbucket", None),
                 ("AmazonS3", "testbucket2", None),
-                ("MicrosoftAzure", "testcontainer", None)
+                ("MicrosoftAzure", "testcontainer", None),
             ]
         );
 
@@ -721,7 +758,7 @@ mod tests {
             vec![
                 ("AmazonS3", "testbucket", None),
                 ("AmazonS3", "testbucket2", None),
-                ("MicrosoftAzure", "testcontainer", None)
+                ("MicrosoftAzure", "testcontainer", None),
             ]
         );
 
@@ -737,7 +774,59 @@ mod tests {
                 ("AmazonS3", "testbucket", None),
                 ("AmazonS3", "testbucket2", None),
                 ("MicrosoftAzure", "testcontainer", None),
-                ("MicrosoftAzure", "testcontainer2", None)
+                ("MicrosoftAzure", "testcontainer2", None),
+            ]
+        );
+
+        // gs scheme and bucket
+        let test_table =
+            TestTable::<i32>::new("int4".into()).with_uri("gs://testbucket/test1.parquet".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+
+        assert_eq!(
+            object_store_cache_items(),
+            vec![
+                ("AmazonS3", "testbucket", None),
+                ("AmazonS3", "testbucket2", None),
+                ("GoogleCloudStorage", "testbucket", None),
+                ("MicrosoftAzure", "testcontainer", None),
+                ("MicrosoftAzure", "testcontainer2", None),
+            ]
+        );
+
+        // gs scheme and same bucket
+        let test_table =
+            TestTable::<i32>::new("int4".into()).with_uri("gs://testbucket/test1.parquet".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+
+        assert_eq!(
+            object_store_cache_items(),
+            vec![
+                ("AmazonS3", "testbucket", None),
+                ("AmazonS3", "testbucket2", None),
+                ("GoogleCloudStorage", "testbucket", None),
+                ("MicrosoftAzure", "testcontainer", None),
+                ("MicrosoftAzure", "testcontainer2", None),
+            ]
+        );
+
+        // gs scheme and different bucket
+        let test_table =
+            TestTable::<i32>::new("int4".into()).with_uri("gs://testbucket2/test1.parquet".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+
+        assert_eq!(
+            object_store_cache_items(),
+            vec![
+                ("AmazonS3", "testbucket", None),
+                ("AmazonS3", "testbucket2", None),
+                ("GoogleCloudStorage", "testbucket", None),
+                ("GoogleCloudStorage", "testbucket2", None),
+                ("MicrosoftAzure", "testcontainer", None),
+                ("MicrosoftAzure", "testcontainer2", None),
             ]
         );
     }
