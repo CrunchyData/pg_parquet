@@ -27,6 +27,7 @@ struct CopyToParquetSplitDestReceiver {
     options: CopyToParquetOptions,
     current_child_id: i64,
     current_child_receiver: *mut CopyToParquetDestReceiver,
+    bytes_written: u64,
 }
 
 #[repr(C)]
@@ -90,6 +91,11 @@ impl CopyToParquetSplitDestReceiver {
             }
         }
 
+        self.bytes_written += unsafe {
+            PgBox::<CopyToParquetDestReceiver>::from_pg(self.current_child_receiver as _)
+                .collected_bytes() as u64
+        };
+
         self.current_child_receiver = std::ptr::null_mut();
     }
 
@@ -139,6 +145,18 @@ impl CopyToParquetSplitDestReceiver {
         let child_uri = parent_folder.join(format!("data_{file_id}{file_extension}"));
 
         child_uri.to_str().expect("invalid uri").as_pg_cstr()
+    }
+
+    fn bytes_written(&self) -> u64 {
+        if self.current_child_receiver.is_null() {
+            return self.bytes_written;
+        }
+
+        let child_parquet_dest = unsafe {
+            PgBox::<CopyToParquetDestReceiver>::from_pg(self.current_child_receiver as _)
+        };
+
+        self.bytes_written + child_parquet_dest.collected_bytes() as u64
     }
 }
 
@@ -265,6 +283,21 @@ pub extern "C" fn create_copy_to_parquet_split_dest_receiver(
     split_dest.operation = -1;
     split_dest.options = options;
     split_dest.current_child_id = 0;
+    split_dest.bytes_written = 0;
 
     unsafe { std::mem::transmute(split_dest) }
+}
+
+// parquet_split_dest_receiver_bytes_written returns the total number of bytes written to parquet files
+// so far. This includes all child receivers that have been created and flushed.
+#[pg_guard]
+#[no_mangle]
+pub extern "C" fn parquet_split_dest_receiver_bytes_written(dest: *const DestReceiver) -> u64 {
+    let split_parquet_dest = unsafe {
+        (dest as *const CopyToParquetSplitDestReceiver)
+            .as_ref()
+            .expect("invalid split parquet dest receiver ptr")
+    };
+
+    split_parquet_dest.bytes_written()
 }

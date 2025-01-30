@@ -91,6 +91,10 @@ impl CopyToParquetDestReceiver {
     }
 
     pub(crate) fn collected_bytes(&self) -> usize {
+        if self.parquet_writer_context.is_null() {
+            return 0;
+        }
+
         let current_parquet_writer_context = unsafe {
             self.parquet_writer_context
                 .as_ref()
