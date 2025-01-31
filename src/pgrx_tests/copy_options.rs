@@ -6,7 +6,8 @@ mod tests {
 
     use crate::{
         pgrx_tests::common::{
-            CopyOptionValue, TestTable, LOCAL_TEST_FILE_PATH, LOCAL_TEST_FOLDER_PATH,
+            create_crunchy_map_type, extension_exists, CopyOptionValue, TestTable,
+            LOCAL_TEST_FILE_PATH, LOCAL_TEST_FOLDER_PATH,
         },
         PgParquetCompression,
     };
@@ -526,5 +527,483 @@ mod tests {
             TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_from_options);
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "invalid JSON string for field_ids")]
+    fn test_invalid_field_ids() {
+        let setup_commands = "create type person as (id int, a int, b text);
+                              create table test_table(a int, b text, c int[], d person);";
+        Spi::run(setup_commands).unwrap();
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{}' with (field_ids 'invalid_field_ids');",
+            LOCAL_TEST_FILE_PATH
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "duplicate field id 14 in \"field_ids\"")]
+    fn test_duplicate_id_in_field_ids() {
+        let setup_commands = "create table test_table(a int, b text);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": 14, \"b\": 14}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    fn test_no_field_ids() {
+        let setup_commands = "create type person as (id int, a int, b text);
+                              create table test_table(a int, b text, c int[], d person);";
+        Spi::run(setup_commands).unwrap();
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{}' with (field_ids 'none');",
+            LOCAL_TEST_FILE_PATH
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let parquet_metadata_command = format!(
+            "select count(*) from parquet.schema('{}') where field_id is not null;",
+            LOCAL_TEST_FILE_PATH
+        );
+
+        let result_count = Spi::get_one::<i64>(&parquet_metadata_command)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result_count, 0);
+
+        // the default is 'none'
+        let copy_to_parquet = format!("copy test_table to '{}';", LOCAL_TEST_FILE_PATH);
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let result_count = Spi::get_one::<i64>(&parquet_metadata_command)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result_count, 0);
+    }
+
+    #[pg_test]
+    fn test_auto_field_ids() {
+        let setup_commands = "create type dog as (id int, name text);
+                              create type person as (id int, dog dog, dogs dog[]);
+                              create table test_table(a int, b text, c person, d person[]);";
+        Spi::run(setup_commands).unwrap();
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{}' with (field_ids 'auto');",
+            LOCAL_TEST_FILE_PATH
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let fields = Spi::connect(|client| {
+            let parquet_schema_command = format!(
+                "select field_id, name from parquet.schema('{}') order by 1,2;",
+                LOCAL_TEST_FILE_PATH
+            );
+
+            let tup_table = client.select(&parquet_schema_command, None, None).unwrap();
+            let mut results = Vec::new();
+
+            for row in tup_table {
+                let field_id = row["field_id"].value::<i64>().unwrap();
+                let name = row["name"].value::<String>().unwrap().unwrap();
+
+                results.push((field_id, name));
+            }
+
+            results
+        });
+
+        assert_eq!(
+            fields,
+            vec![
+                (Some(0), "a".into()),
+                (Some(1), "b".into()),
+                (Some(2), "c".into()),
+                (Some(3), "id".into()),
+                (Some(4), "dog".into()),
+                (Some(5), "id".into()),
+                (Some(6), "name".into()),
+                (Some(7), "dogs".into()),
+                (Some(8), "element".into()),
+                (Some(9), "id".into()),
+                (Some(10), "name".into()),
+                (Some(11), "d".into()),
+                (Some(12), "element".into()),
+                (Some(13), "id".into()),
+                (Some(14), "dog".into()),
+                (Some(15), "id".into()),
+                (Some(16), "name".into()),
+                (Some(17), "dogs".into()),
+                (Some(18), "element".into()),
+                (Some(19), "id".into()),
+                (Some(20), "name".into()),
+                (None, "arrow_schema".into()),
+                (None, "list".into()),
+                (None, "list".into()),
+                (None, "list".into())
+            ]
+        );
+    }
+
+    #[pg_test]
+    fn test_explicit_field_ids() {
+        let setup_commands = "create type dog as (id int, name text);
+                              create type person as (id int, dog dog, dogs dog[]);
+                              create table test_table(a int, b text, c person, d person[]);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": 10,
+                                   \"b\": 12,
+                                   \"c\": {
+                                            \"__root_field_id\": 100,
+                                            \"id\": 200,
+                                            \"dog\": {
+                                                        \"__root_field_id\": 300,
+                                                        \"id\": 400,
+                                                        \"name\": 500
+                                                     },
+                                            \"dogs\": {
+                                                        \"__root_field_id\": 600,
+                                                        \"element\": {
+                                                                        \"__root_field_id\": 700,
+                                                                        \"id\": 800,
+                                                                        \"name\": 900
+                                                                     }
+                                                      }
+                                          },
+                                   \"d\": {
+                                            \"__root_field_id\": 1000,
+                                            \"element\": {
+                                                            \"__root_field_id\": 1100,
+                                                            \"id\": 1200,
+                                                            \"dog\": {
+                                                                        \"__root_field_id\": 1300,
+                                                                        \"id\": 1400,
+                                                                        \"name\": 1500
+                                                                     },
+                                                            \"dogs\": {
+                                                                        \"__root_field_id\": 1600,
+                                                                        \"element\": {
+                                                                                        \"__root_field_id\": 1700,
+                                                                                        \"id\": 1800,
+                                                                                        \"name\": 1900
+                                                                                     }
+                                                                      }
+                                                         }
+                                          }
+                                  }";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let fields = Spi::connect(|client| {
+            let parquet_schema_command = format!(
+                "select field_id, name from parquet.schema('{}') order by 1,2;",
+                LOCAL_TEST_FILE_PATH
+            );
+
+            let tup_table = client.select(&parquet_schema_command, None, None).unwrap();
+            let mut results = Vec::new();
+
+            for row in tup_table {
+                let field_id = row["field_id"].value::<i64>().unwrap();
+                let name = row["name"].value::<String>().unwrap().unwrap();
+
+                results.push((field_id, name));
+            }
+
+            results
+        });
+
+        assert_eq!(
+            fields,
+            vec![
+                (Some(10), "a".into()),
+                (Some(12), "b".into()),
+                (Some(100), "c".into()),
+                (Some(200), "id".into()),
+                (Some(300), "dog".into()),
+                (Some(400), "id".into()),
+                (Some(500), "name".into()),
+                (Some(600), "dogs".into()),
+                (Some(700), "element".into()),
+                (Some(800), "id".into()),
+                (Some(900), "name".into()),
+                (Some(1000), "d".into()),
+                (Some(1100), "element".into()),
+                (Some(1200), "id".into()),
+                (Some(1300), "dog".into()),
+                (Some(1400), "id".into()),
+                (Some(1500), "name".into()),
+                (Some(1600), "dogs".into()),
+                (Some(1700), "element".into()),
+                (Some(1800), "id".into()),
+                (Some(1900), "name".into()),
+                (None, "arrow_schema".into()),
+                (None, "list".into()),
+                (None, "list".into()),
+                (None, "list".into())
+            ]
+        );
+    }
+
+    #[pg_test]
+    fn test_auto_field_ids_with_map() {
+        // Skip the test if crunchy_map extension is not available
+        if !extension_exists("crunchy_map") {
+            return;
+        }
+
+        Spi::run("DROP EXTENSION IF EXISTS crunchy_map; CREATE EXTENSION crunchy_map;").unwrap();
+
+        let int_text_map_type = create_crunchy_map_type("int", "text");
+        let setup_commands = format!("create type dog as (id int, name text);
+                                      create type person as (id int, dog dog, dogs dog[], names {int_text_map_type});
+                                      create type address as (street text, city text);"
+                                    );
+        Spi::run(&setup_commands).unwrap();
+
+        let int_adresses_map_type = create_crunchy_map_type("int", "address[]");
+        let create_table = format!(
+            "create table test_table(a int, b text, c person, d person[], addresses {int_adresses_map_type});"
+        );
+        Spi::run(&create_table).unwrap();
+
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids 'auto');");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let fields = Spi::connect(|client| {
+            let parquet_schema_command = format!(
+                "select field_id, name from parquet.schema('{}') order by 1,2;",
+                LOCAL_TEST_FILE_PATH
+            );
+
+            let tup_table = client.select(&parquet_schema_command, None, None).unwrap();
+            let mut results = Vec::new();
+
+            for row in tup_table {
+                let field_id = row["field_id"].value::<i64>().unwrap();
+                let name = row["name"].value::<String>().unwrap().unwrap();
+
+                results.push((field_id, name));
+            }
+
+            results
+        });
+
+        assert_eq!(
+            fields,
+            vec![
+                (Some(0), "a".into()),
+                (Some(1), "b".into()),
+                (Some(2), "c".into()),
+                (Some(3), "id".into()),
+                (Some(4), "dog".into()),
+                (Some(5), "id".into()),
+                (Some(6), "name".into()),
+                (Some(7), "dogs".into()),
+                (Some(8), "element".into()),
+                (Some(9), "id".into()),
+                (Some(10), "name".into()),
+                (Some(11), "names".into()),
+                (Some(12), "key".into()),
+                (Some(13), "val".into()),
+                (Some(14), "d".into()),
+                (Some(15), "element".into()),
+                (Some(16), "id".into()),
+                (Some(17), "dog".into()),
+                (Some(18), "id".into()),
+                (Some(19), "name".into()),
+                (Some(20), "dogs".into()),
+                (Some(21), "element".into()),
+                (Some(22), "id".into()),
+                (Some(23), "name".into()),
+                (Some(24), "names".into()),
+                (Some(25), "key".into()),
+                (Some(26), "val".into()),
+                (Some(27), "addresses".into()),
+                (Some(28), "key".into()),
+                (Some(29), "val".into()),
+                (Some(30), "element".into()),
+                (Some(31), "street".into()),
+                (Some(32), "city".into()),
+                (None, "arrow_schema".into()),
+                (None, "key_value".into()),
+                (None, "key_value".into()),
+                (None, "key_value".into()),
+                (None, "list".into()),
+                (None, "list".into()),
+                (None, "list".into()),
+                (None, "list".into())
+            ]
+        );
+    }
+
+    #[pg_test]
+    fn test_explicit_field_ids_with_map() {
+        // Skip the test if crunchy_map extension is not available
+        if !extension_exists("crunchy_map") {
+            return;
+        }
+
+        Spi::run("DROP EXTENSION IF EXISTS crunchy_map; CREATE EXTENSION crunchy_map;").unwrap();
+
+        let int_text_map_type = create_crunchy_map_type("int", "text");
+        let setup_commands = format!("create type dog as (id int, name text);
+                                      create type person as (id int, dog dog, dogs dog[], names {int_text_map_type});
+                                      create type address as (street text, city text);"
+                                    );
+        Spi::run(&setup_commands).unwrap();
+
+        let int_adresses_map_type = create_crunchy_map_type("int", "address[]");
+        let create_table = format!(
+            "create table test_table(a int, b text, c person, d person[], addresses {int_adresses_map_type});"
+        );
+        Spi::run(&create_table).unwrap();
+
+        let explicit_field_ids = "{\"a\": 10,
+                                   \"b\": 12,
+                                   \"c\": {
+                                            \"__root_field_id\": 100,
+                                            \"id\": 200,
+                                            \"dog\": {
+                                                        \"__root_field_id\": 300,
+                                                        \"id\": 400,
+                                                        \"name\": 500
+                                                     },
+                                            \"dogs\": {
+                                                        \"__root_field_id\": 600,
+                                                        \"element\": {
+                                                                        \"__root_field_id\": 700,
+                                                                        \"id\": 800,
+                                                                        \"name\": 900
+                                                                     }
+                                                      },
+                                            \"names\": {
+                                                        \"__root_field_id\": 1000,
+                                                        \"key\": 1100,
+                                                        \"val\": 1200
+                                                      }
+                                          },
+                                   \"d\": {
+                                            \"__root_field_id\": 1300,
+                                            \"element\": {
+                                                            \"__root_field_id\": 1400,
+                                                            \"id\": 1500,
+                                                            \"dog\": {
+                                                                        \"__root_field_id\": 1600,
+                                                                        \"id\": 1700,
+                                                                        \"name\": 1800
+                                                                     },
+                                                            \"dogs\": {
+                                                                        \"__root_field_id\": 1900,
+                                                                        \"element\": {
+                                                                                        \"__root_field_id\": 2000,
+                                                                                        \"id\": 2100,
+                                                                                        \"name\": 2200
+                                                                                     }
+                                                                      },
+                                                            \"names\": {
+                                                                        \"__root_field_id\": 2300,
+                                                                        \"key\": 2400,
+                                                                        \"val\": 2500
+                                                                      }
+                                                         }
+                                          },
+                                   \"addresses\": {
+                                                    \"__root_field_id\": 2600,
+                                                    \"key\": 2700,
+                                                    \"val\": {
+                                                                \"__root_field_id\": 2800,
+                                                                \"element\": {
+                                                                                \"__root_field_id\": 2900,
+                                                                                \"street\": 3000,
+                                                                                \"city\": 3100
+                                                                             }
+                                                              }
+                                                  }
+                                  }";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let fields = Spi::connect(|client| {
+            let parquet_schema_command = format!(
+                "select field_id, name from parquet.schema('{}') order by 1,2;",
+                LOCAL_TEST_FILE_PATH
+            );
+
+            let tup_table = client.select(&parquet_schema_command, None, None).unwrap();
+            let mut results = Vec::new();
+
+            for row in tup_table {
+                let field_id = row["field_id"].value::<i64>().unwrap();
+                let name = row["name"].value::<String>().unwrap().unwrap();
+
+                results.push((field_id, name));
+            }
+
+            results
+        });
+
+        assert_eq!(
+            fields,
+            vec![
+                (Some(10), "a".into()),
+                (Some(12), "b".into()),
+                (Some(100), "c".into()),
+                (Some(200), "id".into()),
+                (Some(300), "dog".into()),
+                (Some(400), "id".into()),
+                (Some(500), "name".into()),
+                (Some(600), "dogs".into()),
+                (Some(700), "element".into()),
+                (Some(800), "id".into()),
+                (Some(900), "name".into()),
+                (Some(1000), "names".into()),
+                (Some(1100), "key".into()),
+                (Some(1200), "val".into()),
+                (Some(1300), "d".into()),
+                (Some(1400), "element".into()),
+                (Some(1500), "id".into()),
+                (Some(1600), "dog".into()),
+                (Some(1700), "id".into()),
+                (Some(1800), "name".into()),
+                (Some(1900), "dogs".into()),
+                (Some(2000), "element".into()),
+                (Some(2100), "id".into()),
+                (Some(2200), "name".into()),
+                (Some(2300), "names".into()),
+                (Some(2400), "key".into()),
+                (Some(2500), "val".into()),
+                (Some(2600), "addresses".into()),
+                (Some(2700), "key".into()),
+                (Some(2800), "val".into()),
+                (Some(2900), "element".into()),
+                (Some(3000), "street".into()),
+                (Some(3100), "city".into()),
+                (None, "arrow_schema".into()),
+                (None, "key_value".into()),
+                (None, "key_value".into()),
+                (None, "key_value".into()),
+                (None, "list".into()),
+                (None, "list".into()),
+                (None, "list".into()),
+                (None, "list".into())
+            ]
+        );
     }
 }
