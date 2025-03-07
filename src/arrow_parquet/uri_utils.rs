@@ -20,7 +20,7 @@ use url::Url;
 use crate::{
     arrow_parquet::parquet_writer::DEFAULT_ROW_GROUP_SIZE,
     object_store::{
-        aws::parse_s3_bucket, azure::parse_azure_blob_container,
+        aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
         object_store_cache::get_or_create_object_store,
     },
     PG_BACKEND_TOKIO_RUNTIME,
@@ -64,6 +64,9 @@ impl ParsedUriInfo {
                 .map(Some),
             ObjectStoreScheme::MicrosoftAzure => parse_azure_blob_container(uri)
                 .ok_or(format!("unsupported azure blob storage uri: {uri}"))
+                .map(Some),
+            ObjectStoreScheme::GoogleCloudStorage => parse_gcs_bucket(uri)
+                .ok_or(format!("unsupported gcs uri {uri}"))
                 .map(Some),
             ObjectStoreScheme::Local => Ok(None),
             _ => Err(format!("unsupported scheme {} in uri {}. pg_parquet supports local paths, s3:// or azure:// schemes.",
