@@ -8,6 +8,7 @@ use pgrx::prelude::*;
 
 use crate::arrow_parquet::{
     compression::{PgParquetCompression, INVALID_COMPRESSION_LEVEL},
+    field_ids::FieldIds,
     parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
 };
 
@@ -32,6 +33,7 @@ struct CopyToParquetSplitDestReceiver {
 #[derive(Copy, Clone)]
 pub(crate) struct CopyToParquetOptions {
     pub(crate) file_size_bytes: i64,
+    pub(crate) field_ids: *const c_char,
     pub(crate) row_group_size: i64,
     pub(crate) row_group_size_bytes: i64,
     pub(crate) compression: PgParquetCompression,
@@ -197,6 +199,7 @@ extern "C" fn copy_split_destroy(_dest: *mut DestReceiver) {}
 pub extern "C" fn create_copy_to_parquet_split_dest_receiver(
     uri: *const c_char,
     file_size_bytes: *const i64,
+    field_ids: *const c_char,
     row_group_size: *const i64,
     row_group_size_bytes: *const i64,
     compression: *const PgParquetCompression,
@@ -206,6 +209,12 @@ pub extern "C" fn create_copy_to_parquet_split_dest_receiver(
         INVALID_FILE_SIZE_BYTES
     } else {
         unsafe { *file_size_bytes }
+    };
+
+    let field_ids = if field_ids.is_null() {
+        FieldIds::default().to_string().as_pg_cstr()
+    } else {
+        field_ids
     };
 
     let row_group_size = if row_group_size.is_null() {
@@ -236,6 +245,7 @@ pub extern "C" fn create_copy_to_parquet_split_dest_receiver(
 
     let options = CopyToParquetOptions {
         file_size_bytes,
+        field_ids,
         row_group_size,
         row_group_size_bytes,
         compression,
