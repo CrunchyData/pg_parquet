@@ -1,13 +1,14 @@
 use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
 
-use crate::arrow_parquet::uri_utils::{
-    ensure_access_privilege_to_uri, parquet_metadata_from_uri, uri_as_string, ParsedUriInfo,
+use crate::{
+    arrow_parquet::uri_utils::{
+        ensure_access_privilege_to_uri, parquet_metadata_from_uri, uri_as_string, ParsedUriInfo,
+    },
+    parquet_udfs::stats::{stats_max_value_to_pg_str, stats_min_value_to_pg_str},
 };
 
 #[pg_schema]
 mod parquet {
-    use crate::parquet_udfs::stats::{stats_max_value_to_pg_str, stats_min_value_to_pg_str};
-
     use super::*;
 
     #[pg_extern]

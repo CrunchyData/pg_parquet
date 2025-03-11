@@ -9,12 +9,12 @@ use pgrx::{
     iter::TableIterator,
     name, pg_extern, pg_schema,
     pg_sys::{getTypeOutputInfo, InvalidOid, OidOutputFunctionCall},
-    IntoDatum,
+    IntoDatum, Uuid,
 };
 
 use crate::{
     arrow_parquet::uri_utils::{
-        ensure_access_privilege_to_uri, parquet_metadata_from_uri, parse_uri,
+        ensure_access_privilege_to_uri, parquet_metadata_from_uri, ParsedUriInfo,
     },
     type_compat::pg_arrow_type_conversions::{
         i128_to_numeric, i32_to_date, i64_to_time, i64_to_timestamp, i64_to_timestamptz,
@@ -26,6 +26,73 @@ use crate::{
 mod parquet {
     use super::*;
 
+    struct AggregatedColumnStatsByRowGroup<'a> {
+        column_id: i32,
+        column_descriptor: &'a ColumnDescriptor,
+        field_id: Option<i32>,
+        stats: Vec<Option<&'a Statistics>>,
+    }
+
+    impl AggregatedColumnStatsByRowGroup<'_> {
+        fn min(&self) -> Option<String> {
+            let mut min_value = None;
+
+            for stat in self.stats.iter().flatten() {
+                if let Some(current_min_value) = min_value {
+                    min_value = Some(stats_min_of_two(current_min_value, stat));
+                } else {
+                    min_value = Some(*stat);
+                }
+            }
+
+            min_value.and_then(|v| stats_min_value_to_pg_str(v, self.column_descriptor))
+        }
+
+        fn max(&self) -> Option<String> {
+            let mut max_value = None;
+
+            for stat in self.stats.iter().flatten() {
+                if let Some(current_max_value) = max_value {
+                    max_value = Some(stats_max_of_two(current_max_value, stat));
+                } else {
+                    max_value = Some(*stat);
+                }
+            }
+
+            max_value.and_then(|v| stats_max_value_to_pg_str(v, self.column_descriptor))
+        }
+
+        fn null_count(&self) -> Option<i64> {
+            let mut null_count_sum = None;
+
+            for stat in self.stats.iter().flatten() {
+                if let Some(null_count) = stat.null_count_opt() {
+                    null_count_sum = match null_count_sum {
+                        Some(sum) => Some(sum + null_count as i64),
+                        None => Some(null_count as i64),
+                    };
+                }
+            }
+
+            null_count_sum
+        }
+
+        fn distinct_count(&self) -> Option<i64> {
+            let mut distinct_count_sum = None;
+
+            for stat in self.stats.iter().flatten() {
+                if let Some(distinct_count) = stat.distinct_count_opt() {
+                    distinct_count_sum = match distinct_count_sum {
+                        Some(sum) => Some(sum + distinct_count as i64),
+                        None => Some(distinct_count as i64),
+                    };
+                }
+            }
+
+            distinct_count_sum
+        }
+    }
+
     #[pg_extern]
     #[allow(clippy::type_complexity)]
     fn column_stats(
@@ -33,128 +100,71 @@ mod parquet {
     ) -> TableIterator<
         'static,
         (
-            name!(field_id, i32),
+            name!(column_id, i32),
+            name!(field_id, Option<i32>),
             name!(stats_min, Option<String>),
             name!(stats_max, Option<String>),
             name!(stats_null_count, Option<i64>),
             name!(stats_distinct_count, Option<i64>),
         ),
     > {
-        let uri = parse_uri(&uri);
+        let uri_info = ParsedUriInfo::try_from(uri.as_str()).unwrap_or_else(|e| {
+            panic!("{}", e.to_string());
+        });
+
+        let uri = uri_info.uri.clone();
 
         ensure_access_privilege_to_uri(&uri, true);
-        let parquet_metadata = parquet_metadata_from_uri(&uri);
+        let parquet_metadata = parquet_metadata_from_uri(uri_info);
 
-        let mut column_stats = HashMap::new();
-        let mut column_descriptors = HashMap::new();
+        let mut aggregated_column_stats = HashMap::new();
 
         for row_group in parquet_metadata.row_groups().iter() {
-            for column in row_group.columns().iter() {
-                if !column
+            for (column_id, column) in row_group.columns().iter().enumerate() {
+                let field_id = if column
                     .column_descr_ptr()
                     .self_type()
                     .get_basic_info()
                     .has_id()
                 {
-                    continue;
-                }
+                    Some(column.column_descr_ptr().self_type().get_basic_info().id())
+                } else {
+                    None
+                };
 
-                let field_id = column.column_descr_ptr().self_type().get_basic_info().id();
+                let column_descriptor = column.column_descr();
 
-                column_descriptors
-                    .entry(field_id)
-                    .or_insert(column.column_descr());
+                let column_stats = column.statistics();
 
                 // column statistics exist for each leaf column per row group
-                column_stats
-                    .entry(field_id)
-                    .or_insert_with(Vec::new)
-                    .push(column.statistics());
+                aggregated_column_stats
+                    .entry(column_id)
+                    .or_insert(AggregatedColumnStatsByRowGroup {
+                        column_id: column_id as _,
+                        column_descriptor,
+                        field_id,
+                        stats: vec![],
+                    })
+                    .stats
+                    .push(column_stats);
             }
         }
 
         let mut stats_rows = Vec::new();
 
-        for (field_id, stats) in column_stats.iter_mut() {
-            let column_descriptor = column_descriptors
-                .get(field_id)
-                .expect("column descriptor not found");
-
+        for aggregated_column_stats in aggregated_column_stats.into_values() {
             stats_rows.push((
-                *field_id,
-                stats_min_value_aggregated_by_row_groups(stats, column_descriptor),
-                stats_max_value_aggregated_by_row_groups(stats, column_descriptor),
-                stats_null_count_aggregated_by_row_groups(stats),
-                stats_distinct_count_aggregated_by_row_groups(stats),
+                aggregated_column_stats.column_id,
+                aggregated_column_stats.field_id,
+                aggregated_column_stats.min(),
+                aggregated_column_stats.max(),
+                aggregated_column_stats.null_count(),
+                aggregated_column_stats.distinct_count(),
             ));
         }
 
         TableIterator::new(stats_rows)
     }
-}
-
-fn stats_null_count_aggregated_by_row_groups(stats: &[Option<&Statistics>]) -> Option<i64> {
-    let mut null_count_sum = None;
-
-    for stat in stats.iter().flatten() {
-        if let Some(null_count) = stat.null_count_opt() {
-            null_count_sum = match null_count_sum {
-                Some(sum) => Some(sum + null_count as i64),
-                None => Some(null_count as i64),
-            };
-        }
-    }
-
-    null_count_sum
-}
-
-fn stats_distinct_count_aggregated_by_row_groups(stats: &[Option<&Statistics>]) -> Option<i64> {
-    let mut distinct_count_sum = None;
-
-    for stat in stats.iter().flatten() {
-        if let Some(distinct_count) = stat.distinct_count_opt() {
-            distinct_count_sum = match distinct_count_sum {
-                Some(sum) => Some(sum + distinct_count as i64),
-                None => Some(distinct_count as i64),
-            };
-        }
-    }
-
-    distinct_count_sum
-}
-
-fn stats_min_value_aggregated_by_row_groups(
-    row_group_stats: &[Option<&Statistics>],
-    column_descriptor: &ColumnDescriptor,
-) -> Option<String> {
-    let mut min_value = None;
-
-    for stat in row_group_stats.iter().flatten() {
-        if let Some(current_min_value) = min_value {
-            min_value = Some(stats_min_of_two(current_min_value, stat));
-        } else {
-            min_value = Some(*stat);
-        }
-    }
-
-    min_value.and_then(|v| stats_min_value_to_pg_str(v, column_descriptor))
-}
-
-fn stats_max_value_aggregated_by_row_groups(
-    row_group_stats: &[Option<&Statistics>],
-    column_descriptor: &ColumnDescriptor,
-) -> Option<String> {
-    let mut max_value = None;
-
-    for stat in row_group_stats.iter().flatten() {
-        if let Some(current_max_value) = max_value {
-            max_value = Some(stats_max_of_two(current_max_value, stat));
-        } else {
-            max_value = Some(*stat);
-        }
-    }
-
-    max_value.and_then(|v| stats_max_value_to_pg_str(v, column_descriptor))
 }
 
 pub(crate) fn stats_min_value_to_pg_str(
@@ -167,6 +177,11 @@ pub(crate) fn stats_min_value_to_pg_str(
 
     let is_string = matches!(logical_type, Some(LogicalType::String))
         || matches!(converted_type, ConvertedType::UTF8);
+
+    let is_json = matches!(logical_type, Some(LogicalType::Json))
+        || matches!(converted_type, ConvertedType::JSON);
+
+    let is_uuid = matches!(logical_type, Some(LogicalType::Uuid));
 
     let is_date = matches!(logical_type, Some(LogicalType::Date))
         || matches!(converted_type, ConvertedType::DATE);
@@ -236,7 +251,7 @@ pub(crate) fn stats_min_value_to_pg_str(
         Statistics::Float(statistics) => statistics.min_opt().map(|v| v.to_string()),
         Statistics::Double(statistics) => statistics.min_opt().map(|v| v.to_string()),
         Statistics::ByteArray(statistics) => statistics.min_opt().map(|v| {
-            if is_string {
+            if is_string || is_json {
                 v.as_utf8()
                     .unwrap_or_else(|e| panic!("cannot convert stats to utf8 {e}"))
                     .to_string()
@@ -258,6 +273,10 @@ pub(crate) fn stats_min_value_to_pg_str(
                 let numeric = i128::from_be_bytes(numeric_bytes);
 
                 pg_format_numeric(numeric, column_descriptor)
+            } else if is_uuid {
+                let uuid = Uuid::from_slice(v.data()).expect("Invalid Uuid");
+
+                pg_format(uuid)
             } else {
                 hex_encode(v.data())
             }
@@ -275,6 +294,11 @@ pub(crate) fn stats_max_value_to_pg_str(
 
     let is_string = matches!(logical_type, Some(LogicalType::String))
         || matches!(converted_type, ConvertedType::UTF8);
+
+    let is_json = matches!(logical_type, Some(LogicalType::Json))
+        || matches!(converted_type, ConvertedType::JSON);
+
+    let is_uuid = matches!(logical_type, Some(LogicalType::Uuid));
 
     let is_date = matches!(logical_type, Some(LogicalType::Date))
         || matches!(converted_type, ConvertedType::DATE);
@@ -344,7 +368,7 @@ pub(crate) fn stats_max_value_to_pg_str(
         Statistics::Float(statistics) => statistics.max_opt().map(|v| v.to_string()),
         Statistics::Double(statistics) => statistics.max_opt().map(|v| v.to_string()),
         Statistics::ByteArray(statistics) => statistics.max_opt().map(|v| {
-            if is_string {
+            if is_string || is_json {
                 v.as_utf8()
                     .unwrap_or_else(|e| panic!("cannot convert stats to utf8 {e}"))
                     .to_string()
@@ -366,6 +390,10 @@ pub(crate) fn stats_max_value_to_pg_str(
                 let numeric = i128::from_be_bytes(numeric_bytes);
 
                 pg_format_numeric(numeric, column_descriptor)
+            } else if is_uuid {
+                let uuid = Uuid::from_slice(v.data()).expect("Invalid Uuid");
+
+                pg_format(uuid)
             } else {
                 hex_encode(v.data())
             }

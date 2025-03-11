@@ -159,25 +159,26 @@ SELECT uri, encode(key, 'escape') as key, encode(value, 'escape') as value FROM 
 ```
 
 ### Inspect Parquet column statistics
+
 You can call `SELECT * FROM parquet.column_stats(<uri>)` to discover the column statistics of the Parquet file, such as min and max value for the column, at given uri.
 
 ```sql
 SELECT * FROM parquet.column_stats('/tmp/product_example.parquet')
- field_id |         stats_min          |         stats_max          | stats_null_count | stats_distinct_count 
-----------+----------------------------+----------------------------+------------------+----------------------
-       19 | 2022-05-01 16:00:00        | 2022-05-01 16:00:00        |                0 |                     
-       15 |                            |                            |                2 |                     
-        3 | product 1                  | product 1                  |                0 |                     
-        2 | 1                          | 1                          |                0 |                     
-        0 | 1                          | 1                          |                0 |                     
-        6 | 1                          | 2                          |                1 |                     
-        7 | item 1                     | item 2                     |                1 |                     
-       16 |                            |                            |                2 |                     
-       12 |                            |                            |                2 |                     
-       18 | 2025-01-29 02:28:35.193773 | 2025-01-29 02:28:35.193773 |                0 |                     
-       11 | 1                          | 1                          |                1 |                     
-        8 | 1                          | 2                          |                1 |                     
-       17 |                            |                            |                2 |                     
+ column_id | field_id |         stats_min          |         stats_max          | stats_null_count | stats_distinct_count 
+-----------+----------+----------------------------+----------------------------+------------------+----------------------
+         4 |        7 | item 1                     | item 2                     |                1 |                     
+         6 |       11 | 1                          | 1                          |                1 |                     
+         7 |       12 |                            |                            |                2 |                     
+        10 |       17 |                            |                            |                2 |                     
+         0 |        0 | 1                          | 1                          |                0 |                     
+        11 |       18 | 2025-03-11 14:01:22.045739 | 2025-03-11 14:01:22.045739 |                0 |                     
+         3 |        6 | 1                          | 2                          |                1 |                     
+        12 |       19 | 2022-05-01 19:00:00+03     | 2022-05-01 19:00:00+03     |                0 |                     
+         8 |       15 |                            |                            |                2 |                     
+         5 |        8 | 1                          | 2                          |                1 |                     
+         9 |       16 |                            |                            |                2 |                     
+         1 |        2 | 1                          | 1                          |                0 |                     
+         2 |        3 | product 1                  | product 1                  |                0 |                     
 (13 rows)
 ```
 

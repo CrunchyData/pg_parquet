@@ -752,6 +752,9 @@ mod tests {
         let series_end = 89;
         let row_group_size = 10;
 
+        // set timezone to UTC
+        Spi::run("set timezone to 'UTC';").unwrap();
+
         let ddls = format!(
             "
             create type person AS (id int, name text);
@@ -834,33 +837,87 @@ mod tests {
         let result_column_stats = Spi::connect(|client| {
             let mut results = Vec::new();
             let tup_table = client
-                .select(&parquet_column_stats_command, None, None)
+                .select(&parquet_column_stats_command, None, &[])
                 .unwrap();
 
             for row in tup_table {
+                let column_id = row["column_id"].value::<i32>().unwrap().unwrap();
                 let field_id = row["field_id"].value::<i32>().unwrap().unwrap();
                 let stats_min = row["stats_min"].value::<String>().unwrap();
                 let stats_max = row["stats_max"].value::<String>().unwrap();
                 let null_count = row["stats_null_count"].value::<i64>().unwrap();
                 let distinct_count = row["stats_distinct_count"].value::<i64>().unwrap();
 
-                results.push((field_id, stats_min, stats_max, null_count, distinct_count));
+                results.push((
+                    column_id,
+                    field_id,
+                    stats_min,
+                    stats_max,
+                    null_count,
+                    distinct_count,
+                ));
             }
 
             results
         });
 
+        // reset timezone
+        Spi::run("reset timezone;").unwrap();
+
         let expected_column_stats = vec![
-            (0, Some("10".into()), Some("89".into()), Some(2), None),
-            (1, Some("10".into()), Some("89".into()), Some(2), None),
-            (2, Some("10".into()), Some("89".into()), Some(2), None),
-            (3, Some("12.1".into()), Some("12.89".into()), Some(2), None),
-            (4, Some("12.1".into()), Some("12.89".into()), Some(2), None),
-            (5, Some("12.10".into()), Some("12.89".into()), Some(2), None),
-            (6, Some("12.10".into()), Some("12.89".into()), Some(2), None),
-            (7, Some("12.10".into()), Some("12.89".into()), Some(2), None),
-            (8, Some("12.10".into()), Some("12.89".into()), Some(2), None),
+            (0, 0, Some("10".into()), Some("89".into()), Some(2), None),
+            (1, 1, Some("10".into()), Some("89".into()), Some(2), None),
+            (2, 2, Some("10".into()), Some("89".into()), Some(2), None),
             (
+                3,
+                3,
+                Some("12.1".into()),
+                Some("12.89".into()),
+                Some(2),
+                None,
+            ),
+            (
+                4,
+                4,
+                Some("12.1".into()),
+                Some("12.89".into()),
+                Some(2),
+                None,
+            ),
+            (
+                5,
+                5,
+                Some("12.10".into()),
+                Some("12.89".into()),
+                Some(2),
+                None,
+            ),
+            (
+                6,
+                6,
+                Some("12.10".into()),
+                Some("12.89".into()),
+                Some(2),
+                None,
+            ),
+            (
+                7,
+                7,
+                Some("12.10".into()),
+                Some("12.89".into()),
+                Some(2),
+                None,
+            ),
+            (
+                8,
+                8,
+                Some("12.10".into()),
+                Some("12.89".into()),
+                Some(2),
+                None,
+            ),
+            (
+                9,
                 9,
                 Some("12.100000000".into()),
                 Some("12.890000000".into()),
@@ -869,12 +926,14 @@ mod tests {
             ),
             (
                 10,
+                10,
                 Some("CrunchyData10".into()),
                 Some("CrunchyData89".into()),
                 Some(2),
                 None,
             ),
             (
+                11,
                 11,
                 Some("CrunchyData10".into()),
                 Some("CrunchyData89".into()),
@@ -883,12 +942,14 @@ mod tests {
             ),
             (
                 12,
+                12,
                 Some("2010-01-02".into()),
                 Some("2089-01-02".into()),
                 Some(2),
                 None,
             ),
             (
+                13,
                 13,
                 Some("2010-01-02 00:00:00".into()),
                 Some("2089-01-02 00:00:00".into()),
@@ -897,12 +958,14 @@ mod tests {
             ),
             (
                 14,
-                Some("2010-01-02 05:00:00+02".into()),
-                Some("2089-01-02 06:00:00+03".into()),
+                14,
+                Some("2010-01-02 03:00:00+00".into()),
+                Some("2089-01-02 03:00:00+00".into()),
                 Some(2),
                 None,
             ),
             (
+                15,
                 15,
                 Some("01:02:00".into()),
                 Some("01:02:59".into()),
@@ -911,15 +974,24 @@ mod tests {
             ),
             (
                 16,
+                16,
                 Some("22:02:00+00".into()),
                 Some("22:02:59+00".into()),
                 Some(2),
                 None,
             ),
-            (17, Some("10".into()), Some("89".into()), Some(2), None),
-            (18, Some("false".into()), Some("true".into()), Some(2), None),
-            (19, Some("\n".into()), Some("Y".into()), Some(2), None),
+            (17, 17, Some("10".into()), Some("89".into()), Some(2), None),
             (
+                18,
+                18,
+                Some("false".into()),
+                Some("true".into()),
+                Some(2),
+                None,
+            ),
+            (19, 19, Some("\n".into()), Some("Y".into()), Some(2), None),
+            (
+                20,
                 20,
                 Some("\\x010210".into()),
                 Some("\\x010289".into()),
@@ -928,14 +1000,16 @@ mod tests {
             ),
             (
                 21,
+                21,
                 Some("\\x095C270A".into()),
                 Some("\\x095C2759".into()),
                 Some(2),
                 None,
             ),
-            (23, Some("10".into()), Some("91".into()), Some(2), None),
-            (25, Some("10".into()), Some("89".into()), Some(2), None),
+            (22, 23, Some("10".into()), Some("91".into()), Some(2), None),
+            (23, 25, Some("10".into()), Some("89".into()), Some(2), None),
             (
+                24,
                 26,
                 Some("CrunchyData10".into()),
                 Some("CrunchyData89".into()),
@@ -943,6 +1017,7 @@ mod tests {
                 None,
             ),
             (
+                25,
                 27,
                 Some("(10,11)".into()),
                 Some("(89,90)".into()),
@@ -950,6 +1025,7 @@ mod tests {
                 None,
             ),
             (
+                26,
                 28,
                 Some("{\"key\":10}".into()),
                 Some("{\"key\":89}".into()),
@@ -957,13 +1033,15 @@ mod tests {
                 None,
             ),
             (
+                27,
                 29,
-                Some("{\"key\": 10}".into()),
-                Some("{\"key\": 89}".into()),
+                Some("{\"key\":10}".into()),
+                Some("{\"key\":89}".into()),
                 Some(2),
                 None,
             ),
             (
+                28,
                 30,
                 Some("041761f3-d843-49c7-bbd3-c50c86ec3410".into()),
                 Some("041761f3-d843-49c7-bbd3-c50c86ec3489".into()),
