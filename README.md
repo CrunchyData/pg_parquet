@@ -46,6 +46,8 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 
 # run cargo-pgrx to build and install the extension
 > cargo pgrx run
+# or if you are building on top of an existing postgres (install instead of run)
+> cargo pgrx install --manifest-path Cargo.toml  --pg-config $(which pg_config)
 
 # create the extension in the database
 psql> "CREATE EXTENSION pg_parquet;"
