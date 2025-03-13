@@ -175,74 +175,58 @@ pub(crate) fn stats_min_value_to_pg_str(
 
     let converted_type = column_descriptor.converted_type();
 
-    let is_string = matches!(logical_type, Some(LogicalType::String))
-        || matches!(converted_type, ConvertedType::UTF8);
-
-    let is_json = matches!(logical_type, Some(LogicalType::Json))
-        || matches!(converted_type, ConvertedType::JSON);
-
-    let is_uuid = matches!(logical_type, Some(LogicalType::Uuid));
-
-    let is_date = matches!(logical_type, Some(LogicalType::Date))
-        || matches!(converted_type, ConvertedType::DATE);
-
-    let is_timestamp = matches!(
-        logical_type,
-        Some(LogicalType::Timestamp {
-            is_adjusted_to_u_t_c,
-            ..
-        }) if !is_adjusted_to_u_t_c
-    );
-
-    let is_timestamptz = matches!(
-        logical_type,
-        Some(LogicalType::Timestamp {
-            is_adjusted_to_u_t_c,
-            ..
-        }) if is_adjusted_to_u_t_c
-    );
-
-    let is_time = matches!(
-        logical_type,
-        Some(LogicalType::Time {
-            is_adjusted_to_u_t_c,
-            ..
-        }) if !is_adjusted_to_u_t_c
-    );
-
-    let is_timetz = matches!(
-        logical_type,
-        Some(LogicalType::Time {
-            is_adjusted_to_u_t_c,
-            ..
-        }) if is_adjusted_to_u_t_c
-    );
-
-    let is_numeric = matches!(logical_type, Some(LogicalType::Decimal { .. }))
-        || matches!(converted_type, ConvertedType::DECIMAL);
-
     match statistics {
         Statistics::Boolean(statistics) => statistics.min_opt().map(|v| v.to_string()),
         Statistics::Int32(statistics) => statistics.min_opt().map(|v| {
-            if is_date {
+            if matches!(logical_type, Some(LogicalType::Date))
+                || matches!(converted_type, ConvertedType::DATE)
+            {
                 pg_format(i32_to_date(*v))
-            } else if is_numeric {
+            } else if matches!(logical_type, Some(LogicalType::Decimal { .. }))
+                || matches!(converted_type, ConvertedType::DECIMAL)
+            {
                 pg_format_numeric(*v as i128, column_descriptor)
             } else {
                 v.to_string()
             }
         }),
         Statistics::Int64(statistics) => statistics.min_opt().map(|v| {
-            if is_timestamp {
-                pg_format(i64_to_timestamp(*v))
-            } else if is_timestamptz {
+            if matches!(
+                logical_type,
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c,
+                    ..
+                }) if is_adjusted_to_u_t_c
+            ) {
                 pg_format(i64_to_timestamptz(*v, "UTC"))
-            } else if is_numeric {
+            } else if matches!(
+                logical_type,
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c,
+                    ..
+                }) if !is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIMESTAMP_MICROS)
+            ) {
+                pg_format(i64_to_timestamp(*v))
+            }  else if matches!(logical_type, Some(LogicalType::Decimal { .. }))
+                || matches!(converted_type, ConvertedType::DECIMAL)
+            {
                 pg_format_numeric(*v as i128, column_descriptor)
-            } else if is_time {
-                pg_format(i64_to_time(*v))
-            } else if is_timetz {
+            } else if matches!(
+                logical_type,
+                Some(LogicalType::Time {
+                    is_adjusted_to_u_t_c,
+                    ..
+                }) if is_adjusted_to_u_t_c
+            ) {
                 pg_format(i64_to_timetz(*v))
+            } else if matches!(
+                logical_type,
+                Some(LogicalType::Time {
+                    is_adjusted_to_u_t_c,
+                    ..
+                }) if !is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIME_MICROS)
+            ) {
+                pg_format(i64_to_time(*v))
             } else {
                 v.to_string()
             }
@@ -251,7 +235,11 @@ pub(crate) fn stats_min_value_to_pg_str(
         Statistics::Float(statistics) => statistics.min_opt().map(|v| v.to_string()),
         Statistics::Double(statistics) => statistics.min_opt().map(|v| v.to_string()),
         Statistics::ByteArray(statistics) => statistics.min_opt().map(|v| {
-            if is_string || is_json {
+            if matches!(logical_type, Some(LogicalType::String))
+                || matches!(converted_type, ConvertedType::UTF8)
+                || matches!(logical_type, Some(LogicalType::Json))
+                || matches!(converted_type, ConvertedType::JSON)
+            {
                 v.as_utf8()
                     .unwrap_or_else(|e| panic!("cannot convert stats to utf8 {e}"))
                     .to_string()
@@ -260,11 +248,15 @@ pub(crate) fn stats_min_value_to_pg_str(
             }
         }),
         Statistics::FixedLenByteArray(statistics) => statistics.min_opt().map(|v| {
-            if is_string {
+            if matches!(logical_type, Some(LogicalType::String))
+                || matches!(converted_type, ConvertedType::UTF8)
+            {
                 v.as_utf8()
                     .unwrap_or_else(|e| panic!("cannot convert stats to utf8 {e}"))
                     .to_string()
-            } else if is_numeric {
+            } else if matches!(logical_type, Some(LogicalType::Decimal { .. }))
+                || matches!(converted_type, ConvertedType::DECIMAL)
+            {
                 let mut numeric_bytes: [u8; 16] = [0; 16];
 
                 let offset = numeric_bytes.len() - v.data().len();
@@ -273,7 +265,7 @@ pub(crate) fn stats_min_value_to_pg_str(
                 let numeric = i128::from_be_bytes(numeric_bytes);
 
                 pg_format_numeric(numeric, column_descriptor)
-            } else if is_uuid {
+            } else if matches!(logical_type, Some(LogicalType::Uuid)) {
                 let uuid = Uuid::from_slice(v.data()).expect("Invalid Uuid");
 
                 pg_format(uuid)
@@ -292,74 +284,58 @@ pub(crate) fn stats_max_value_to_pg_str(
 
     let converted_type = column_descriptor.converted_type();
 
-    let is_string = matches!(logical_type, Some(LogicalType::String))
-        || matches!(converted_type, ConvertedType::UTF8);
-
-    let is_json = matches!(logical_type, Some(LogicalType::Json))
-        || matches!(converted_type, ConvertedType::JSON);
-
-    let is_uuid = matches!(logical_type, Some(LogicalType::Uuid));
-
-    let is_date = matches!(logical_type, Some(LogicalType::Date))
-        || matches!(converted_type, ConvertedType::DATE);
-
-    let is_timestamp = matches!(
-        logical_type,
-        Some(LogicalType::Timestamp {
-            is_adjusted_to_u_t_c,
-            ..
-        }) if !is_adjusted_to_u_t_c
-    );
-
-    let is_timestamptz = matches!(
-        logical_type,
-        Some(LogicalType::Timestamp {
-            is_adjusted_to_u_t_c,
-            ..
-        }) if is_adjusted_to_u_t_c
-    );
-
-    let is_time = matches!(
-        logical_type,
-        Some(LogicalType::Time {
-            is_adjusted_to_u_t_c,
-            ..
-        }) if !is_adjusted_to_u_t_c
-    );
-
-    let is_timetz = matches!(
-        logical_type,
-        Some(LogicalType::Time {
-            is_adjusted_to_u_t_c,
-            ..
-        }) if is_adjusted_to_u_t_c
-    );
-
-    let is_numeric = matches!(logical_type, Some(LogicalType::Decimal { .. }))
-        || matches!(converted_type, ConvertedType::DECIMAL);
-
     match statistics {
         Statistics::Boolean(statistics) => statistics.max_opt().map(|v| v.to_string()),
         Statistics::Int32(statistics) => statistics.max_opt().map(|v| {
-            if is_date {
+            if matches!(logical_type, Some(LogicalType::Date))
+                || matches!(converted_type, ConvertedType::DATE)
+            {
                 pg_format(i32_to_date(*v))
-            } else if is_numeric {
+            } else if matches!(logical_type, Some(LogicalType::Decimal { .. }))
+                || matches!(converted_type, ConvertedType::DECIMAL)
+            {
                 pg_format_numeric(*v as i128, column_descriptor)
             } else {
                 v.to_string()
             }
         }),
         Statistics::Int64(statistics) => statistics.max_opt().map(|v| {
-            if is_timestamp {
-                pg_format(i64_to_timestamp(*v))
-            } else if is_timestamptz {
+            if matches!(
+                logical_type,
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c,
+                    ..
+                }) if is_adjusted_to_u_t_c
+            ) {
                 pg_format(i64_to_timestamptz(*v, "UTC"))
-            } else if is_numeric {
+            } else if matches!(
+                logical_type,
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c,
+                    ..
+                }) if !is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIMESTAMP_MICROS)
+            ) {
+                pg_format(i64_to_timestamp(*v))
+            } else if matches!(logical_type, Some(LogicalType::Decimal { .. }))
+                || matches!(converted_type, ConvertedType::DECIMAL)
+            {
                 pg_format_numeric(*v as i128, column_descriptor)
-            } else if is_time {
-                pg_format(i64_to_time(*v))
-            } else if is_timetz {
+            } else if matches!(
+                logical_type,
+                Some(LogicalType::Time {
+                    is_adjusted_to_u_t_c,
+                    ..
+                }) if is_adjusted_to_u_t_c
+            ) {
                 pg_format(i64_to_timetz(*v))
+            } else if matches!(
+                logical_type,
+                Some(LogicalType::Time {
+                    is_adjusted_to_u_t_c,
+                    ..
+                }) if !is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIME_MICROS)
+            ) {
+                pg_format(i64_to_time(*v))
             } else {
                 v.to_string()
             }
@@ -368,7 +344,11 @@ pub(crate) fn stats_max_value_to_pg_str(
         Statistics::Float(statistics) => statistics.max_opt().map(|v| v.to_string()),
         Statistics::Double(statistics) => statistics.max_opt().map(|v| v.to_string()),
         Statistics::ByteArray(statistics) => statistics.max_opt().map(|v| {
-            if is_string || is_json {
+            if matches!(logical_type, Some(LogicalType::String))
+                || matches!(converted_type, ConvertedType::UTF8)
+                || matches!(logical_type, Some(LogicalType::Json))
+                || matches!(converted_type, ConvertedType::JSON)
+            {
                 v.as_utf8()
                     .unwrap_or_else(|e| panic!("cannot convert stats to utf8 {e}"))
                     .to_string()
@@ -377,11 +357,15 @@ pub(crate) fn stats_max_value_to_pg_str(
             }
         }),
         Statistics::FixedLenByteArray(statistics) => statistics.max_opt().map(|v| {
-            if is_string {
+            if matches!(logical_type, Some(LogicalType::String))
+                || matches!(converted_type, ConvertedType::UTF8)
+            {
                 v.as_utf8()
                     .unwrap_or_else(|e| panic!("cannot convert stats to utf8 {e}"))
                     .to_string()
-            } else if is_numeric {
+            } else if matches!(logical_type, Some(LogicalType::Decimal { .. }))
+                || matches!(converted_type, ConvertedType::DECIMAL)
+            {
                 let mut numeric_bytes: [u8; 16] = [0; 16];
 
                 let offset = numeric_bytes.len() - v.data().len();
@@ -390,7 +374,7 @@ pub(crate) fn stats_max_value_to_pg_str(
                 let numeric = i128::from_be_bytes(numeric_bytes);
 
                 pg_format_numeric(numeric, column_descriptor)
-            } else if is_uuid {
+            } else if matches!(logical_type, Some(LogicalType::Uuid)) {
                 let uuid = Uuid::from_slice(v.data()).expect("Invalid Uuid");
 
                 pg_format(uuid)
