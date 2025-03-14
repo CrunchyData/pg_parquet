@@ -23,13 +23,17 @@ use crate::{
     pgrx_utils::extension_exists,
 };
 
-use super::{hook::ENABLE_PARQUET_COPY_HOOK, pg_compat::strVal};
+use super::{
+    copy_to_split_dest_receiver::INVALID_FILE_SIZE_BYTES, hook::ENABLE_PARQUET_COPY_HOOK,
+    pg_compat::strVal,
+};
 
 pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: ParsedUriInfo) {
     validate_copy_option_names(
         p_stmt,
         &[
             "format",
+            "file_size_bytes",
             "row_group_size",
             "row_group_size_bytes",
             "compression",
@@ -54,6 +58,18 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: Pa
                 "{} is not a valid format. Only parquet format is supported.",
                 format
             );
+        }
+    }
+
+    let file_size_bytes_option = copy_stmt_get_option(p_stmt, "file_size_bytes");
+
+    if !file_size_bytes_option.is_null() {
+        let file_size_bytes = unsafe { defGetInt64(file_size_bytes_option.as_ptr()) };
+
+        const ONE_MB: i64 = 1024 * 1024;
+
+        if file_size_bytes < ONE_MB {
+            panic!("file_size_bytes must be at least {ONE_MB} bytes");
         }
     }
 
@@ -180,6 +196,16 @@ pub(crate) fn copy_stmt_uri(p_stmt: &PgBox<PlannedStmt>) -> Result<ParsedUriInfo
     };
 
     ParsedUriInfo::try_from(uri)
+}
+
+pub(crate) fn copy_to_stmt_file_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
+    let file_size_bytes_option = copy_stmt_get_option(p_stmt, "file_size_bytes");
+
+    if file_size_bytes_option.is_null() {
+        INVALID_FILE_SIZE_BYTES
+    } else {
+        unsafe { defGetInt64(file_size_bytes_option.as_ptr()) }
+    }
 }
 
 pub(crate) fn copy_to_stmt_row_group_size(p_stmt: &PgBox<PlannedStmt>) -> i64 {
