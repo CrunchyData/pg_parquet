@@ -73,6 +73,23 @@ impl ParsedUriInfo {
                             uri.scheme(), uri))
         }
     }
+
+    pub(crate) fn base_uri(&self) -> String {
+        if self.uri.scheme() == "file" {
+            // root path for local file
+            return "/".to_string();
+        }
+
+        format!(
+            "{}://{}",
+            self.uri.scheme(),
+            self.uri.host().expect("missing host")
+        )
+    }
+
+    pub(crate) fn is_pattern(&self) -> bool {
+        self.path.to_string().contains('*') || self.path.to_string().contains("**")
+    }
 }
 
 impl TryFrom<&str> for ParsedUriInfo {
