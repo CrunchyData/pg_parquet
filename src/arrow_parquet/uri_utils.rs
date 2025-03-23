@@ -1,4 +1,4 @@
-use std::{panic, sync::Arc};
+use std::{env::temp_dir, panic, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use object_store::{path::Path, ObjectStoreScheme};
@@ -16,6 +16,7 @@ use pgrx::{
     pg_sys::{get_role_oid, has_privs_of_role, superuser, AsPgCStr, GetUserId},
 };
 use url::Url;
+use uuid::Uuid;
 
 use crate::{
     object_store::{
@@ -35,9 +36,21 @@ pub(crate) struct ParsedUriInfo {
     pub(crate) bucket: Option<String>,
     pub(crate) path: Path,
     pub(crate) scheme: ObjectStoreScheme,
+    pub(crate) is_stdio: bool,
 }
 
 impl ParsedUriInfo {
+    fn for_stdout() -> Self {
+        let path = temp_dir().join(format!("pg_parquet_{}", Uuid::new_v4()));
+
+        let mut parsed_uri = Self::try_from(path.to_str().expect("invalid temp path"))
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        parsed_uri.is_stdio = true;
+
+        parsed_uri
+    }
+
     fn try_parse_uri(uri: &str) -> Result<Url, String> {
         if !uri.contains("://") {
             // local file
@@ -81,6 +94,10 @@ impl TryFrom<&str> for ParsedUriInfo {
     type Error = String;
 
     fn try_from(uri: &str) -> Result<Self, Self::Error> {
+        if uri == "std" {
+            return Ok(Self::for_stdout());
+        }
+
         let uri = Self::try_parse_uri(uri)?;
 
         let (scheme, path) = Self::try_parse_scheme(&uri)?;
@@ -92,6 +109,7 @@ impl TryFrom<&str> for ParsedUriInfo {
             bucket,
             path,
             scheme,
+            is_stdio: false,
         })
     }
 }
