@@ -53,6 +53,7 @@ impl ObjectStoreCache {
             path,
             scheme,
             bucket,
+            ..
         } = uri_info;
 
         // no need to cache local files

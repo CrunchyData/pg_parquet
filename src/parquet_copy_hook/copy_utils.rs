@@ -170,7 +170,7 @@ pub(crate) fn copy_stmt_uri(p_stmt: &PgBox<PlannedStmt>) -> Result<ParsedUriInfo
     }
 
     if copy_stmt.filename.is_null() {
-        return Err("filename is not specified".to_string());
+        return ParsedUriInfo::try_from("std");
     }
 
     let uri = unsafe {
@@ -322,10 +322,6 @@ fn is_copy_parquet_stmt(p_stmt: &PgBox<PlannedStmt>, copy_from: bool) -> bool {
     }
 
     if copy_stmt.is_program {
-        return false;
-    }
-
-    if copy_stmt.filename.is_null() {
         return false;
     }
 
