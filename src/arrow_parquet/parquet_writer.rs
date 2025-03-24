@@ -121,6 +121,14 @@ impl ParquetWriterContext {
             .unwrap_or_else(|e| panic!("failed to flush record batch: {}", e));
     }
 
+    pub(crate) fn finish(&mut self) {
+        PG_BACKEND_TOKIO_RUNTIME
+            .block_on(self.parquet_writer.finish())
+            .unwrap_or_else(|e| {
+                panic!("failed to close parquet writer: {}", e);
+            });
+    }
+
     fn pg_tuples_to_record_batch(
         tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
         attribute_contexts: &[PgToArrowAttributeContext],
@@ -135,15 +143,5 @@ impl ParquetWriterContext {
         }
 
         RecordBatch::try_new(schema, attribute_arrays).expect("Expected record batch")
-    }
-}
-
-impl Drop for ParquetWriterContext {
-    fn drop(&mut self) {
-        PG_BACKEND_TOKIO_RUNTIME
-            .block_on(self.parquet_writer.finish())
-            .unwrap_or_else(|e| {
-                panic!("failed to close parquet writer: {}", e);
-            });
     }
 }

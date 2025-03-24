@@ -23,6 +23,7 @@ use crate::{
 use super::{
     copy_from::{execute_copy_from, pop_parquet_reader_context},
     copy_to::execute_copy_to_with_dest_receiver,
+    copy_to_dest_receiver::free_copy_to_parquet_dest_receiver,
     copy_utils::{copy_to_stmt_compression, validate_copy_from_options, validate_copy_to_options},
 };
 
@@ -65,6 +66,7 @@ fn process_copy_to_parquet(
 
     let parquet_dest = create_copy_to_parquet_dest_receiver(
         uri_as_string(&uri).as_pg_cstr(),
+        uri_info.is_stdio,
         &row_group_size,
         &row_group_size_bytes,
         &compression,
@@ -76,14 +78,9 @@ fn process_copy_to_parquet(
     PgTryBuilder::new(|| {
         execute_copy_to_with_dest_receiver(p_stmt, query_string, params, query_env, &parquet_dest)
     })
-    .catch_others(|cause| {
-        // make sure to cleanup parquet dest receiver
-        if let Some(shutdown_callback) = parquet_dest.rShutdown {
-            unsafe {
-                shutdown_callback(parquet_dest.as_ptr());
-            }
-        }
-        cause.rethrow()
+    .catch_others(|cause| cause.rethrow())
+    .finally(|| {
+        free_copy_to_parquet_dest_receiver(parquet_dest.as_ptr());
     })
     .execute()
 }
@@ -102,7 +99,7 @@ fn process_copy_from_parquet(
 
     validate_copy_from_options(p_stmt);
 
-    PgTryBuilder::new(|| execute_copy_from(p_stmt, query_string, query_env, uri_info))
+    PgTryBuilder::new(|| execute_copy_from(p_stmt, query_string, query_env, uri_info.clone()))
         .catch_others(|cause| {
             // make sure to pop the parquet reader context
             // In case we did not push the context, we should not throw an error while popping
@@ -110,6 +107,12 @@ fn process_copy_from_parquet(
             pop_parquet_reader_context(throw_error);
 
             cause.rethrow()
+        })
+        .finally(|| {
+            if uri_info.is_stdio {
+                // try to remove temp file
+                std::fs::remove_file(uri_as_string(&uri)).ok();
+            }
         })
         .execute()
 }

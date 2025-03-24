@@ -9,10 +9,15 @@ use pg_sys::{
 };
 use pgrx::{prelude::*, FromDatum, PgList, PgMemoryContexts, PgTupleDesc};
 
-use crate::arrow_parquet::{
-    compression::{PgParquetCompression, INVALID_COMPRESSION_LEVEL},
-    parquet_writer::{ParquetWriterContext, DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
-    uri_utils::ParsedUriInfo,
+use crate::{
+    arrow_parquet::{
+        compression::{PgParquetCompression, INVALID_COMPRESSION_LEVEL},
+        parquet_writer::{
+            ParquetWriterContext, DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES,
+        },
+        uri_utils::ParsedUriInfo,
+    },
+    parquet_copy_hook::copy_to_stdout::copy_file_to_stdout,
 };
 
 #[repr(C)]
@@ -33,8 +38,10 @@ struct CopyToParquetDestReceiver {
     collected_tuple_size: i64,
     collected_tuple_column_sizes: *mut i64,
     uri: *const c_char,
+    is_stdio: bool,
     copy_options: CopyToParquetOptions,
-    per_copy_context: MemoryContext,
+    copy_mctx: MemoryContext,
+    row_group_mctx: MemoryContext,
     parquet_writer_context: *mut ParquetWriterContext,
 }
 
@@ -61,16 +68,14 @@ impl CopyToParquetDestReceiver {
     }
 
     fn reset_collected_tuples(&mut self) {
-        unsafe { MemoryContextReset(self.per_copy_context) };
+        unsafe { MemoryContextReset(self.row_group_mctx) };
 
         self.collected_tuple_count = 0;
         self.collected_tuple_size = 0;
         self.collected_tuples = PgList::<HeapTupleData>::new().into_pg();
         self.collected_tuple_column_sizes = unsafe {
-            MemoryContextAllocZero(
-                self.per_copy_context,
-                std::mem::size_of::<i64>() * self.natts,
-            ) as *mut i64
+            MemoryContextAllocZero(self.row_group_mctx, std::mem::size_of::<i64>() * self.natts)
+                as *mut i64
         };
     }
 
@@ -123,13 +128,30 @@ impl CopyToParquetDestReceiver {
         self.reset_collected_tuples();
     }
 
-    fn cleanup(&mut self) {
-        if !self.per_copy_context.is_null() {
-            unsafe { MemoryContextDelete(self.per_copy_context) };
+    fn finish(&mut self) {
+        let current_parquet_writer_context = unsafe {
+            self.parquet_writer_context
+                .as_mut()
+                .expect("parquet writer context is not found")
+        };
 
-            self.per_copy_context = std::ptr::null_mut();
+        if self.collected_tuple_count > 0 {
+            self.write_tuples_to_parquet();
         }
 
+        current_parquet_writer_context.finish();
+    }
+
+    fn copy_to_stdout(&self) {
+        if self.is_stdio {
+            let uri = unsafe { CStr::from_ptr(self.uri).to_str().expect("invalid uri") };
+            let uri_info = ParsedUriInfo::try_from(uri).expect("invalid uri");
+
+            unsafe { copy_file_to_stdout(uri_info, self.natts as _) };
+        }
+    }
+
+    fn cleanup(&mut self) {
         if !self.parquet_writer_context.is_null() {
             let parquet_writer_context = unsafe { Box::from_raw(self.parquet_writer_context) };
 
@@ -138,7 +160,28 @@ impl CopyToParquetDestReceiver {
             drop(parquet_writer_context);
         }
 
-        self.collected_tuple_count = 0;
+        if !self.uri.is_null() {
+            let uri = unsafe { CStr::from_ptr(self.uri).to_str().expect("invalid uri") };
+
+            let uri_info = ParsedUriInfo::try_from(uri).expect("invalid uri");
+
+            if uri_info.is_stdio {
+                // try to remove temp file
+                std::fs::remove_file(uri).ok();
+            }
+        }
+
+        if !self.row_group_mctx.is_null() {
+            unsafe { MemoryContextDelete(self.row_group_mctx) };
+
+            self.row_group_mctx = std::ptr::null_mut();
+        }
+
+        if !self.copy_mctx.is_null() {
+            unsafe { MemoryContextDelete(self.copy_mctx) };
+
+            self.copy_mctx = std::ptr::null_mut();
+        }
     }
 }
 
@@ -161,28 +204,33 @@ extern "C" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tupledesc: 
     parquet_dest.collected_tuples = PgList::<HeapTupleData>::new().into_pg();
     parquet_dest.collected_tuple_column_sizes = unsafe {
         MemoryContextAllocZero(
-            parquet_dest.per_copy_context,
+            parquet_dest.row_group_mctx,
             std::mem::size_of::<i64>() * tupledesc.len(),
         ) as *mut i64
     };
     parquet_dest.natts = tupledesc.len();
 
-    let uri = unsafe { CStr::from_ptr(parquet_dest.uri) }
-        .to_str()
-        .expect("uri is not a valid C string");
-
-    let uri_info = ParsedUriInfo::try_from(uri).unwrap_or_else(|e| {
-        panic!("{}", e.to_string());
-    });
+    let uri = unsafe {
+        CStr::from_ptr(parquet_dest.uri)
+            .to_str()
+            .expect("invalid uri")
+    };
+    let uri_info = ParsedUriInfo::try_from(uri).expect("invalid uri");
 
     let compression = parquet_dest.copy_options.compression;
 
     let compression_level = parquet_dest.copy_options.compression_level;
 
     // leak the parquet writer context since it will be used during the COPY operation
-    let parquet_writer_context =
-        ParquetWriterContext::new(uri_info, compression, compression_level, &tupledesc);
-    parquet_dest.parquet_writer_context = Box::into_raw(Box::new(parquet_writer_context));
+    let mut copy_ctx = PgMemoryContexts::For(parquet_dest.copy_mctx);
+
+    unsafe {
+        copy_ctx.switch_to(|_context| {
+            let parquet_writer_context =
+                ParquetWriterContext::new(uri_info, compression, compression_level, &tupledesc);
+            parquet_dest.parquet_writer_context = Box::into_raw(Box::new(parquet_writer_context));
+        });
+    }
 }
 
 #[pg_guard]
@@ -194,7 +242,7 @@ extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut DestReceiver) -
     };
 
     unsafe {
-        let mut per_copy_ctx = PgMemoryContexts::For(parquet_dest.per_copy_context);
+        let mut per_copy_ctx = PgMemoryContexts::For(parquet_dest.row_group_mctx);
 
         per_copy_ctx.switch_to(|_context| {
             // extracts all attributes in statement "SELECT * FROM table"
@@ -244,11 +292,11 @@ extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
             .expect("invalid parquet dest receiver ptr")
     };
 
-    if parquet_dest.collected_tuple_count > 0 {
-        parquet_dest.write_tuples_to_parquet();
-    }
+    parquet_dest.finish();
 
-    parquet_dest.cleanup();
+    if parquet_dest.is_stdio {
+        parquet_dest.copy_to_stdout();
+    }
 }
 
 #[pg_guard]
@@ -261,15 +309,26 @@ extern "C" fn copy_destroy(_dest: *mut DestReceiver) {}
 #[no_mangle]
 pub extern "C" fn create_copy_to_parquet_dest_receiver(
     uri: *const c_char,
+    is_stdio: bool,
     row_group_size: *const i64,
     row_group_size_bytes: *const i64,
     compression: *const PgParquetCompression,
     compression_level: *const i32,
 ) -> *mut DestReceiver {
-    let per_copy_context = unsafe {
+    let row_group_mctx = unsafe {
         AllocSetContextCreateExtended(
             CurrentMemoryContext as _,
-            "ParquetCopyDestReceiver".as_pg_cstr(),
+            "pg_parquet Row Group Memory Context".as_pg_cstr(),
+            ALLOCSET_DEFAULT_MINSIZE as _,
+            ALLOCSET_DEFAULT_INITSIZE as _,
+            ALLOCSET_DEFAULT_MAXSIZE as _,
+        )
+    };
+
+    let copy_mctx = unsafe {
+        AllocSetContextCreateExtended(
+            CurrentMemoryContext as _,
+            "pg_parquet Copy Memory Context".as_pg_cstr(),
             ALLOCSET_DEFAULT_MINSIZE as _,
             ALLOCSET_DEFAULT_INITSIZE as _,
             ALLOCSET_DEFAULT_MAXSIZE as _,
@@ -311,6 +370,7 @@ pub extern "C" fn create_copy_to_parquet_dest_receiver(
     parquet_dest.dest.rDestroy = Some(copy_destroy);
     parquet_dest.dest.mydest = CommandDest::DestCopyOut;
     parquet_dest.uri = uri;
+    parquet_dest.is_stdio = is_stdio;
     parquet_dest.tupledesc = std::ptr::null_mut();
     parquet_dest.parquet_writer_context = std::ptr::null_mut();
     parquet_dest.natts = 0;
@@ -321,9 +381,24 @@ pub extern "C" fn create_copy_to_parquet_dest_receiver(
     parquet_dest.copy_options.row_group_size_bytes = row_group_size_bytes;
     parquet_dest.copy_options.compression = compression;
     parquet_dest.copy_options.compression_level = compression_level;
-    parquet_dest.per_copy_context = per_copy_context;
+    parquet_dest.row_group_mctx = row_group_mctx;
+    parquet_dest.copy_mctx = copy_mctx;
 
     unsafe { std::mem::transmute(parquet_dest) }
+}
+
+pub(crate) fn free_copy_to_parquet_dest_receiver(dest: *mut DestReceiver) {
+    if dest.is_null() {
+        return;
+    }
+
+    let parquet_dest = unsafe {
+        (dest as *mut CopyToParquetDestReceiver)
+            .as_mut()
+            .expect("invalid parquet dest receiver ptr")
+    };
+
+    parquet_dest.cleanup();
 }
 
 fn tuple_column_sizes(tuple_datums: &[Option<Datum>], tupledesc: &PgTupleDesc) -> Vec<i32> {
