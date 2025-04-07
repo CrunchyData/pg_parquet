@@ -167,12 +167,9 @@ pub(crate) extern "C" fn copy_startup(
     };
     parquet_dest.natts = tupledesc.len();
 
-    parquet_dest.target_batch_size = if parquet_dest.copy_options.row_group_size < RECORD_BATCH_SIZE
-    {
-        parquet_dest.copy_options.row_group_size
-    } else {
-        RECORD_BATCH_SIZE
-    };
+    // handle when row group size is set less than RECORD_BATCH_SIZE
+    parquet_dest.target_batch_size =
+        std::cmp::min(parquet_dest.copy_options.row_group_size, RECORD_BATCH_SIZE);
 
     let uri = unsafe { CStr::from_ptr(parquet_dest.uri) }
         .to_str()

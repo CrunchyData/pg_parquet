@@ -115,26 +115,11 @@ impl CopyToParquetSplitDestReceiver {
             .to_str()
             .expect("invalid uri");
 
-        let file_name = Path::new(uri)
-            .file_name()
-            .expect("invalid uri")
-            .to_str()
-            .expect("invalid uri");
+        let parent_folder = Path::new(uri);
 
-        let (file_name_prefix, file_extension) = match file_name.find('.') {
-            Some(index) => file_name.split_at(index),
-            None => (file_name, ""),
-        };
-
-        let parent_folder = Path::new(uri)
-            .parent()
-            .expect("invalid uri")
-            .join(file_name_prefix);
-
-        // append child id to final part of uri
         let file_id = self.current_child_id;
 
-        let child_uri = parent_folder.join(format!("data_{file_id}{file_extension}"));
+        let child_uri = parent_folder.join(format!("data_{file_id}.parquet"));
 
         child_uri.to_str().expect("invalid uri").as_pg_cstr()
     }
