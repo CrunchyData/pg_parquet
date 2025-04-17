@@ -1,7 +1,11 @@
-use std::sync::Arc;
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
 use arrow::array::RecordBatch;
 use arrow_cast::{cast_with_options, CastOptions};
+use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream};
 use pgrx::{
@@ -23,6 +27,7 @@ use crate::{
             parquet_schema_string_from_attributes,
         },
     },
+    parquet_udfs::list::list_uri,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
     type_compat::{geometry::reset_postgis_context, map::reset_map_context},
     PG_BACKEND_TOKIO_RUNTIME,
@@ -37,113 +42,93 @@ use super::{
     uri_utils::{parquet_reader_from_uri, ParsedUriInfo},
 };
 
-pub(crate) struct ParquetReaderContext {
-    buffer: Vec<u8>,
-    offset: usize,
-    started: bool,
-    finished: bool,
-    parquet_reader: ParquetRecordBatchStream<ParquetObjectReader>,
+pub(crate) struct SingleParquetReader {
+    reader: ParquetRecordBatchStream<ParquetObjectReader>,
     attribute_contexts: Vec<ArrowToPgAttributeContext>,
-    binary_out_funcs: Vec<PgBox<FmgrInfo>>,
     match_by: MatchBy,
-    per_row_memory_ctx: PgMemoryContexts,
 }
 
-impl ParquetReaderContext {
-    pub(crate) fn new(
+impl Deref for SingleParquetReader {
+    type Target = ParquetRecordBatchStream<ParquetObjectReader>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.reader
+    }
+}
+
+impl DerefMut for SingleParquetReader {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.reader
+    }
+}
+
+impl SingleParquetReader {
+    fn new(
         uri_info: &ParsedUriInfo,
         match_by: MatchBy,
-        tupledesc: &PgTupleDesc,
+        tupledesc_schema: SchemaRef,
+        attributes: &[FormData_pg_attribute],
     ) -> Self {
-        // Postgis and Map contexts are used throughout reading the parquet file.
-        // We need to reset them to avoid reading the stale data. (e.g. extension could be dropped)
-        reset_postgis_context();
-        reset_map_context();
-
-        error_if_copy_from_match_by_position_with_generated_columns(tupledesc, match_by);
-
-        let parquet_reader = parquet_reader_from_uri(uri_info);
-
-        let parquet_file_schema = parquet_reader.schema();
-
-        let attributes = collect_attributes_for(CollectAttributesFor::CopyFrom, tupledesc);
-
-        pgrx::debug2!(
-            "schema for tuples: {}",
-            parquet_schema_string_from_attributes(&attributes, FieldIds::None)
-        );
-
-        let tupledesc_schema = parse_arrow_schema_from_attributes(&attributes, FieldIds::None);
-
-        let tupledesc_schema = Arc::new(tupledesc_schema);
+        let reader = parquet_reader_from_uri(uri_info);
 
         // Ensure that the file schema matches the tupledesc schema.
         // Gets cast_to_types for each attribute if a cast is needed for the attribute's columnar array
         // to match the expected columnar array for its tupledesc type.
         let cast_to_types = ensure_file_schema_match_tupledesc_schema(
-            parquet_file_schema.clone(),
+            reader.schema().clone(),
             tupledesc_schema.clone(),
-            &attributes,
+            attributes,
             match_by,
         );
 
         let attribute_contexts = collect_arrow_to_pg_attribute_contexts(
-            &attributes,
+            attributes,
             &tupledesc_schema.fields,
             Some(cast_to_types),
         );
 
-        let binary_out_funcs = Self::collect_binary_out_funcs(&attributes);
-
-        let per_row_memory_ctx = PgMemoryContexts::new("COPY FROM parquet per row memory context");
-
-        ParquetReaderContext {
-            buffer: Vec::new(),
-            offset: 0,
+        SingleParquetReader {
+            reader,
             attribute_contexts,
-            parquet_reader,
-            binary_out_funcs,
             match_by,
-            started: false,
-            finished: false,
-            per_row_memory_ctx,
         }
     }
 
-    fn collect_binary_out_funcs(
-        attributes: &[FormData_pg_attribute],
-    ) -> Vec<PgBox<FmgrInfo, AllocatedByPostgres>> {
-        unsafe {
-            let mut binary_out_funcs = vec![];
-
-            for att in attributes.iter() {
-                let typoid = att.type_oid();
-
-                let mut send_func_oid = InvalidOid;
-                let mut is_varlena = false;
-                getTypeBinaryOutputInfo(typoid.value(), &mut send_func_oid, &mut is_varlena);
-
-                let arg_fninfo = PgBox::<FmgrInfo>::alloc0().into_pg_boxed();
-                fmgr_info(send_func_oid, arg_fninfo.as_ptr());
-
-                binary_out_funcs.push(arg_fninfo);
-            }
-
-            binary_out_funcs
-        }
-    }
-
-    fn record_batch_to_tuple_datums(
-        record_batch: RecordBatch,
-        attribute_contexts: &[ArrowToPgAttributeContext],
+    fn create_readers_from_pattern_uri(
+        uri_info: &ParsedUriInfo,
         match_by: MatchBy,
-    ) -> Vec<Option<Datum>> {
+        tupledesc_schema: SchemaRef,
+        attributes: &[FormData_pg_attribute],
+    ) -> Vec<Self> {
+        debug_assert!(uri_info.is_pattern());
+
+        list_uri(uri_info)
+            .into_iter()
+            .map(|(file_uri, _)| {
+                let file_uri_info = ParsedUriInfo::try_from(file_uri.as_str())
+                    .unwrap_or_else(|e| panic!("failed to parse file uri {}: {}", file_uri, e));
+
+                SingleParquetReader::new(
+                    &file_uri_info,
+                    match_by,
+                    tupledesc_schema.clone(),
+                    attributes,
+                )
+            })
+            .collect()
+    }
+
+    fn attribute_count(&self) -> usize {
+        self.attribute_contexts.len()
+    }
+
+    fn record_batch_to_tuple_datums(&self, record_batch: RecordBatch) -> Vec<Option<Datum>> {
         let mut datums = vec![];
 
-        for (attribute_idx, attribute_context) in attribute_contexts.iter().enumerate() {
+        for (attribute_idx, attribute_context) in self.attribute_contexts.iter().enumerate() {
             let name = attribute_context.name();
 
-            let column_array = match match_by {
+            let column_array = match self.match_by {
                 MatchBy::Position => record_batch
                     .columns()
                     .get(attribute_idx)
@@ -175,6 +160,110 @@ impl ParquetReaderContext {
 
         datums
     }
+}
+
+pub(crate) struct ParquetReaderContext {
+    buffer: Vec<u8>,
+    offset: usize,
+    started: bool,
+    finished: bool,
+    parquet_readers: Vec<SingleParquetReader>,
+    current_parquet_reader_idx: usize,
+    binary_out_funcs: Vec<PgBox<FmgrInfo>>,
+    per_row_memory_ctx: PgMemoryContexts,
+}
+
+impl ParquetReaderContext {
+    pub(crate) fn new(
+        uri_info: &ParsedUriInfo,
+        match_by: MatchBy,
+        tupledesc: &PgTupleDesc,
+    ) -> Self {
+        // Postgis and Map contexts are used throughout reading the parquet file.
+        // We need to reset them to avoid reading the stale data. (e.g. extension could be dropped)
+        reset_postgis_context();
+        reset_map_context();
+
+        error_if_copy_from_match_by_position_with_generated_columns(tupledesc, match_by);
+
+        let attributes = collect_attributes_for(CollectAttributesFor::CopyFrom, tupledesc);
+
+        pgrx::debug2!(
+            "schema for tuples: {}",
+            parquet_schema_string_from_attributes(&attributes, FieldIds::None)
+        );
+
+        let tupledesc_schema = parse_arrow_schema_from_attributes(&attributes, FieldIds::None);
+
+        let tupledesc_schema = Arc::new(tupledesc_schema);
+
+        let parquet_readers = if uri_info.is_pattern() {
+            SingleParquetReader::create_readers_from_pattern_uri(
+                uri_info,
+                match_by,
+                tupledesc_schema,
+                &attributes,
+            )
+        } else {
+            vec![SingleParquetReader::new(
+                uri_info,
+                match_by,
+                tupledesc_schema.clone(),
+                &attributes,
+            )]
+        };
+
+        if parquet_readers.is_empty() {
+            panic!("no files found that match the pattern {}", uri_info.path);
+        }
+
+        let binary_out_funcs = Self::collect_binary_out_funcs(&attributes);
+
+        let per_row_memory_ctx = PgMemoryContexts::new("COPY FROM parquet per row memory context");
+
+        ParquetReaderContext {
+            buffer: Vec::new(),
+            offset: 0,
+            parquet_readers,
+            current_parquet_reader_idx: 0,
+            binary_out_funcs,
+            started: false,
+            finished: false,
+            per_row_memory_ctx,
+        }
+    }
+
+    fn current_reader(&self) -> Option<&SingleParquetReader> {
+        self.parquet_readers.get(self.current_parquet_reader_idx)
+    }
+
+    fn current_reader_mut(&mut self) -> Option<&mut SingleParquetReader> {
+        self.parquet_readers
+            .get_mut(self.current_parquet_reader_idx)
+    }
+
+    fn collect_binary_out_funcs(
+        attributes: &[FormData_pg_attribute],
+    ) -> Vec<PgBox<FmgrInfo, AllocatedByPostgres>> {
+        unsafe {
+            let mut binary_out_funcs = vec![];
+
+            for att in attributes.iter() {
+                let typoid = att.type_oid();
+
+                let mut send_func_oid = InvalidOid;
+                let mut is_varlena = false;
+                getTypeBinaryOutputInfo(typoid.value(), &mut send_func_oid, &mut is_varlena);
+
+                let arg_fninfo = PgBox::<FmgrInfo>::alloc0().into_pg_boxed();
+                fmgr_info(send_func_oid, arg_fninfo.as_ptr());
+
+                binary_out_funcs.push(arg_fninfo);
+            }
+
+            binary_out_funcs
+        }
+    }
 
     pub(crate) fn read_parquet(&mut self) -> bool {
         if self.finished {
@@ -188,7 +277,8 @@ impl ParquetReaderContext {
 
         // read a record batch from the parquet file. Record batch will contain
         // DEFAULT_BATCH_SIZE rows as we configured in the parquet reader.
-        let record_batch = PG_BACKEND_TOKIO_RUNTIME.block_on(self.parquet_reader.next());
+        let record_batch = PG_BACKEND_TOKIO_RUNTIME
+            .block_on(self.current_reader_mut().expect("no reader found").next());
 
         if let Some(batch_result) = record_batch {
             let record_batch =
@@ -201,8 +291,23 @@ impl ParquetReaderContext {
 
                 // slice the record batch to get the next row
                 let record_batch = record_batch.slice(i, 1);
-                self.copy_row(record_batch);
+
+                let natts = self
+                    .current_reader()
+                    .expect("no reader found")
+                    .attribute_count() as i16;
+
+                let tuple_datums = self
+                    .current_reader()
+                    .expect("no reader found")
+                    .record_batch_to_tuple_datums(record_batch);
+
+                self.copy_row(natts, tuple_datums);
             }
+        } else if self.current_parquet_reader_idx + 1 < self.parquet_readers.len() {
+            // move to the next parquet reader
+            self.current_parquet_reader_idx += 1;
+            self.read_parquet();
         } else {
             // finish PG copy
             self.copy_finish();
@@ -211,45 +316,37 @@ impl ParquetReaderContext {
         true
     }
 
-    fn copy_row(&mut self, record_batch: RecordBatch) {
+    fn copy_row(&mut self, natts: i16, tuple_datums: Vec<Option<Datum>>) {
         unsafe {
-            self.per_row_memory_ctx.switch_to(|_context| {
-                /* 2 bytes: per-tuple header */
-                let natts = self.attribute_contexts.len() as i16;
-                let attnum_len_bytes = natts.to_be_bytes();
-                self.buffer.extend_from_slice(&attnum_len_bytes);
+            let mut old_ctx = self.per_row_memory_ctx.set_as_current();
 
-                // convert the columnar arrays in record batch to tuple datums
-                let tuple_datums = Self::record_batch_to_tuple_datums(
-                    record_batch,
-                    &self.attribute_contexts,
-                    self.match_by,
-                );
+            /* 2 bytes: per-tuple header */
+            let attnum_len_bytes = natts.to_be_bytes();
+            self.buffer.extend_from_slice(&attnum_len_bytes);
 
-                // write the tuple datums to the ParquetReader's internal buffer in PG copy format
-                for (datum, out_func) in tuple_datums.into_iter().zip(self.binary_out_funcs.iter())
-                {
-                    if let Some(datum) = datum {
-                        let datum_bytes: *mut varlena = SendFunctionCall(out_func.as_ptr(), datum);
+            // write the tuple datums to the ParquetReader's internal buffer in PG copy format
+            for (datum, out_func) in tuple_datums.into_iter().zip(self.binary_out_funcs.iter()) {
+                if let Some(datum) = datum {
+                    let datum_bytes: *mut varlena = SendFunctionCall(out_func.as_ptr(), datum);
 
-                        /* 4 bytes: attribute's data size */
-                        let data_size = varsize_any_exhdr(datum_bytes);
-                        let data_size_bytes = (data_size as i32).to_be_bytes();
-                        self.buffer.extend_from_slice(&data_size_bytes);
+                    /* 4 bytes: attribute's data size */
+                    let data_size = varsize_any_exhdr(datum_bytes);
+                    let data_size_bytes = (data_size as i32).to_be_bytes();
+                    self.buffer.extend_from_slice(&data_size_bytes);
 
-                        /* variable bytes: attribute's data */
-                        let data = vardata_any(datum_bytes) as _;
-                        let data_bytes = std::slice::from_raw_parts(data, data_size);
-                        self.buffer.extend_from_slice(data_bytes);
-                    } else {
-                        /* 4 bytes: null */
-                        let null_value = -1_i32;
-                        let null_value_bytes = null_value.to_be_bytes();
-                        self.buffer.extend_from_slice(&null_value_bytes);
-                    }
+                    /* variable bytes: attribute's data */
+                    let data = vardata_any(datum_bytes) as _;
+                    let data_bytes = std::slice::from_raw_parts(data, data_size);
+                    self.buffer.extend_from_slice(data_bytes);
+                } else {
+                    /* 4 bytes: null */
+                    let null_value = -1_i32;
+                    let null_value_bytes = null_value.to_be_bytes();
+                    self.buffer.extend_from_slice(&null_value_bytes);
                 }
-            });
+            }
 
+            old_ctx.set_as_current();
             self.per_row_memory_ctx.reset();
         };
     }

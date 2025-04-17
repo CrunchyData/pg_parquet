@@ -3,6 +3,8 @@ use std::sync::Arc;
 use object_store::{http::HttpBuilder, ClientOptions};
 use url::Url;
 
+use crate::arrow_parquet::uri_utils::object_store_base_uri;
+
 use super::object_store_cache::ObjectStoreWithExpiration;
 
 // create_http_object_store creates a http(s) object store with the given bucket name.
@@ -32,11 +34,5 @@ pub(crate) fn create_http_object_store(uri: &Url) -> ObjectStoreWithExpiration {
 }
 
 pub(crate) fn parse_http_base_uri(uri: &Url) -> Option<String> {
-    let scheme = uri.scheme();
-
-    let host = uri.host_str().expect("http uri missing host");
-
-    let port = uri.port().map(|p| format!(":{p}")).unwrap_or_default();
-
-    Some(format!("{scheme}://{host}{port}"))
+    Some(object_store_base_uri(uri))
 }
