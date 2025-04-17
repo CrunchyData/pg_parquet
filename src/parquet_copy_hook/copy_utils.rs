@@ -216,7 +216,7 @@ pub(crate) fn copy_stmt_uri(p_stmt: &PgBox<PlannedStmt>) -> Result<ParsedUriInfo
     }
 
     if copy_stmt.filename.is_null() {
-        return Ok(ParsedUriInfo::for_stdout());
+        return Ok(ParsedUriInfo::for_std_inout());
     }
 
     let uri = unsafe {

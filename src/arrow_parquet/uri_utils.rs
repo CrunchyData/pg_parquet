@@ -43,7 +43,7 @@ pub(crate) struct ParsedUriInfo {
 }
 
 impl ParsedUriInfo {
-    pub(crate) fn for_stdout() -> Self {
+    pub(crate) fn for_std_inout() -> Self {
         // open temp postgres file, which is removed after transaction ends
         let tmp_path_fd = unsafe { OpenTemporaryFile(false) };
 

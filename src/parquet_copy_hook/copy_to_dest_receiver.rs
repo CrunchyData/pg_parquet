@@ -33,10 +33,10 @@ pub(crate) struct CopyToParquetDestReceiver {
     collected_tuple_column_sizes: *mut i64,
     target_batch_size: i64,
     uri: *const c_char,
-    is_stdio: bool,
+    is_to_stdout: bool,
     copy_options: CopyToParquetOptions,
-    copy_mctx: MemoryContext,
-    row_group_mctx: MemoryContext,
+    copy_memory_context: MemoryContext,
+    row_group_memory_context: MemoryContext,
     parquet_writer_context: *mut ParquetWriterContext,
 }
 
@@ -63,14 +63,16 @@ impl CopyToParquetDestReceiver {
     }
 
     fn reset_collected_tuples(&mut self) {
-        unsafe { MemoryContextReset(self.row_group_mctx) };
+        unsafe { MemoryContextReset(self.row_group_memory_context) };
 
         self.collected_tuple_count = 0;
         self.collected_tuple_size = 0;
         self.collected_tuples = PgList::<HeapTupleData>::new().into_pg();
         self.collected_tuple_column_sizes = unsafe {
-            MemoryContextAllocZero(self.row_group_mctx, std::mem::size_of::<i64>() * self.natts)
-                as *mut i64
+            MemoryContextAllocZero(
+                self.row_group_memory_context,
+                std::mem::size_of::<i64>() * self.natts,
+            ) as *mut i64
         };
     }
 
@@ -140,7 +142,7 @@ impl CopyToParquetDestReceiver {
     }
 
     fn copy_to_stdout(&self) {
-        if self.is_stdio {
+        if self.is_to_stdout {
             let uri = unsafe { CStr::from_ptr(self.uri).to_str().expect("invalid uri") };
             let uri_info = ParsedUriInfo::try_from(uri).expect("invalid uri");
 
@@ -157,16 +159,16 @@ impl CopyToParquetDestReceiver {
             drop(parquet_writer_context);
         }
 
-        if !self.row_group_mctx.is_null() {
-            unsafe { MemoryContextDelete(self.row_group_mctx) };
+        if !self.row_group_memory_context.is_null() {
+            unsafe { MemoryContextDelete(self.row_group_memory_context) };
 
-            self.row_group_mctx = std::ptr::null_mut();
+            self.row_group_memory_context = std::ptr::null_mut();
         }
 
-        if !self.copy_mctx.is_null() {
-            unsafe { MemoryContextDelete(self.copy_mctx) };
+        if !self.copy_memory_context.is_null() {
+            unsafe { MemoryContextDelete(self.copy_memory_context) };
 
-            self.copy_mctx = std::ptr::null_mut();
+            self.copy_memory_context = std::ptr::null_mut();
         }
     }
 }
@@ -194,7 +196,7 @@ pub(crate) extern "C" fn copy_startup(
     parquet_dest.collected_tuples = PgList::<HeapTupleData>::new().into_pg();
     parquet_dest.collected_tuple_column_sizes = unsafe {
         MemoryContextAllocZero(
-            parquet_dest.row_group_mctx,
+            parquet_dest.row_group_memory_context,
             std::mem::size_of::<i64>() * tupledesc.len(),
         ) as *mut i64
     };
@@ -223,7 +225,7 @@ pub(crate) extern "C" fn copy_startup(
     });
 
     // leak the parquet writer context since it will be used during the COPY operation
-    let mut copy_ctx = PgMemoryContexts::For(parquet_dest.copy_mctx);
+    let mut copy_ctx = PgMemoryContexts::For(parquet_dest.copy_memory_context);
 
     unsafe {
         copy_ctx.switch_to(|_context| {
@@ -247,7 +249,7 @@ pub(crate) extern "C" fn copy_receive(slot: *mut TupleTableSlot, dest: *mut Dest
     };
 
     unsafe {
-        let mut per_copy_ctx = PgMemoryContexts::For(parquet_dest.row_group_mctx);
+        let mut per_copy_ctx = PgMemoryContexts::For(parquet_dest.row_group_memory_context);
 
         per_copy_ctx.switch_to(|_context| {
             // extracts all attributes in statement "SELECT * FROM table"
@@ -300,7 +302,7 @@ pub(crate) extern "C" fn copy_shutdown(dest: *mut DestReceiver) {
 
     parquet_dest.finish();
 
-    if parquet_dest.is_stdio {
+    if parquet_dest.is_to_stdout {
         parquet_dest.copy_to_stdout();
     }
 
@@ -354,10 +356,10 @@ fn tuple_column_sizes(tuple_datums: &[Option<Datum>], tupledesc: &PgTupleDesc) -
 #[pg_guard]
 pub(crate) fn create_copy_to_parquet_dest_receiver(
     uri: *const c_char,
-    is_stdio: bool,
+    is_to_stdout: bool,
     options: CopyToParquetOptions,
 ) -> *mut CopyToParquetDestReceiver {
-    let row_group_mctx = unsafe {
+    let row_group_memory_context = unsafe {
         AllocSetContextCreateExtended(
             CurrentMemoryContext as _,
             "pg_parquet Row Group Memory Context".as_pg_cstr(),
@@ -367,7 +369,7 @@ pub(crate) fn create_copy_to_parquet_dest_receiver(
         )
     };
 
-    let copy_mctx = unsafe {
+    let copy_memory_context = unsafe {
         AllocSetContextCreateExtended(
             CurrentMemoryContext as _,
             "pg_parquet Copy Memory Context".as_pg_cstr(),
@@ -386,7 +388,7 @@ pub(crate) fn create_copy_to_parquet_dest_receiver(
     parquet_dest.dest.rDestroy = Some(copy_destroy);
     parquet_dest.dest.mydest = CommandDest::DestCopyOut;
     parquet_dest.uri = uri;
-    parquet_dest.is_stdio = is_stdio;
+    parquet_dest.is_to_stdout = is_to_stdout;
     parquet_dest.tupledesc = std::ptr::null_mut();
     parquet_dest.parquet_writer_context = std::ptr::null_mut();
     parquet_dest.natts = 0;
@@ -395,8 +397,8 @@ pub(crate) fn create_copy_to_parquet_dest_receiver(
     parquet_dest.collected_tuple_column_sizes = std::ptr::null_mut();
     parquet_dest.target_batch_size = 0;
     parquet_dest.copy_options = options;
-    parquet_dest.row_group_mctx = row_group_mctx;
-    parquet_dest.copy_mctx = copy_mctx;
+    parquet_dest.row_group_memory_context = row_group_memory_context;
+    parquet_dest.copy_memory_context = copy_memory_context;
 
     parquet_dest.into_pg()
 }
