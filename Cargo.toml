@@ -28,6 +28,7 @@ aws-config = { version = "1", default-features = false, features = ["rustls","rt
 aws-credential-types = {version = "1", default-features = false}
 azure_storage = {version = "0.21", default-features = false}
 futures = "0.3"
+glob = "0.3"
 home = "0.5"
 libc = {version = "0.2", default-features = false }
 object_store = {version = "=0.12.2", default-features = false, features = ["aws", "azure", "fs", "gcp", "http"]}

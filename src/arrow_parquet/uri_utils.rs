@@ -151,6 +151,10 @@ impl ParsedUriInfo {
                             uri.scheme(), uri))
         }
     }
+
+    pub(crate) fn is_pattern(&self) -> bool {
+        self.path.to_string().contains('*') || self.path.to_string().contains("**")
+    }
 }
 
 impl TryFrom<&str> for ParsedUriInfo {
@@ -200,6 +204,21 @@ pub(crate) fn uri_as_string(uri: &Url) -> String {
     }
 
     uri.to_string()
+}
+
+pub(crate) fn object_store_base_uri(uri: &Url) -> String {
+    if uri.scheme() == "file" {
+        // root path for local file
+        return "/".to_string();
+    }
+
+    let scheme = uri.scheme();
+
+    let host = uri.host_str().expect("missing host in uri");
+
+    let port = uri.port().map(|p| format!(":{}", p)).unwrap_or_default();
+
+    format!("{}://{}{}", scheme, host, port)
 }
 
 pub(crate) fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaDescriptor {

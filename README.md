@@ -24,6 +24,7 @@ COPY table FROM 's3://mybucket/data.parquet' WITH (format 'parquet');
   - [Inspect Parquet schema](#inspect-parquet-schema)
   - [Inspect Parquet metadata](#inspect-parquet-metadata)
   - [Inspect Parquet column statistics](#inspect-parquet-column-statistics)
+  - [List and read Parquet files from uri pattern](#list-and-read-parquet-files-from-uri-pattern)
 - [Object Store Support](#object-store-support)
 - [Copy Options](#copy-options)
 - [Configuration](#configuration)
@@ -217,6 +218,40 @@ SELECT * FROM parquet.column_stats('/tmp/product_example.parquet')
 (13 rows)
 ```
 
+### List and read Parquet files from uri pattern
+
+You can call `SELECT * FROM parquet.list(<uri_pattern>)` to see all uris that matches with the uri pattern.
+Uri pattern can resolve `**` for directories and `*` for words in the uri.
+
+
+```sql
+COPY (SELECT i FROM generate_series(1, 1000000) i) TO '/tmp/some/test.parquet' with (file_size_bytes '1MB');
+COPY 1000000
+
+SELECT * FROM parquet.list('/tmp/some/**/*.parquet');
+                  uri                  |  size
+---------------------------------------+---------
+ /tmp/some/test.parquet/data_4.parquet |  100162
+ /tmp/some/test.parquet/data_3.parquet | 1486916
+ /tmp/some/test.parquet/data_2.parquet | 1486916
+ /tmp/some/test.parquet/data_0.parquet | 1486920
+ /tmp/some/test.parquet/data_1.parquet | 1486916
+(5 rows)
+
+```
+
+Uri pattern is also supported by `COPY FROM` for all supported object stores except `http(s)` endpoints.
+```sql
+COPY (SELECT i FROM generate_series(1, 1000000) i) TO 's3://testbucket/some/test.parquet' with (file_size_bytes '1MB');
+COPY 1000000
+
+CREATE TABLE test(a int);
+CREATE TABLE
+
+COPY test FROM 's3://testbucket/some/**/*.parquet';
+COPY 1000000
+```
+
 ## Object Store Support
 `pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage`, `http(s)` and `Google Cloud Storage` object stores.
 
@@ -304,7 +339,7 @@ Supported authorization methods' priority order is shown below:
 
 #### Http(s) Storage
 
-`Https` uris are supported by default. You can set `ALLOW_HTTP` environment variable to allow `http` uris.
+Only `https` uris are supported by default. You can set `ALLOW_HTTP` environment variable to allow `http` uris.
 
 #### Google Cloud Storage
 
