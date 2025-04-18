@@ -2469,7 +2469,7 @@ dependencies = [
 
 [[package]]
 name = "pg_parquet"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "arrow",
  "arrow-cast",
