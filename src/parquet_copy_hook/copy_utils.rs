@@ -20,6 +20,7 @@ use crate::{
         compression::{all_supported_compressions, PgParquetCompression},
         field_ids,
         match_by::MatchBy,
+        parquet_version::ParquetVersion,
         parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
         uri_utils::ParsedUriInfo,
     },
@@ -44,6 +45,7 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
             "row_group_size_bytes",
             "compression",
             "compression_level",
+            "parquet_version",
             "freeze",
         ],
     );
@@ -152,6 +154,20 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
         let compression = copy_to_stmt_compression(p_stmt, uri_info);
 
         compression.ensure_compression_level(compression_level);
+    }
+
+    let parquet_version_option = copy_stmt_get_option(p_stmt, "parquet_version");
+
+    if !parquet_version_option.is_null() {
+        let parquet_version = unsafe { defGetString(parquet_version_option.as_ptr()) };
+
+        let parquet_version = unsafe {
+            CStr::from_ptr(parquet_version)
+                .to_str()
+                .expect("parquet_version option is not a valid CString")
+        };
+
+        ParquetVersion::from_str(parquet_version).unwrap_or_else(|e| panic!("{}", e));
     }
 }
 
@@ -304,6 +320,23 @@ pub(crate) fn copy_to_stmt_compression_level(
         compression.default_compression_level()
     } else {
         Some(unsafe { defGetInt32(compression_level_option.as_ptr()) as _ })
+    }
+}
+
+pub(crate) fn copy_to_stmt_parquet_version(p_stmt: &PgBox<PlannedStmt>) -> ParquetVersion {
+    let parquet_version_option = copy_stmt_get_option(p_stmt, "parquet_version");
+
+    if parquet_version_option.is_null() {
+        ParquetVersion::default()
+    } else {
+        let parquet_version = unsafe { defGetString(parquet_version_option.as_ptr()) };
+        let parquet_version = unsafe {
+            CStr::from_ptr(parquet_version)
+                .to_str()
+                .expect("parquet_version option is not a valid CString")
+        };
+
+        ParquetVersion::from_str(parquet_version).unwrap_or_else(|e| panic!("{}", e))
     }
 }
 

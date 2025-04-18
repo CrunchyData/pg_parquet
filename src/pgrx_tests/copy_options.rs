@@ -295,6 +295,22 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "unrecognized parquet version: vv2. v1 or v2 is supported.")]
+    fn test_invalid_parquet_version() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "parquet_version".to_string(),
+            CopyOptionValue::StringOption("vv2".into()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
     fn test_large_arrow_array_limit() {
         // disable row group size bytes limit
         let mut copy_options = HashMap::new();
@@ -398,6 +414,62 @@ mod tests {
         });
 
         assert_eq!(result_metadata, vec![12]);
+    }
+
+    #[pg_test]
+    fn test_parquet_version() {
+        let fetch_parquet_version = || {
+            Spi::connect(|client| {
+                let parquet_file_metadata_command = format!(
+                    "select * from parquet.file_metadata('{}');",
+                    LOCAL_TEST_FILE_PATH
+                );
+
+                let mut results = Vec::new();
+                let tup_table = client
+                    .select(&parquet_file_metadata_command, None, &[])
+                    .unwrap();
+
+                for row in tup_table {
+                    let parquet_version = row["format_version"].value::<String>().unwrap().unwrap();
+                    results.push(parquet_version);
+                }
+
+                results
+            })
+        };
+
+        // try writing/reading from parquet v2 file
+        let mut copy_to_options = HashMap::new();
+        copy_to_options.insert(
+            "parquet_version".to_string(),
+            CopyOptionValue::StringOption("v2".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_to_options);
+        test_table.insert("INSERT INTO test_expected (a) select i from generate_series(1,10) i;");
+        test_table.assert_expected_and_result_rows();
+
+        // v2
+        let copy_to_parquet = format!(
+            "copy (select 1 as id) to '{LOCAL_TEST_FILE_PATH}' with (parquet_version 'v2');",
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+        assert_eq!(fetch_parquet_version(), vec!["2".to_string()]);
+
+        // v1
+        let copy_to_parquet = format!(
+            "copy (select 1 as id) to '{LOCAL_TEST_FILE_PATH}' with (parquet_version 'v1');",
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+        assert_eq!(fetch_parquet_version(), vec!["1".to_string()]);
+
+        // V1
+        let copy_to_parquet = format!(
+            "copy (select 1 as id) to '{LOCAL_TEST_FILE_PATH}' with (parquet_version 'V1');",
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+        assert_eq!(fetch_parquet_version(), vec!["1".to_string()]);
     }
 
     #[pg_test]

@@ -4,6 +4,7 @@ pub(crate) mod compression;
 pub(crate) mod field_ids;
 pub(crate) mod match_by;
 pub(crate) mod parquet_reader;
+pub(crate) mod parquet_version;
 pub(crate) mod parquet_writer;
 pub(crate) mod pg_to_arrow;
 pub(crate) mod schema_parser;

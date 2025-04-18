@@ -9,6 +9,7 @@ use pgrx::prelude::*;
 use crate::arrow_parquet::{
     compression::{PgParquetCompression, INVALID_COMPRESSION_LEVEL},
     field_ids::FieldIds,
+    parquet_version::ParquetVersion,
     parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
 };
 
@@ -39,6 +40,7 @@ pub(crate) struct CopyToParquetOptions {
     pub(crate) row_group_size_bytes: i64,
     pub(crate) compression: PgParquetCompression,
     pub(crate) compression_level: i32,
+    pub(crate) parquet_version: ParquetVersion,
 }
 
 impl CopyToParquetSplitDestReceiver {
@@ -212,6 +214,7 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
     row_group_size_bytes: *const i64,
     compression: *const PgParquetCompression,
     compression_level: *const i32,
+    parquet_version: *const ParquetVersion,
 ) -> *mut DestReceiver {
     let file_size_bytes = if file_size_bytes.is_null() {
         INVALID_FILE_SIZE_BYTES
@@ -251,6 +254,12 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
         unsafe { *compression_level }
     };
 
+    let parquet_version = if parquet_version.is_null() {
+        ParquetVersion::default()
+    } else {
+        unsafe { *parquet_version }
+    };
+
     let options = CopyToParquetOptions {
         file_size_bytes,
         field_ids,
@@ -258,6 +267,7 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
         row_group_size_bytes,
         compression,
         compression_level,
+        parquet_version,
     };
 
     let mut split_dest =
