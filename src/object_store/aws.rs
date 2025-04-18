@@ -125,7 +125,7 @@ impl AwsS3Config {
 
         // first tries environment variables and then the config files
         let sdk_config = PG_BACKEND_TOKIO_RUNTIME.block_on(async {
-            aws_config::defaults(BehaviorVersion::v2024_03_28())
+            aws_config::defaults(BehaviorVersion::v2025_01_17())
                 .load()
                 .await
         });
