@@ -1,4 +1,5 @@
 -- parquet stats function
+DROP FUNCTION parquet."column_stats"(TEXT);
 CREATE FUNCTION parquet."column_stats"("uri" TEXT) RETURNS TABLE (
 	"column_id" INT,
 	"field_id" INT,
