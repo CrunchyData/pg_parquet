@@ -1,6 +1,5 @@
 use futures::StreamExt;
 use glob::{MatchOptions, Pattern};
-use object_store::path::Path;
 use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
 
 use crate::arrow_parquet::uri_utils::{ensure_access_privilege_to_uri, ParsedUriInfo};
@@ -21,19 +20,6 @@ mod parquet {
     }
 }
 
-fn prefix_from_pattern_path(pattern_path: &Path) -> Path {
-    pattern_path
-        .parts()
-        .take_while(|part| !part.as_ref().contains("*") && !part.as_ref().contains("**"))
-        .collect()
-}
-
-fn pattern_from_pattern_path(pattern_path: &Path) -> Pattern {
-    Pattern::new(pattern_path.as_ref()).unwrap_or_else(|e| {
-        panic!("{}", e);
-    })
-}
-
 pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
     let uri = uri_info.uri.clone();
 
@@ -44,29 +30,38 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
     let copy_from = true;
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
-    let prefix_location = prefix_from_pattern_path(&location);
+    // build the pattern before we start the stream to bail out early
+    let pattern = Pattern::new(location.as_ref()).unwrap_or_else(|e| {
+        panic!("{}", e);
+    });
 
-    let pattern = pattern_from_pattern_path(&location);
+    // prefix is the part of the location that doesn't contain any wildcards
+    let prefix = location
+        .parts()
+        .take_while(|part| !part.as_ref().contains("*") && !part.as_ref().contains("**"))
+        .collect();
 
-    let mut objects_stream = parquet_object_store.list(Some(&prefix_location));
+    // Collect all uris from the list stream
+    let mut list_stream = parquet_object_store.list(Some(&prefix));
 
-    let mut objects = vec![];
+    let mut uris = vec![];
 
-    // Collect all objects from the stream
     PG_BACKEND_TOKIO_RUNTIME.block_on(async {
-        while let Some(meta) = objects_stream.next().await.transpose().unwrap_or_else(|e| {
+        while let Some(meta) = list_stream.next().await.transpose().unwrap_or_else(|e| {
             panic!("{}", e);
         }) {
-            objects.push((meta.location.to_string(), meta.size as _));
+            let uri = meta.location.to_string();
+            let size = meta.size as _;
+
+            uris.push((uri, size));
         }
     });
 
-    // Filter out objects that don't match the pattern
-    objects
-        .into_iter()
-        .filter(|(object_uri, _)| {
+    // Filter out uris that don't match the pattern
+    uris.into_iter()
+        .filter(|(uri, _)| {
             pattern.matches_path_with(
-                std::path::Path::new(object_uri),
+                std::path::Path::new(uri),
                 MatchOptions {
                     case_sensitive: true,
                     require_literal_separator: true,
@@ -74,12 +69,12 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
                 },
             )
         })
-        .map(|(object_uri, size)| {
+        .map(|(uri, size)| {
             (
                 std::path::Path::new(&base_uri)
-                    .join(object_uri)
+                    .join(uri)
                     .to_str()
-                    .expect("invalid path")
+                    .expect("invalid list uri path")
                     .to_string(),
                 size,
             )

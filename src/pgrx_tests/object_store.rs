@@ -383,6 +383,22 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "no files found that match the pattern")]
+    fn test_s3_empty_pattern() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let create_table = "create table test_table(id int);";
+        Spi::run(create_table).unwrap();
+
+        let s3_uri_pattern = format!("s3://{test_bucket_name}/dummy*.parquet");
+        let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri_pattern);
+        Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
     fn test_azure_blob_from_env() {
         object_store_cache_clear();
 

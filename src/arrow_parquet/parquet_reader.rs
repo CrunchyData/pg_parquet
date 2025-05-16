@@ -94,6 +94,30 @@ impl SingleParquetReader {
         }
     }
 
+    fn create_readers_from_pattern_uri(
+        uri_info: &ParsedUriInfo,
+        match_by: MatchBy,
+        tupledesc_schema: SchemaRef,
+        attributes: &[FormData_pg_attribute],
+    ) -> Vec<Self> {
+        debug_assert!(uri_info.is_pattern());
+
+        list_uri(uri_info)
+            .into_iter()
+            .map(|(file_uri, _)| {
+                let file_uri_info = ParsedUriInfo::try_from(file_uri.as_str())
+                    .unwrap_or_else(|e| panic!("failed to parse file uri {}: {}", file_uri, e));
+
+                SingleParquetReader::new(
+                    &file_uri_info,
+                    match_by,
+                    tupledesc_schema.clone(),
+                    attributes,
+                )
+            })
+            .collect()
+    }
+
     fn attribute_count(&self) -> usize {
         self.attribute_contexts.len()
     }
@@ -174,20 +198,12 @@ impl ParquetReaderContext {
         let tupledesc_schema = Arc::new(tupledesc_schema);
 
         let parquet_readers = if uri_info.is_pattern() {
-            list_uri(uri_info)
-                .into_iter()
-                .map(|(file_uri, _)| {
-                    let file_uri_info = ParsedUriInfo::try_from(file_uri.as_str())
-                        .unwrap_or_else(|e| panic!("failed to parse file uri {}: {}", file_uri, e));
-
-                    SingleParquetReader::new(
-                        &file_uri_info,
-                        match_by,
-                        tupledesc_schema.clone(),
-                        &attributes,
-                    )
-                })
-                .collect()
+            SingleParquetReader::create_readers_from_pattern_uri(
+                uri_info,
+                match_by,
+                tupledesc_schema,
+                &attributes,
+            )
         } else {
             vec![SingleParquetReader::new(
                 uri_info,
@@ -196,6 +212,10 @@ impl ParquetReaderContext {
                 &attributes,
             )]
         };
+
+        if parquet_readers.is_empty() {
+            panic!("no files found that match the pattern {}", uri_info.path);
+        }
 
         let binary_out_funcs = Self::collect_binary_out_funcs(&attributes);
 
@@ -249,19 +269,9 @@ impl ParquetReaderContext {
         (self.current_parquet_reader_idx as i128) < (self.parquet_readers.len() as i128) - 1
     }
 
-    fn has_any_parquet_reader(&self) -> bool {
-        !self.parquet_readers.is_empty()
-    }
-
     pub(crate) fn read_parquet(&mut self) -> bool {
         if self.finished {
             return false;
-        }
-
-        if !self.has_any_parquet_reader() {
-            self.copy_start();
-            self.copy_finish();
-            return true;
         }
 
         if !self.started {
