@@ -112,7 +112,7 @@ mod parquet {
             panic!("{}", e.to_string());
         });
 
-        ensure_access_privilege_to_uri(&uri_info.uri, true);
+        ensure_access_privilege_to_uri(&uri_info, true);
         let parquet_metadata = parquet_metadata_from_uri(&uri_info);
 
         let mut aggregated_column_stats = HashMap::new();

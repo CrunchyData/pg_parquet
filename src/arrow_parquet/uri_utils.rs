@@ -269,13 +269,18 @@ pub(crate) fn parquet_writer_from_uri(
         })
 }
 
-pub(crate) fn ensure_access_privilege_to_uri(uri: &Url, copy_from: bool) {
+pub(crate) fn ensure_access_privilege_to_uri(uri_info: &ParsedUriInfo, copy_from: bool) {
     if unsafe { superuser() } {
         return;
     }
 
+    // permission check is not needed for stdin/out
+    if uri_info.stdio_tmp_fd.is_some() {
+        return;
+    }
+
     let user_id = unsafe { GetUserId() };
-    let is_file = uri.scheme() == "file";
+    let is_file = uri_info.uri.scheme() == "file";
 
     let required_role_name = if is_file {
         if copy_from {

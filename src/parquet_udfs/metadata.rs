@@ -45,7 +45,7 @@ mod parquet {
             panic!("{}", e.to_string());
         });
 
-        ensure_access_privilege_to_uri(&uri_info.uri, true);
+        ensure_access_privilege_to_uri(&uri_info, true);
         let parquet_metadata = parquet_metadata_from_uri(&uri_info);
 
         let mut rows = vec![];
@@ -148,7 +148,7 @@ mod parquet {
             panic!("{}", e.to_string());
         });
 
-        ensure_access_privilege_to_uri(&uri_info.uri, true);
+        ensure_access_privilege_to_uri(&uri_info, true);
         let parquet_metadata = parquet_metadata_from_uri(&uri_info);
 
         let created_by = parquet_metadata
@@ -188,7 +188,7 @@ mod parquet {
             panic!("{}", e.to_string());
         });
 
-        ensure_access_privilege_to_uri(&uri_info.uri, true);
+        ensure_access_privilege_to_uri(&uri_info, true);
         let parquet_metadata = parquet_metadata_from_uri(&uri_info);
 
         let kv_metadata = parquet_metadata.file_metadata().key_value_metadata();

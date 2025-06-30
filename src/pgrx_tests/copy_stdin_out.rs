@@ -76,12 +76,33 @@ mod tests {
             "Failed to insert into test_expected table"
         );
 
-        // copy to stdout
+        // create a dummy role
+        let role = "dummy";
+        let output = Command::new("psql")
+            .arg("-p")
+            .arg(test_port.clone())
+            .arg("-h")
+            .arg("localhost")
+            .arg("-d")
+            .arg("pgrx_tests")
+            .arg("-c")
+            .arg(format!(
+                "CREATE ROLE {role} LOGIN;
+                 GRANT SELECT, INSERT, UPDATE, DELETE ON test_expected TO {role};
+                 GRANT SELECT, INSERT, UPDATE, DELETE ON test_result TO {role};"
+            ))
+            .output()
+            .expect("failed to execute process");
+        assert!(output.status.success(), "Failed to create role {role}");
+
+        // copy to stdout with dummy role
         let mut copy_to = Command::new("psql")
             .arg("-p")
             .arg(test_port.clone())
             .arg("-h")
             .arg("localhost")
+            .arg("-U")
+            .arg(role)
             .arg("-d")
             .arg("pgrx_tests")
             .arg("-c")
@@ -101,12 +122,14 @@ mod tests {
             assert!(status.success(), "psql COPY TO process did not succeed");
         }
 
-        // copy from stdin
+        // copy from stdin with dummy role
         let mut copy_from = Command::new("psql")
             .arg("-p")
             .arg(test_port.clone())
             .arg("-h")
             .arg("localhost")
+            .arg("-U")
+            .arg(role)
             .arg("-d")
             .arg("pgrx_tests")
             .arg("-c")
@@ -178,7 +201,7 @@ mod tests {
             ]
         );
 
-        // drop test_expected
+        // drop tables and role
         let output = Command::new("psql")
             .arg("-p")
             .arg(test_port.clone())
@@ -187,26 +210,11 @@ mod tests {
             .arg("-d")
             .arg("pgrx_tests")
             .arg("-c")
-            .arg("DROP TABLE test_expected;")
+            .arg(format!(
+                "DROP TABLE test_expected, test_result; DROP ROLE {role};"
+            ))
             .output()
             .expect("failed to execute process");
-        assert!(
-            output.status.success(),
-            "Failed to drop test_expected table"
-        );
-
-        // drop test_result
-        let output = Command::new("psql")
-            .arg("-p")
-            .arg(test_port.clone())
-            .arg("-h")
-            .arg("localhost")
-            .arg("-d")
-            .arg("pgrx_tests")
-            .arg("-c")
-            .arg("DROP TABLE test_result;")
-            .output()
-            .expect("failed to execute process");
-        assert!(output.status.success(), "Failed to drop test_result table");
+        assert!(output.status.success(), "Failed to clean up");
     }
 }

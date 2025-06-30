@@ -53,10 +53,8 @@ fn process_copy_to_parquet(
 ) -> u64 {
     let uri_info = copy_stmt_uri(p_stmt).unwrap_or_else(|e| panic!("{}", e));
 
-    let uri = uri_info.uri.clone();
-
     let copy_from = false;
-    ensure_access_privilege_to_uri(&uri, copy_from);
+    ensure_access_privilege_to_uri(&uri_info, copy_from);
 
     validate_copy_to_options(p_stmt, &uri_info);
 
@@ -68,7 +66,7 @@ fn process_copy_to_parquet(
     let compression_level = copy_to_stmt_compression_level(p_stmt, &uri_info);
 
     let parquet_split_dest = create_copy_to_parquet_split_dest_receiver(
-        uri_as_string(&uri).as_pg_cstr(),
+        uri_as_string(&uri_info.uri).as_pg_cstr(),
         uri_info.stdio_tmp_fd.is_some(),
         &file_size_bytes,
         field_ids,
@@ -103,10 +101,8 @@ fn process_copy_from_parquet(
 ) -> u64 {
     let uri_info = copy_stmt_uri(p_stmt).unwrap_or_else(|e| panic!("{}", e));
 
-    let uri = uri_info.uri.clone();
-
     let copy_from = true;
-    ensure_access_privilege_to_uri(&uri, copy_from);
+    ensure_access_privilege_to_uri(&uri_info, copy_from);
 
     validate_copy_from_options(p_stmt);
 
