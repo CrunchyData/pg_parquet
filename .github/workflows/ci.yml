@@ -86,6 +86,10 @@ jobs:
                                   libpq-dev
           echo "export PG_MAJOR=${{ env.PG_MAJOR }}" >> $GITHUB_ENV
 
+      - name: Install pgaudit extension
+        run: |
+          sudo apt-get install -y postgresql-${{ env.PG_MAJOR }}-pgaudit
+
       - name: Install azure-cli
         run: |
           curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | sudo tee /etc/apt/keyrings/microsoft.gpg > /dev/null

@@ -2,9 +2,10 @@ use std::ffi::{c_char, CStr};
 
 use pgrx::{
     pg_sys::{
-        bms_add_member, AsPgCStr, CopyGetAttnums, CopyStmt, FirstLowInvalidHeapAttributeNumber,
-        List, Node, ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment, RawStmt,
-        ACL_INSERT, ACL_SELECT,
+        bms_add_member, set_config_option, AsPgCStr, AtEOXact_GUC, CopyGetAttnums, CopyStmt,
+        FirstLowInvalidHeapAttributeNumber, GucAction::GUC_ACTION_SAVE, GucContext::PGC_SUSET,
+        GucSource::PGC_S_SESSION, List, NewGUCNestLevel, Node, ParseNamespaceItem, ParseState,
+        PlannedStmt, QueryEnvironment, RawStmt, ACL_INSERT, ACL_SELECT,
     },
     PgBox, PgList, PgRelation,
 };
@@ -116,7 +117,42 @@ pub(crate) fn check_copy_table_permission(
     let mut perm_infos = PgList::<pgrx::pg_sys::RTEPermissionInfo>::new();
     perm_infos.push(perminfo.as_ptr());
 
+    /*
+     * Disable pgaudit during COPY commands. There is an incompatibility
+     * between pgaudit and COPY commands. pgaudit expects its own
+     * prev_standardUtility to be called before the executor permission check
+     * hook is called. However, our COPY command does not call
+     * prev_standardUtility, so pgaudit crashes. Instead, here we disable
+     * pgaudit for the duration of the COPY command.
+     *
+     * See https://github.com/pgaudit/pgaudit/issues/212
+     */
+    let guc_level = unsafe { disable_pgaudit() };
+
     unsafe { pgrx::pg_sys::ExecCheckPermissions(p_state.p_rtable, perm_infos.as_ptr(), true) };
+
+    unsafe { reset_pgaudit(guc_level) };
+}
+
+unsafe fn disable_pgaudit() -> i32 {
+    let guc_level = NewGUCNestLevel();
+
+    set_config_option(
+        "pgaudit.log".as_pg_cstr(),
+        "none".as_pg_cstr(),
+        PGC_SUSET,
+        PGC_S_SESSION,
+        GUC_ACTION_SAVE,
+        true,
+        0,
+        false,
+    );
+
+    guc_level
+}
+
+unsafe fn reset_pgaudit(guc_level: i32) {
+    AtEOXact_GUC(true, guc_level);
 }
 
 #[cfg(any(feature = "pg14", feature = "pg15"))]
@@ -155,6 +191,10 @@ pub(crate) fn check_copy_table_permission(
         }
     }
 
+    let guc_level = unsafe { disable_pgaudit() };
+
     // check permissions
     unsafe { pgrx::pg_sys::ExecCheckRTPerms(p_state.p_rtable, true) };
+
+    unsafe { reset_pgaudit(guc_level) };
 }
