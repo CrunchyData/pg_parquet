@@ -436,6 +436,15 @@ mod tests {
         std::env::remove_var("AZURE_STORAGE_ACCOUNT");
         std::env::remove_var("AZURE_STORAGE_KEY");
 
+        let unquoted_connection_string = std::env::var("AZURE_STORAGE_CONNECTION_STRING")
+            .unwrap()
+            .trim_matches('"')
+            .to_string();
+        std::env::set_var(
+            "AZURE_STORAGE_CONNECTION_STRING",
+            unquoted_connection_string,
+        );
+
         let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
             .expect("AZURE_TEST_CONTAINER_NAME not found");
 

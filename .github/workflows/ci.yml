@@ -1,4 +1,4 @@
-name: CI lints and tests
+name: Build and tests
 on:
   push:
     branches: [ "main" ]
@@ -17,17 +17,27 @@ env:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         postgres: [ 14, 15, 16, 17 ]
+        runs_on: [ 'ubuntu-22.04', 'ubuntu-22.04-arm' ]
+        include:
+          - runs_on: ubuntu-22.04
+            arch: x64
+          - runs_on: ubuntu-22.04-arm
+            arch: arm64
+
+    runs-on: ${{ matrix.runs_on }}
+
     env:
       PG_MAJOR: ${{ matrix.postgres }}
+      PG_CONFIG: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_config
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up sccache
+      - name: Set up sccache for x86_64
+        if: ${{ matrix.arch == 'x64' }}
         run: |
           wget https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VERSION/sccache-v$SCCACHE_VERSION-x86_64-unknown-linux-musl.tar.gz
           tar -xzf sccache-v$SCCACHE_VERSION-x86_64-unknown-linux-musl.tar.gz
@@ -38,11 +48,32 @@ jobs:
           SCCACHE_VERSION: 0.8.1
           SCCACHE_SHA256: "7203a4dcb3a67f3a0272366d50ede22e5faa3e2a798deaa4d1ea377b51c0ab0c"
 
-      - name: Set up Rust
+      - name: Set up sccache for arm64
+        if: ${{ matrix.arch == 'arm64' }}
+        run: |
+          wget https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VERSION/sccache-v$SCCACHE_VERSION-aarch64-unknown-linux-musl.tar.gz
+          tar -xzf sccache-v$SCCACHE_VERSION-aarch64-unknown-linux-musl.tar.gz
+          sudo mv sccache-v$SCCACHE_VERSION-aarch64-unknown-linux-musl/sccache /usr/local/bin
+          chmod +x /usr/local/bin/sccache
+          echo "$SCCACHE_SHA256  /usr/local/bin/sccache" | sha256sum --check
+        env:
+          SCCACHE_VERSION: 0.8.1
+          SCCACHE_SHA256: "36b2fd1c6c3a104ec1d526edb0533a3827c266054bf4552fb97f524beff6a612"
+
+      - name: Set up Rust for x86_64
+        if: ${{ matrix.arch == 'x64' }}
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.86.0
           target: x86_64-unknown-linux-gnu
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Set up Rust for arm64
+        if: ${{ matrix.arch == 'arm64' }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.86.0
+          target: aarch64-unknown-linux-gnu
           components: rustfmt, clippy, llvm-tools-preview
 
       - name: Cache cargo registry
@@ -56,21 +87,14 @@ jobs:
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-          key: pg_parquet-rust-cache-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.github/workflows/ci.yml') }}
+          key: pg_parquet-rust-cache-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.github/workflows/ci.yml') }}
 
       - name: Cache sccache directory
         uses: actions/cache@v4
         continue-on-error: false
         with:
           path: ${{ env.SCCACHE_DIR }}
-          key: pg_parquet-sccache-cache-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.github/workflows/ci.yml') }}
-
-      - name: Export environment variables from .env file
-        uses: falti/dotenv-action@v1
-        with:
-          path: .devcontainer/.env
-          export-variables: true
-          keys-case: bypass
+          key: pg_parquet-sccache-cache-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.github/workflows/ci.yml') }}
 
       - name: Install PostgreSQL
         run: |
@@ -96,19 +120,12 @@ jobs:
           echo "deb [arch=`dpkg --print-architecture` signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ `lsb_release -cs` main" | sudo tee /etc/apt/sources.list.d/azure-cli.list
           sudo apt-get update && sudo apt-get install -y azure-cli
 
-      - name: Install and configure pgrx
+      - name: Install pgrx
         run: |
           cargo install --locked cargo-pgrx@0.14.1
-          cargo pgrx init --pg${{ env.PG_MAJOR }} /usr/lib/postgresql/${{ env.PG_MAJOR }}/bin/pg_config \
-                          --base-testing-port $PGRX_TEST_PG_BASE_PORT
 
       - name: Install cargo-llvm-cov for coverage report
         run: cargo install --locked cargo-llvm-cov@0.6.12
-
-      - name: Format and lint
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --all-targets --features "pg${{ env.PG_MAJOR }}, pg_test" --no-default-features -- -D warnings
 
       - name: Set up permissions for PostgreSQL
         run: |
@@ -116,75 +133,23 @@ jobs:
                            $(/usr/lib/postgresql/${{ env.PG_MAJOR }}/bin/pg_config --sharedir)/extension \
                            /var/run/postgresql/
 
-      - name: Start Minio for s3 emulator tests
+      - name: Check format and lint
         run: |
-          docker run -d \
-            --env-file .devcontainer/.env \
-            -p 9000:9000 \
-            --entrypoint "./entrypoint.sh" \
-            --volume ./.devcontainer/minio-entrypoint.sh:/entrypoint.sh \
-            minio/minio
+          make check-format
+          make check-lint
 
-          while ! curl $AWS_ENDPOINT_URL; do
-            echo "Waiting for $AWS_ENDPOINT_URL..."
-            sleep 1
-          done
-
-      - name: Start Azurite for Azure Blob Storage emulator tests
+      - name: Run tests without coverage
+        if: ${{ env.PG_MAJOR != '17' || matrix.arch != 'x64' }}
         run: |
-          docker run -d \
-            --env-file .devcontainer/.env \
-            -p 10000:10000 \
-            mcr.microsoft.com/azure-storage/azurite
+          make check
 
-          while ! curl $AZURE_STORAGE_ENDPOINT; do
-            echo "Waiting for $AZURE_STORAGE_ENDPOINT..."
-            sleep 1
-          done
-
-          # create container
-          az storage container create -n $AZURE_TEST_CONTAINER_NAME --connection-string $AZURE_STORAGE_CONNECTION_STRING
-          az storage container create -n ${AZURE_TEST_CONTAINER_NAME}2 --connection-string $AZURE_STORAGE_CONNECTION_STRING
-
-      - name: Start local web server for http(s) tests
+      - name: Run tests with coverage
+        if: ${{ env.PG_MAJOR == '17' && matrix.arch == 'x64' }}
         run: |
-          docker run -d \
-            --env-file .devcontainer/.env \
-            -p 8080:80 \
-            rclone/rclone serve webdav /data --addr :80
-
-          while ! curl $HTTP_ENDPOINT; do
-            echo "Waiting for $HTTP_ENDPOINT..."
-            sleep 1
-          done
-
-      - name: Start fake-gcs-server for Google Cloud Storage emulator tests
-        run: |
-          docker run -d \
-            --env-file .devcontainer/.env \
-            -p 4443:4443 \
-            tustvold/fake-gcs-server -scheme http -public-host localhost:4443
-
-          while ! curl $GOOGLE_SERVICE_ENDPOINT; do   
-            echo "Waiting for $GOOGLE_SERVICE_ENDPOINT..."
-            sleep 1
-          done
-
-          # create bucket
-          curl -v -X POST --data-binary "{\"name\":\"$GOOGLE_TEST_BUCKET\"}" -H "Content-Type: application/json" "$GOOGLE_SERVICE_ENDPOINT/storage/v1/b"
-          curl -v -X POST --data-binary "{\"name\":\"${GOOGLE_TEST_BUCKET}2\"}" -H "Content-Type: application/json" "$GOOGLE_SERVICE_ENDPOINT/storage/v1/b"
-
-      - name: Run tests
-        run: |
-          # Run tests with coverage tool
-          source <(cargo llvm-cov show-env --export-prefix)
-          cargo llvm-cov clean
-          cargo build --features "pg${{ env.PG_MAJOR }}, pg_test" --no-default-features
-          cargo pgrx test pg${{ env.PG_MAJOR }} --no-default-features
-          cargo llvm-cov report --lcov > lcov.info
+          make check-with-coverage
 
       - name: Upload coverage report to Codecov
-        if: ${{ env.PG_MAJOR }} == 17
+        if: ${{ env.PG_MAJOR == '17' && matrix.arch == 'x64' }}
         uses: codecov/codecov-action@v4
         with:
           fail_ci_if_error: true

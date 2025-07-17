@@ -79,7 +79,7 @@ pub(crate) unsafe fn copy_stdin_to_file(uri_info: &ParsedUriInfo, natts: i16, is
 unsafe fn send_copy_in_begin(natts: i16, is_binary: bool) {
     let buf = makeStringInfo();
 
-    pq_beginmessage(buf, 'G' as _);
+    pq_beginmessage(buf, b'G' as _);
 
     let copy_format = if is_binary { 1 } else { 0 };
     pq_sendbyte(buf, copy_format);

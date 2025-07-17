@@ -13,3 +13,4 @@
 *.xml
 lcov.info
 playground.rs
+*.env

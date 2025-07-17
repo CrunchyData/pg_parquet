@@ -49,7 +49,7 @@ pub(crate) unsafe fn copy_file_to_stdout(uri_info: ParsedUriInfo, natts: i16) {
 unsafe fn send_copy_begin(natts: i16, is_binary: bool) {
     let buf = makeStringInfo();
 
-    pq_beginmessage(buf, 'H' as _);
+    pq_beginmessage(buf, b'H' as _);
 
     let copy_format = if is_binary { 1 } else { 0 };
     pq_sendbyte(buf, copy_format); /* overall format */
@@ -68,7 +68,7 @@ unsafe fn send_copy_begin(natts: i16, is_binary: bool) {
  * COPY .. TO STDOUT.
  */
 unsafe fn send_copy_end() {
-    pq_putemptymessage('c' as _);
+    pq_putemptymessage(b'c' as _);
 }
 
 /*
@@ -77,7 +77,7 @@ unsafe fn send_copy_end() {
 unsafe fn send_copy_data(data: &[u8]) {
     let buf = makeStringInfo();
 
-    pq_beginmessage(buf, 'd' as _);
+    pq_beginmessage(buf, b'd' as _);
     pq_sendbytes(buf, data.as_ptr() as _, data.len() as _);
     pq_endmessage(buf);
 }

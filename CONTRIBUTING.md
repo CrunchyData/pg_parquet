@@ -91,23 +91,28 @@ testing via `cargo pgrx test pg16`.
 
 # Testing
 
-We run `RUST_TEST_THREADS=1 cargo pgrx test` to run all our unit tests. If you
-run a specific test, you can do it via regex patterns like below:
-`cargo pgrx run pg17 test_numeric_*`.
+Object storage tests are integration tests which require below containers running locally:
+- minio container for s3
+- azurite container for azure blob storage
+- fake_gcs container for google cloud storage
+- webdav container for http(s) stores
 
-> [!WARNING]
-> Make sure to pass RUST_TEST_THREADS=1 as environment variable to `cargo pgrx test`.
+Our [Makefile](Makefile) automates setting up all containers and running tests for pg_parquet.
 
-Object storage tests are integration tests which require a storage emulator running
-locally. See [ci.yml](.github/workflows/ci.yml) to see how local storage emulators
-are started. You can also see the required environment variables from
-[.env file](.devcontainer/.env).
+#### Build Dependencies
+- rustup
+- pgrx
+- postgresql development deps
+
+#### Test Dependencies
+- docker
+- azure cli
+- pgaudit extension
 
 # Format and Lint
 
 We use `cargo-fmt` as formatter and `cargo-clippy` as linter. You can check
 how we run them from [ci.yml](.github/workflows/ci.yml).
-
 
 # Release
 
