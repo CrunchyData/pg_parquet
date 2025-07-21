@@ -35,8 +35,7 @@ mod tests {
 
     fn object_store_expire_item(bucket: &str) {
         Spi::run(&format!(
-            "SELECT parquet_test.object_store_cache_expire_bucket('{}');",
-            bucket
+            "SELECT parquet_test.object_store_cache_expire_bucket('{bucket}');"
         ))
         .unwrap();
     }
@@ -49,15 +48,9 @@ mod tests {
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
         let s3_uris = [
-            format!("s3://{}/pg_parquet_test.parquet", test_bucket_name),
-            format!(
-                "https://s3.amazonaws.com/{}/pg_parquet_test.parquet",
-                test_bucket_name
-            ),
-            format!(
-                "https://{}.s3.amazonaws.com/pg_parquet_test.parquet",
-                test_bucket_name
-            ),
+            format!("s3://{test_bucket_name}/pg_parquet_test.parquet"),
+            format!("https://s3.amazonaws.com/{test_bucket_name}/pg_parquet_test.parquet"),
+            format!("https://{test_bucket_name}.s3.amazonaws.com/pg_parquet_test.parquet"),
         ];
 
         for s3_uri in s3_uris {
@@ -111,7 +104,7 @@ mod tests {
             .write_all(aws_config_file_content.as_bytes())
             .unwrap();
 
-        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
 
@@ -132,7 +125,7 @@ mod tests {
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
-        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
 
@@ -150,7 +143,7 @@ mod tests {
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
-        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
 
@@ -178,21 +171,19 @@ mod tests {
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
-        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri.clone());
 
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
 
         // can write to s3
-        let copy_to_command = format!(
-            "COPY (SELECT a FROM generate_series(1,10) a) TO '{}';",
-            s3_uri
-        );
+        let copy_to_command =
+            format!("COPY (SELECT a FROM generate_series(1,10) a) TO '{s3_uri}';");
         Spi::run(copy_to_command.as_str()).unwrap();
 
         // cannot read from s3
-        let copy_from_command = format!("COPY test_expected FROM '{}';", s3_uri);
+        let copy_from_command = format!("COPY test_expected FROM '{s3_uri}';");
         Spi::run(copy_from_command.as_str()).unwrap();
     }
 
@@ -220,7 +211,7 @@ mod tests {
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
 
-        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
 
         // can call metadata udf (requires read access)
         let metadata_query = format!("SELECT parquet.metadata('{}');", s3_uri.clone());
@@ -231,14 +222,12 @@ mod tests {
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
 
         // can read from s3
-        let copy_from_command = format!("COPY test_expected FROM '{}';", s3_uri);
+        let copy_from_command = format!("COPY test_expected FROM '{s3_uri}';");
         Spi::run(copy_from_command.as_str()).unwrap();
 
         // cannot write to s3
-        let copy_to_command = format!(
-            "COPY (SELECT a FROM generate_series(1,10) a) TO '{}';",
-            s3_uri
-        );
+        let copy_to_command =
+            format!("COPY (SELECT a FROM generate_series(1,10) a) TO '{s3_uri}';");
         Spi::run(copy_to_command.as_str()).unwrap();
     }
 
@@ -249,10 +238,8 @@ mod tests {
 
         let s3_uri = "s3://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
 
-        let copy_to_command = format!(
-            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}';",
-            s3_uri
-        );
+        let copy_to_command =
+            format!("COPY (SELECT i FROM generate_series(1,10) i) TO '{s3_uri}';");
         Spi::run(copy_to_command.as_str()).unwrap();
     }
 
@@ -266,7 +253,7 @@ mod tests {
         let create_table_command = "CREATE TABLE test_table (a int);";
         Spi::run(create_table_command).unwrap();
 
-        let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri);
+        let copy_from_command = format!("COPY test_table FROM '{s3_uri}';");
         Spi::run(copy_from_command.as_str()).unwrap();
     }
 
@@ -317,7 +304,7 @@ mod tests {
             .write_all(aws_config_file_content.as_bytes())
             .unwrap();
 
-        let s3_uri = format!("s3://{}/pg_parquet_test.parquet", test_bucket_name);
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri.clone());
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
@@ -366,12 +353,9 @@ mod tests {
             std::env::var("AZURE_STORAGE_ACCOUNT").expect("AZURE_STORAGE_ACCOUNT not found");
 
         let azure_blob_uris = [
-            format!("az://{}/pg_parquet_test.parquet", test_container_name),
-            format!("azure://{}/pg_parquet_test.parquet", test_container_name),
-            format!(
-                "https://{}.blob.core.windows.net/{}",
-                test_account_name, test_container_name
-            ),
+            format!("az://{test_container_name}/pg_parquet_test.parquet"),
+            format!("azure://{test_container_name}/pg_parquet_test.parquet"),
+            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}"),
         ];
 
         for azure_blob_uri in azure_blob_uris {
@@ -417,7 +401,7 @@ mod tests {
             .write_all(azure_config_file_content.as_bytes())
             .unwrap();
 
-        let azure_blob_uri = format!("az://{}/pg_parquet_test.parquet", test_container_name);
+        let azure_blob_uri = format!("az://{test_container_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
 
@@ -448,7 +432,7 @@ mod tests {
         let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
             .expect("AZURE_TEST_CONTAINER_NAME not found");
 
-        let azure_blob_uri = format!("az://{}/pg_parquet_test.parquet", test_container_name);
+        let azure_blob_uri = format!("az://{test_container_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
 
@@ -487,7 +471,7 @@ mod tests {
             .write_all(azure_config_file_content.as_bytes())
             .unwrap();
 
-        let azure_blob_uri = format!("az://{}/pg_parquet_test.parquet", test_container_name);
+        let azure_blob_uri = format!("az://{test_container_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
 
@@ -511,7 +495,7 @@ mod tests {
         let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
             .expect("AZURE_TEST_CONTAINER_NAME not found");
 
-        let azure_blob_uri = format!("az://{}/pg_parquet_test.parquet", test_container_name);
+        let azure_blob_uri = format!("az://{test_container_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
 
@@ -536,10 +520,8 @@ mod tests {
         let test_account_name: String =
             std::env::var("AZURE_STORAGE_ACCOUNT").expect("AZURE_STORAGE_ACCOUNT not found");
 
-        let azure_blob_uri = format!(
-            "https://{}.blob.core.windows.net/{}",
-            test_account_name, test_container_name
-        );
+        let azure_blob_uri =
+            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
 
@@ -555,14 +537,11 @@ mod tests {
         let test_account_name: String =
             std::env::var("AZURE_STORAGE_ACCOUNT").expect("AZURE_STORAGE_ACCOUNT not found");
 
-        let azure_blob_uri = format!(
-            "https://{}.blob.core.windows.net/nonexistentcontainer",
-            test_account_name
-        );
+        let azure_blob_uri =
+            format!("https://{test_account_name}.blob.core.windows.net/nonexistentcontainer");
 
         let copy_to_command = format!(
-            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}' WITH (format parquet);",
-            azure_blob_uri
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{azure_blob_uri}' WITH (format parquet);"
         );
         Spi::run(copy_to_command.as_str()).unwrap();
     }
@@ -585,14 +564,11 @@ mod tests {
         std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
         std::env::set_var("AZURE_STORAGE_SAS_TOKEN", read_write_sas_token);
 
-        let azure_blob_uri = format!(
-            "https://{}.blob.core.windows.net/{}",
-            test_account_name, test_container_name
-        );
+        let azure_blob_uri =
+            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}");
 
         let copy_to_command = format!(
-            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}' WITH (format parquet);",
-            azure_blob_uri
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{azure_blob_uri}' WITH (format parquet);"
         );
         Spi::run(copy_to_command.as_str()).unwrap();
     }
@@ -616,14 +592,11 @@ mod tests {
         std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
         std::env::set_var("AZURE_STORAGE_SAS_TOKEN", read_only_sas_token);
 
-        let azure_blob_uri = format!(
-            "https://{}.blob.core.windows.net/{}",
-            test_account_name, test_container_name
-        );
+        let azure_blob_uri =
+            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}");
 
         let copy_to_command = format!(
-            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}' WITH (format parquet);",
-            azure_blob_uri
+            "COPY (SELECT i FROM generate_series(1,10) i) TO '{azure_blob_uri}' WITH (format parquet);"
         );
         Spi::run(copy_to_command.as_str()).unwrap();
     }
@@ -666,7 +639,7 @@ mod tests {
         let test_bucket_name: String =
             std::env::var("GOOGLE_TEST_BUCKET").expect("GOOGLE_TEST_BUCKET not found");
 
-        let gcs_uri = format!("gs://{}/pg_parquet_test.parquet", test_bucket_name);
+        let gcs_uri = format!("gs://{test_bucket_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(gcs_uri);
 
@@ -681,10 +654,8 @@ mod tests {
 
         let s3_uri = "gs://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
 
-        let copy_to_command = format!(
-            "COPY (SELECT i FROM generate_series(1,10) i) TO '{}';",
-            s3_uri
-        );
+        let copy_to_command =
+            format!("COPY (SELECT i FROM generate_series(1,10) i) TO '{s3_uri}';");
         Spi::run(copy_to_command.as_str()).unwrap();
     }
 
@@ -698,7 +669,7 @@ mod tests {
         let create_table_command = "CREATE TABLE test_table (a int);";
         Spi::run(create_table_command).unwrap();
 
-        let copy_from_command = format!("COPY test_table FROM '{}';", gcs_uri);
+        let copy_from_command = format!("COPY test_table FROM '{gcs_uri}';");
         Spi::run(copy_from_command.as_str()).unwrap();
     }
 

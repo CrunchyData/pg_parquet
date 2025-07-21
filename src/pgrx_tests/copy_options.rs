@@ -57,10 +57,8 @@ mod tests {
             test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
             test_table.assert_expected_and_result_rows();
 
-            let parquet_metadata_command = format!(
-                "select compression from parquet.metadata('{}');",
-                LOCAL_TEST_FILE_PATH
-            );
+            let parquet_metadata_command =
+                format!("select compression from parquet.metadata('{LOCAL_TEST_FILE_PATH}');");
 
             let result_compression = Spi::get_one::<String>(&parquet_metadata_command)
                 .unwrap()
@@ -73,12 +71,12 @@ mod tests {
     #[pg_test]
     fn test_compression_from_uri() {
         let parquet_uris = vec![
-            format!("{}", LOCAL_TEST_FILE_PATH),
-            format!("{}.snappy", LOCAL_TEST_FILE_PATH),
-            format!("{}.gz", LOCAL_TEST_FILE_PATH),
-            format!("{}.br", LOCAL_TEST_FILE_PATH),
-            format!("{}.lz4", LOCAL_TEST_FILE_PATH),
-            format!("{}.zst", LOCAL_TEST_FILE_PATH),
+            format!("{LOCAL_TEST_FILE_PATH}"),
+            format!("{LOCAL_TEST_FILE_PATH}.snappy"),
+            format!("{LOCAL_TEST_FILE_PATH}.gz"),
+            format!("{LOCAL_TEST_FILE_PATH}.br"),
+            format!("{LOCAL_TEST_FILE_PATH}.lz4"),
+            format!("{LOCAL_TEST_FILE_PATH}.zst"),
         ];
 
         let expected_compression = vec![
@@ -96,7 +94,7 @@ mod tests {
             test_table.assert_expected_and_result_rows();
 
             let parquet_metadata_command =
-                format!("select compression from parquet.metadata('{}');", uri);
+                format!("select compression from parquet.metadata('{uri}');");
 
             let result_compression = Spi::get_one::<String>(&parquet_metadata_command)
                 .unwrap()
@@ -205,7 +203,7 @@ mod tests {
 
         let test_table = TestTable::<i32>::new("int4".into())
             .with_copy_to_options(copy_options)
-            .with_uri(format!("{}.snappy", LOCAL_TEST_FILE_PATH));
+            .with_uri(format!("{LOCAL_TEST_FILE_PATH}.snappy"));
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
     }
@@ -244,10 +242,8 @@ mod tests {
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
 
-        let parquet_metadata_command = format!(
-            "select compression from parquet.metadata('{}');",
-            LOCAL_TEST_FILE_PATH
-        );
+        let parquet_metadata_command =
+            format!("select compression from parquet.metadata('{LOCAL_TEST_FILE_PATH}');");
 
         let result_compression = Spi::get_one::<String>(&parquet_metadata_command)
             .unwrap()
@@ -313,10 +309,8 @@ mod tests {
         );
         test_table.assert_expected_and_result_rows();
 
-        let parquet_file_metadata_command = format!(
-            "select * from parquet.file_metadata('{}');",
-            LOCAL_TEST_FILE_PATH
-        );
+        let parquet_file_metadata_command =
+            format!("select * from parquet.file_metadata('{LOCAL_TEST_FILE_PATH}');");
         let result_metadata = Spi::connect(|client| {
             let mut results = Vec::new();
             let tup_table = client
@@ -344,15 +338,12 @@ mod tests {
         Spi::run(create_table).unwrap();
 
         let copy_to_parquet = format!(
-            "copy (select i as id from generate_series(1,{}) i) to '{}' with (row_group_size {});",
-            total_rows, LOCAL_TEST_FILE_PATH, row_group_size
+            "copy (select i as id from generate_series(1,{total_rows}) i) to '{LOCAL_TEST_FILE_PATH}' with (row_group_size {row_group_size});"
         );
         Spi::run(&copy_to_parquet).unwrap();
 
-        let parquet_file_metadata_command = format!(
-            "select * from parquet.file_metadata('{}');",
-            LOCAL_TEST_FILE_PATH
-        );
+        let parquet_file_metadata_command =
+            format!("select * from parquet.file_metadata('{LOCAL_TEST_FILE_PATH}');");
         let result_metadata = Spi::connect(|client| {
             let mut results = Vec::new();
             let tup_table = client
@@ -386,15 +377,12 @@ mod tests {
         let row_group_size_bytes = total_rows_size_bytes / 10;
 
         let copy_to_parquet = format!(
-            "copy test_table to '{}' with (row_group_size_bytes {});",
-            LOCAL_TEST_FILE_PATH, row_group_size_bytes
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (row_group_size_bytes {row_group_size_bytes});"
         );
         Spi::run(&copy_to_parquet).unwrap();
 
-        let parquet_file_metadata_command = format!(
-            "select * from parquet.file_metadata('{}');",
-            LOCAL_TEST_FILE_PATH
-        );
+        let parquet_file_metadata_command =
+            format!("select * from parquet.file_metadata('{LOCAL_TEST_FILE_PATH}');");
         let result_metadata = Spi::connect(|client| {
             let mut results = Vec::new();
             let tup_table = client
@@ -526,8 +514,7 @@ mod tests {
         Spi::run(setup_commands).unwrap();
 
         let copy_to_parquet = format!(
-            "copy test_table to '{}' with (field_ids 'invalid_field_ids');",
-            LOCAL_TEST_FILE_PATH
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids 'invalid_field_ids');"
         );
         Spi::run(&copy_to_parquet).unwrap();
     }
@@ -552,15 +539,12 @@ mod tests {
                               create table test_table(a int, b text, c int[], d person);";
         Spi::run(setup_commands).unwrap();
 
-        let copy_to_parquet = format!(
-            "copy test_table to '{}' with (field_ids 'none');",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids 'none');");
         Spi::run(&copy_to_parquet).unwrap();
 
         let parquet_metadata_command = format!(
-            "select count(*) from parquet.schema('{}') where field_id is not null;",
-            LOCAL_TEST_FILE_PATH
+            "select count(*) from parquet.schema('{LOCAL_TEST_FILE_PATH}') where field_id is not null;"
         );
 
         let result_count = Spi::get_one::<i64>(&parquet_metadata_command)
@@ -569,7 +553,7 @@ mod tests {
         assert_eq!(result_count, 0);
 
         // the default is 'none'
-        let copy_to_parquet = format!("copy test_table to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
         let result_count = Spi::get_one::<i64>(&parquet_metadata_command)
@@ -585,16 +569,13 @@ mod tests {
                               create table test_table(a int, b text, c person, d person[]);";
         Spi::run(setup_commands).unwrap();
 
-        let copy_to_parquet = format!(
-            "copy test_table to '{}' with (field_ids 'auto');",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids 'auto');");
         Spi::run(&copy_to_parquet).unwrap();
 
         let fields = Spi::connect(|client| {
             let parquet_schema_command = format!(
-                "select field_id, name from parquet.schema('{}') order by 1,2;",
-                LOCAL_TEST_FILE_PATH
+                "select field_id, name from parquet.schema('{LOCAL_TEST_FILE_PATH}') order by 1,2;"
             );
 
             let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();
@@ -697,8 +678,7 @@ mod tests {
 
         let fields = Spi::connect(|client| {
             let parquet_schema_command = format!(
-                "select field_id, name from parquet.schema('{}') order by 1,2;",
-                LOCAL_TEST_FILE_PATH
+                "select field_id, name from parquet.schema('{LOCAL_TEST_FILE_PATH}') order by 1,2;"
             );
 
             let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();
@@ -774,8 +754,7 @@ mod tests {
 
         let fields = Spi::connect(|client| {
             let parquet_schema_command = format!(
-                "select field_id, name from parquet.schema('{}') order by 1,2;",
-                LOCAL_TEST_FILE_PATH
+                "select field_id, name from parquet.schema('{LOCAL_TEST_FILE_PATH}') order by 1,2;",
             );
 
             let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();
@@ -931,8 +910,7 @@ mod tests {
 
         let fields = Spi::connect(|client| {
             let parquet_schema_command = format!(
-                "select field_id, name from parquet.schema('{}') order by 1,2;",
-                LOCAL_TEST_FILE_PATH
+                "select field_id, name from parquet.schema('{LOCAL_TEST_FILE_PATH}') order by 1,2;",
             );
 
             let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();
@@ -1046,8 +1024,7 @@ mod tests {
 
         let fields = Spi::connect(|client| {
             let parquet_schema_command = format!(
-                "select field_id, name from parquet.schema('{}') order by 1,2;",
-                LOCAL_TEST_FILE_PATH
+                "select field_id, name from parquet.schema('{LOCAL_TEST_FILE_PATH}') order by 1,2;"
             );
 
             let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();

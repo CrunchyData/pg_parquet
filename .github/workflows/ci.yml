@@ -64,7 +64,7 @@ jobs:
         if: ${{ matrix.arch == 'x64' }}
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.86.0
+          toolchain: 1.88.0
           target: x86_64-unknown-linux-gnu
           components: rustfmt, clippy, llvm-tools-preview
 
@@ -72,7 +72,7 @@ jobs:
         if: ${{ matrix.arch == 'arm64' }}
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: 1.86.0
+          toolchain: 1.88.0
           target: aarch64-unknown-linux-gnu
           components: rustfmt, clippy, llvm-tools-preview
 

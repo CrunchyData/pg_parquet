@@ -524,10 +524,7 @@ mod tests {
             "INSERT INTO test_table (a) VALUES (array[null]::crunchy_map.key_int_val_text);";
         Spi::run(insert).unwrap();
 
-        let copy_to = format!(
-            "COPY (SELECT a FROM test_table) TO '{}'",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to = format!("COPY (SELECT a FROM test_table) TO '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_to).unwrap();
     }
 
@@ -553,10 +550,7 @@ mod tests {
             "INSERT INTO test_table (a) VALUES ('{\"(,tt)\"}'::crunchy_map.key_int_val_text);";
         Spi::run(insert).unwrap();
 
-        let copy_to = format!(
-            "COPY (SELECT a FROM test_table) TO '{}'",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to = format!("COPY (SELECT a FROM test_table) TO '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_to).unwrap();
     }
 
@@ -777,7 +771,7 @@ mod tests {
     fn test_small_numeric() {
         let attribute_schema_getter = || -> Vec<(Option<i32>, Option<i32>, String, String)> {
             Spi::connect(|client| {
-                let parquet_schema_command = format!("select precision, scale, logical_type, type_name from parquet.schema('{}') WHERE name = 'a';", LOCAL_TEST_FILE_PATH);
+                let parquet_schema_command = format!("select precision, scale, logical_type, type_name from parquet.schema('{LOCAL_TEST_FILE_PATH}') WHERE name = 'a';");
 
                 let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();
                 let mut results = Vec::new();
@@ -858,8 +852,7 @@ mod tests {
     fn test_large_numeric() {
         let large_precision = DEFAULT_UNBOUNDED_NUMERIC_PRECISION + 1;
 
-        let test_table =
-            TestTable::<FallbackToText>::new(format!("numeric({},4)", large_precision));
+        let test_table = TestTable::<FallbackToText>::new(format!("numeric({large_precision},4)"));
         test_table.insert(
             "INSERT INTO test_expected (a) VALUES (0.0), (.0), (1.), (+1.020), (2.12313), (3), (null);",
         );
@@ -871,8 +864,7 @@ mod tests {
         let large_precision = DEFAULT_UNBOUNDED_NUMERIC_PRECISION + 1;
 
         let test_table = TestTable::<Vec<Option<FallbackToText>>>::new(format!(
-            "numeric({},4)[]",
-            large_precision
+            "numeric({large_precision},4)[]"
         ));
         test_table.insert(
             "INSERT INTO test_expected (a) VALUES (array[0.0,.0,1.,1.020,2.12313,3,null]), (null), (array[]::numeric(100,4)[]);",
@@ -889,7 +881,7 @@ mod tests {
         test_table.assert_expected_and_result_rows();
 
         let parquet_schema_command =
-            format!("select precision, scale, logical_type, type_name from parquet.schema('{}') WHERE name = 'a';", LOCAL_TEST_FILE_PATH);
+            format!("select precision, scale, logical_type, type_name from parquet.schema('{LOCAL_TEST_FILE_PATH}') WHERE name = 'a';");
 
         let attribute_schema = Spi::connect(|client| {
             let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();
@@ -928,7 +920,7 @@ mod tests {
         test_table.assert_expected_and_result_rows();
 
         let parquet_schema_command =
-            format!("select precision, scale, logical_type, type_name from parquet.schema('{}') WHERE name = 'element' ORDER BY logical_type;", LOCAL_TEST_FILE_PATH);
+            format!("select precision, scale, logical_type, type_name from parquet.schema('{LOCAL_TEST_FILE_PATH}') WHERE name = 'element' ORDER BY logical_type;");
 
         let attribute_schema = Spi::connect(|client| {
             let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();
@@ -967,8 +959,7 @@ mod tests {
             DEFAULT_UNBOUNDED_NUMERIC_PRECISION - DEFAULT_UNBOUNDED_NUMERIC_SCALE + 1;
 
         let copy_to_command = format!(
-            "copy (select (repeat('1', {}) || '.2')::numeric as a) to '{}'",
-            invalid_integral_digits, LOCAL_TEST_FILE_PATH
+            "copy (select (repeat('1', {invalid_integral_digits}) || '.2')::numeric as a) to '{LOCAL_TEST_FILE_PATH}'"
         );
 
         Spi::run(&copy_to_command).unwrap();
@@ -982,8 +973,7 @@ mod tests {
         let invalid_decimal_digits = DEFAULT_UNBOUNDED_NUMERIC_SCALE + 1;
 
         let copy_to_command = format!(
-            "copy (select ('2.' || repeat('1', {}) )::numeric as a) to '{}'",
-            invalid_decimal_digits, LOCAL_TEST_FILE_PATH
+            "copy (select ('2.' || repeat('1', {invalid_decimal_digits}) )::numeric as a) to '{LOCAL_TEST_FILE_PATH}'"
         );
 
         Spi::run(&copy_to_command).unwrap();
@@ -1218,17 +1208,14 @@ mod tests {
         });
 
         let copy_to_query = format!(
-            "COPY (SELECT owner FROM dog_owners) TO '{}' WITH (format parquet);",
-            LOCAL_TEST_FILE_PATH
+            "COPY (SELECT owner FROM dog_owners) TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
         );
         Spi::run(copy_to_query.as_str()).unwrap();
 
         Spi::run("TRUNCATE dog_owners;").unwrap();
 
-        let copy_from_query = format!(
-            "COPY dog_owners FROM '{}' WITH (format parquet);",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_from_query =
+            format!("COPY dog_owners FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
         Spi::run(copy_from_query.as_str()).unwrap();
 
         let result = Spi::connect(|client| {

@@ -12,7 +12,7 @@ use super::object_store_cache::ObjectStoreWithExpiration;
 // - GOOGLE_SERVICE_ACCOUNT_PATH
 pub(crate) fn create_gcs_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     let bucket_name = parse_gcs_bucket(uri).unwrap_or_else(|| {
-        panic!("unsupported gcs uri: {}", uri);
+        panic!("unsupported gcs uri: {uri}");
     });
 
     let mut gcs_builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket_name);

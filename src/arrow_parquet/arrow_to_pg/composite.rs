@@ -29,7 +29,7 @@ impl<'a> ArrowArrayToPgType<PgHeapTuple<'a, AllocatedByRust>> for StructArray {
 
         Some(
             unsafe { PgHeapTuple::from_datums(tupledesc.clone(), datums) }.unwrap_or_else(|e| {
-                panic!("failed to create heap tuple: {}", e);
+                panic!("failed to create heap tuple: {e}");
             }),
         )
     }

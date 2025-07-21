@@ -43,10 +43,7 @@ pub(crate) fn collect_attributes_for(
         let name = attribute.name();
 
         if attributes_set.contains(name) {
-            panic!(
-                "duplicate attribute \"{}\" is not allowed in parquet schema",
-                name
-            );
+            panic!("duplicate attribute \"{name}\" is not allowed in parquet schema");
         }
         attributes_set.insert(name);
 

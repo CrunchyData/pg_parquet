@@ -8,7 +8,7 @@ use super::object_store_cache::ObjectStoreWithExpiration;
 // create_http_object_store creates a http(s) object store with the given bucket name.
 pub(crate) fn create_http_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     let base_uri = parse_http_base_uri(uri).unwrap_or_else(|| {
-        panic!("unsupported http uri: {}", uri);
+        panic!("unsupported http uri: {uri}");
     });
 
     let allow_http = std::env::var("ALLOW_HTTP").is_ok();
@@ -36,7 +36,7 @@ pub(crate) fn parse_http_base_uri(uri: &Url) -> Option<String> {
 
     let host = uri.host_str().expect("http uri missing host");
 
-    let port = uri.port().map(|p| format!(":{}", p)).unwrap_or_default();
+    let port = uri.port().map(|p| format!(":{p}")).unwrap_or_default();
 
-    Some(format!("{}://{}{}", scheme, host, port))
+    Some(format!("{scheme}://{host}{port}"))
 }

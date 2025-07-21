@@ -41,11 +41,11 @@ pub(crate) fn parquet_schema_string_from_attributes(
 
     let parquet_schema = ArrowSchemaConverter::new()
         .convert(&arrow_schema)
-        .unwrap_or_else(|e| panic!("failed to convert arrow schema to parquet schema: {}", e));
+        .unwrap_or_else(|e| panic!("failed to convert arrow schema to parquet schema: {e}"));
 
     let mut buf = Vec::new();
     parquet::schema::printer::print_schema(&mut buf, &parquet_schema.root_schema_ptr());
-    String::from_utf8(buf).unwrap_or_else(|e| panic!("failed to convert schema to string: {}", e))
+    String::from_utf8(buf).unwrap_or_else(|e| panic!("failed to convert schema to string: {e}"))
 }
 
 // FieldIdMappingContext is used to keep track of the current field path and field id
@@ -533,7 +533,7 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
                 let file_schema_field = file_schema.column_with_name(field_name);
 
                 if file_schema_field.is_none() {
-                    panic!("column \"{}\" is not found in parquet file", field_name);
+                    panic!("column \"{field_name}\" is not found in parquet file");
                 }
 
                 let (_, file_schema_field) = file_schema_field.unwrap();
@@ -560,9 +560,8 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
             attribute.atttypmod,
         ) {
             panic!(
-                "type mismatch for column \"{}\" between table and parquet file.\n\n\
-                 table has \"{}\"\n\nparquet file has \"{}\"",
-                field_name, to_type, from_type
+                "type mismatch for column \"{field_name}\" between table and parquet file.\n\n\
+                 table has \"{to_type}\"\n\nparquet file has \"{from_type}\""
             );
         }
 

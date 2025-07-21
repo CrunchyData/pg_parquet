@@ -295,7 +295,7 @@ pub(crate) fn collect_arrow_to_pg_attribute_contexts(
         let field = fields
             .iter()
             .find(|field| field.name() == attribute_name)
-            .unwrap_or_else(|| panic!("failed to find field {}", attribute_name))
+            .unwrap_or_else(|| panic!("failed to find field {attribute_name}"))
             .clone();
 
         let cast_to_type = if let Some(cast_to_types) = cast_to_types.as_ref() {

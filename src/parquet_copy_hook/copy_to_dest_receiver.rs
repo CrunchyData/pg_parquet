@@ -217,12 +217,8 @@ pub(crate) extern "C-unwind" fn copy_startup(
     let field_ids = unsafe { CStr::from_ptr(parquet_dest.copy_options.field_ids) }
         .to_str()
         .expect("uri is not a valid C string");
-    let field_ids = FieldIds::from_str(field_ids).unwrap_or_else(|e| {
-        panic!(
-            "failed to parse field_ids from string '{}': {}",
-            field_ids, e
-        )
-    });
+    let field_ids = FieldIds::from_str(field_ids)
+        .unwrap_or_else(|e| panic!("failed to parse field_ids from string '{field_ids}': {e}"));
 
     // leak the parquet writer context since it will be used during the COPY operation
     let mut copy_ctx = PgMemoryContexts::For(parquet_dest.copy_memory_context);
@@ -282,7 +278,7 @@ pub(crate) extern "C-unwind" fn copy_receive(
             }
 
             let heap_tuple = PgHeapTuple::from_datums(tupledesc, datums)
-                .unwrap_or_else(|e| panic!("failed to create heap tuple from datums: {}", e));
+                .unwrap_or_else(|e| panic!("failed to create heap tuple from datums: {e}"));
 
             parquet_dest.collect_tuple(heap_tuple, column_sizes);
 

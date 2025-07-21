@@ -45,7 +45,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x int, y bigint)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_two::<i32, i64>("SELECT x, y FROM test_table LIMIT 1").unwrap();
@@ -66,7 +66,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x bigint)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<i64>("SELECT x FROM test_table LIMIT 1")
@@ -89,7 +89,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x double precision)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<f64>("SELECT x FROM test_table LIMIT 1")
@@ -112,7 +112,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x real)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<f32>("SELECT x FROM test_table LIMIT 1")
@@ -137,7 +137,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x timestamp)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<Timestamp>("SELECT x FROM test_table LIMIT 1")
@@ -168,7 +168,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x timestamptz)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<TimestampWithTimeZone>("SELECT x FROM test_table LIMIT 1")
@@ -201,7 +201,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x timestamp)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<Timestamp>("SELECT x FROM test_table LIMIT 1")
@@ -229,7 +229,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x timetz)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<TimeWithTimeZone>("SELECT x FROM test_table LIMIT 1")
@@ -261,7 +261,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x time)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<Time>("SELECT x FROM test_table LIMIT 1")
@@ -290,7 +290,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x smallint, y int, z bigint)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value =
@@ -316,7 +316,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x int, y bigint)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_two::<i32, i64>("SELECT x, y FROM test_table LIMIT 1").unwrap();
@@ -337,7 +337,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x bigint)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<i64>("SELECT x FROM test_table LIMIT 1")
@@ -359,7 +359,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x bigint)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<i64>("SELECT x FROM test_table LIMIT 1")
@@ -381,7 +381,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x int)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<i32>("SELECT x FROM test_table LIMIT 1")
@@ -411,7 +411,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x float8)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<f64>("SELECT x FROM test_table LIMIT 1")
@@ -433,7 +433,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x text)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<String>("SELECT x FROM test_table LIMIT 1")
@@ -460,7 +460,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x text)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<String>("SELECT x FROM test_table LIMIT 1")
@@ -487,7 +487,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x bytea)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<Vec<u8>>("SELECT x FROM test_table LIMIT 1")
@@ -537,7 +537,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x int[], y bigint[])";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_two::<Vec<Option<i32>>, Vec<Option<i64>>>(
@@ -591,7 +591,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x int[], y bigint[])";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_two::<Vec<Option<i32>>, Vec<Option<i64>>>(
@@ -636,7 +636,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value =
@@ -697,7 +697,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type[])";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value =
@@ -745,7 +745,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type[])";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value =
@@ -775,7 +775,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
     }
 
@@ -808,7 +808,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
     }
 
@@ -841,7 +841,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x test_type)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
     }
 
@@ -870,18 +870,16 @@ mod tests {
                                         ]::person[] as workers,
                                         'Microsoft' as name,
                                         row('istanbul')::address as location
-                                 from generate_series(1,10) i) to '{}';",
-            LOCAL_TEST_FILE_PATH
+                                 from generate_series(1,10) i) to '{LOCAL_TEST_FILE_PATH}';"
         );
         Spi::run(&copy_to_parquet).unwrap();
 
         // copy to correct table which matches the parquet schema
-        let copy_to_correct_table =
-            format!("copy factory_correct from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_correct_table = format!("copy factory_correct from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_correct_table).unwrap();
 
         // copy from wrong table which does not match the parquet schema
-        let copy_from_wrong_table = format!("copy factory_wrong from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_from_wrong_table = format!("copy factory_wrong from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_wrong_table).unwrap();
     }
 
@@ -938,7 +936,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x crunchy_map.key_text_val_bigint)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<bool>("select x = array[('aa',1),('bb',2)]::crunchy_map.key_text_val_bigint from test_table LIMIT 1;").unwrap().unwrap();
@@ -1012,7 +1010,7 @@ mod tests {
         let create_table = "CREATE TABLE test_table (x crunchy_map.key_text_val_bigint[])";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let value = Spi::get_one::<bool>("select x = array[array[('aa',1),('bb',2)]::crunchy_map.key_text_val_bigint] from test_table LIMIT 1;").unwrap().unwrap();
@@ -1021,19 +1019,14 @@ mod tests {
 
     #[pg_test]
     fn test_table_with_different_position_match_by_name() {
-        let copy_to = format!(
-            "COPY (SELECT 1 as x, 'hello' as y) TO '{}'",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to = format!("COPY (SELECT 1 as x, 'hello' as y) TO '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_to).unwrap();
 
         let create_table = "CREATE TABLE test_table (y text, x int)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!(
-            "COPY test_table FROM '{}' WITH (match_by 'name')",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
         Spi::run(&copy_from).unwrap();
 
         let result = Spi::get_two::<&str, i32>("SELECT y, x FROM test_table LIMIT 1").unwrap();
@@ -1074,13 +1067,11 @@ mod tests {
         let create_table = "create table test_table(id int, name text);";
         Spi::run(create_table).unwrap();
 
-        let copy_to_parquet = format!("copy (select 100 as id) to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy (select 100 as id) to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
-        let copy_from = format!(
-            "COPY test_table FROM '{}' with (match_by 'name')",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' with (match_by 'name')");
         Spi::run(&copy_from).unwrap();
     }
 
@@ -1094,16 +1085,13 @@ mod tests {
                              $$ LANGUAGE plpgsql;";
         Spi::run(custom_cast).unwrap();
 
-        let copy_to = format!(
-            "COPY (SELECT 1.0::float as x) TO '{}'",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to = format!("COPY (SELECT 1.0::float as x) TO '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_to).unwrap();
 
         let create_table = "CREATE TABLE test_table (x date)";
         Spi::run(create_table).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
     }
 }

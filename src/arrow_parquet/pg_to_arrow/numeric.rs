@@ -24,7 +24,7 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
 
         let numeric_array = Decimal128Array::from(numerics)
             .with_precision_and_scale(context.precision() as _, context.scale() as _)
-            .unwrap_or_else(|e| panic!("failed to create Decimal128Array: {}", e));
+            .unwrap_or_else(|e| panic!("failed to create Decimal128Array: {e}"));
 
         Arc::new(numeric_array)
     }
@@ -56,7 +56,7 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<Vec<Option<AnyNumeric>>>> {
 
         let numeric_array = Decimal128Array::from(pg_array)
             .with_precision_and_scale(precision as _, scale as _)
-            .unwrap_or_else(|e| panic!("failed to create Decimal128Array: {}", e));
+            .unwrap_or_else(|e| panic!("failed to create Decimal128Array: {e}"));
 
         let list_array = ListArray::new(
             element_context.field(),

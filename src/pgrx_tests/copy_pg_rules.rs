@@ -81,10 +81,10 @@ mod tests {
         Spi::run(create_table).unwrap();
 
         // first copy non-null value to file
-        let copy_to = format!("COPY (SELECT 1 as x) TO '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_to = format!("COPY (SELECT 1 as x) TO '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_to).unwrap();
 
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
 
         let result = Spi::get_one::<i32>("SELECT x FROM test_table")
@@ -93,11 +93,11 @@ mod tests {
         assert_eq!(result, 1);
 
         // then copy null value to file
-        let copy_to = format!("COPY (SELECT NULL::int as x) TO '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_to = format!("COPY (SELECT NULL::int as x) TO '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_to).unwrap();
 
         // this should panic
-        let copy_from = format!("COPY test_table FROM '{}'", LOCAL_TEST_FILE_PATH);
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
     }
 
@@ -109,10 +109,8 @@ mod tests {
         Spi::run("CREATE TABLE test_table (a int, b int generated always as (10) stored, c text);")
             .unwrap();
 
-        let copy_from_query = format!(
-            "COPY test_table FROM '{}' WITH (format parquet);",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_from_query =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
         Spi::run(copy_from_query.as_str()).unwrap();
     }
 
@@ -128,8 +126,7 @@ mod tests {
         Spi::run("INSERT INTO test_table (c) VALUES ('test');").unwrap();
 
         let copy_to_query = format!(
-            "COPY (SELECT * FROM test_table) TO '{}' WITH (format parquet);",
-            LOCAL_TEST_FILE_PATH
+            "COPY (SELECT * FROM test_table) TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
         );
         Spi::run(copy_to_query.as_str()).unwrap();
 
@@ -138,8 +135,7 @@ mod tests {
         Spi::run("TRUNCATE test_table;").unwrap();
 
         let copy_from_query = format!(
-            "COPY test_table FROM '{}' WITH (format parquet, match_by 'name');",
-            LOCAL_TEST_FILE_PATH
+            "COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet, match_by 'name');"
         );
         Spi::run(copy_from_query.as_str()).unwrap();
 
@@ -171,11 +167,10 @@ mod tests {
         let insert_data = "insert into test_table values (1, 'ali'), (2, 'veli');";
         Spi::run(insert_data).unwrap();
 
-        let copy_to_parquet = format!("copy test_table(id, name) to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_table(id, name) to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
-        let copy_from_parquet =
-            format!("copy test_table(id, name) from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_from_parquet = format!("copy test_table(id, name) from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
     }
 
@@ -185,10 +180,7 @@ mod tests {
         let create_table = "create table test_table(id int, name text);";
         Spi::run(create_table).unwrap();
 
-        let copy_to_parquet = format!(
-            "copy test_table(nonexistent) to '{}';",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to_parquet = format!("copy test_table(nonexistent) to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
     }
 
@@ -198,10 +190,8 @@ mod tests {
         let create_table = "create table test_table(id int, name text);";
         Spi::run(create_table).unwrap();
 
-        let copy_from_parquet = format!(
-            "copy test_table(nonexistent) from '{}';",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_from_parquet =
+            format!("copy test_table(nonexistent) from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
     }
 
@@ -211,15 +201,12 @@ mod tests {
         Spi::run(create_table).unwrap();
 
         let copy_to_parquet = format!(
-            "copy (select i as id from generate_series(1,5) i) to '{}';",
-            LOCAL_TEST_FILE_PATH
+            "copy (select i as id from generate_series(1,5) i) to '{LOCAL_TEST_FILE_PATH}';"
         );
         Spi::run(&copy_to_parquet).unwrap();
 
-        let copy_from_parquet = format!(
-            "copy test_table from '{}' where id > 2;",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_from_parquet =
+            format!("copy test_table from '{LOCAL_TEST_FILE_PATH}' where id > 2;");
         Spi::run(&copy_from_parquet).unwrap();
 
         let result = Spi::connect(|client| {
@@ -241,14 +228,8 @@ mod tests {
     #[pg_test]
     #[should_panic(expected = "duplicate attribute \"a\" is not allowed in parquet schema")]
     fn test_with_duplicate_column_name() {
-        Spi::run(
-            format!(
-                "copy (select 1 as a, 2 as a) to '{}';",
-                LOCAL_TEST_FILE_PATH
-            )
-            .as_str(),
-        )
-        .unwrap();
+        Spi::run(format!("copy (select 1 as a, 2 as a) to '{LOCAL_TEST_FILE_PATH}';").as_str())
+            .unwrap();
     }
 
     #[pg_test]
@@ -256,10 +237,10 @@ mod tests {
         let create_table = "create table \"test _ta23BLe\"(\"id _asdsadasd343d\" int);";
         Spi::run(create_table).unwrap();
 
-        let copy_to_parquet = format!("copy \"test _ta23BLe\" to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy \"test _ta23BLe\" to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
-        let copy_from_parquet = format!("copy \"test _ta23BLe\" from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_from_parquet = format!("copy \"test _ta23BLe\" from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
     }
 
@@ -271,23 +252,21 @@ mod tests {
         let create_table = "create table test_schema.test_table (id int);";
         Spi::run(create_table).unwrap();
 
-        let copy_to_parquet = format!("copy test_schema.test_table to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_schema.test_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
-        let copy_from_parquet = format!(
-            "copy test_schema.test_table from '{}';",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_from_parquet =
+            format!("copy test_schema.test_table from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
 
         // test the same with search_path
         let set_search_path = "set search_path to test_schema;";
         Spi::run(set_search_path).unwrap();
 
-        let copy_to_parquet = format!("copy test_table to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
-        let copy_from_parquet = format!("copy test_table from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_from_parquet = format!("copy test_table from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
     }
 
@@ -317,10 +296,8 @@ mod tests {
         Spi::run(insert_data).unwrap();
 
         // success via query form
-        let copy_to_parquet = format!(
-            "copy (select * from partitioned_table) to '{}';",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to_parquet =
+            format!("copy (select * from partitioned_table) to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
         let total_rows = Spi::get_one::<i64>("select count(*) from partitioned_table;")
@@ -329,7 +306,7 @@ mod tests {
         assert_eq!(total_rows, 10);
 
         // should fail with partitioned table
-        let copy_to_parquet = format!("copy partitioned_table to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy partitioned_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
     }
 
@@ -346,10 +323,7 @@ mod tests {
         Spi::run(insert_data).unwrap();
 
         // success via query form
-        let copy_to_parquet = format!(
-            "copy (select * from test_view) to '{}'",
-            LOCAL_TEST_FILE_PATH
-        );
+        let copy_to_parquet = format!("copy (select * from test_view) to '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_to_parquet).unwrap();
 
         let total_rows = Spi::get_one::<i64>("select count(*) from test_view;")
@@ -358,7 +332,7 @@ mod tests {
         assert_eq!(total_rows, 10);
 
         // should fail with view
-        let copy_to_parquet = format!("copy test_view to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_view to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
     }
 
@@ -389,7 +363,7 @@ mod tests {
         let set_role = "set role test_role;";
         Spi::run(set_role).unwrap();
 
-        let copy_to_parquet = format!("copy test_table to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
         let reset_role = "reset role;";
@@ -398,7 +372,7 @@ mod tests {
         let truncate_table = "truncate test_table;";
         Spi::run(truncate_table).unwrap();
 
-        let copy_from_parquet = format!("copy test_table from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_from_parquet = format!("copy test_table from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
 
         let total_rows = Spi::get_one::<i64>("select count(*) from test_table;")
@@ -417,7 +391,7 @@ mod tests {
         let insert_data = "insert into test_table values ('postgres'), ('dummy'), ('test_role');";
         Spi::run(insert_data).unwrap();
 
-        let copy_to_parquet = format!("copy test_table to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
 
         let create_role = "create role test_role;";
@@ -439,7 +413,7 @@ mod tests {
         let set_role = "set role test_role;";
         Spi::run(set_role).unwrap();
 
-        let copy_from_parquet = format!("copy test_table from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_from_parquet = format!("copy test_table from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
     }
 
@@ -458,7 +432,7 @@ mod tests {
         let set_role = "set role test_role;";
         Spi::run(set_role).unwrap();
 
-        let copy_to_parquet = format!("copy test_table to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
     }
 
@@ -477,7 +451,7 @@ mod tests {
         let set_role = "set role test_role;";
         Spi::run(set_role).unwrap();
 
-        let copy_from_parquet = format!("copy test_table from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_from_parquet = format!("copy test_table from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
     }
 
@@ -496,7 +470,7 @@ mod tests {
         let set_role = "set role test_role;";
         Spi::run(set_role).unwrap();
 
-        let copy_to_parquet = format!("copy test_table to '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
     }
 
@@ -518,7 +492,7 @@ mod tests {
         let set_role = "set role test_role;";
         Spi::run(set_role).unwrap();
 
-        let copy_from_parquet = format!("copy test_table from '{}';", LOCAL_TEST_FILE_PATH);
+        let copy_from_parquet = format!("copy test_table from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
     }
 }

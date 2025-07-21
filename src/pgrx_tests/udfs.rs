@@ -11,15 +11,13 @@ mod tests {
             create type person AS (id int, name text);
             create type worker AS (p person[], monthly_salary decimal(15,6));
             create table workers (id int, workers worker[], company text);
-            copy workers to '{}';
-        ",
-            LOCAL_TEST_FILE_PATH
+            copy workers to '{LOCAL_TEST_FILE_PATH}';
+        "
         );
         Spi::run(&ddls).unwrap();
 
         let parquet_schema_command = format!(
-            "select * from parquet.schema('{}') ORDER BY name, converted_type;",
-            LOCAL_TEST_FILE_PATH
+            "select * from parquet.schema('{LOCAL_TEST_FILE_PATH}') ORDER BY name, converted_type;"
         );
 
         let result_schema = Spi::connect(|client| {
@@ -231,17 +229,14 @@ mod tests {
             create type person AS (id int, name text);
             create type worker AS (p person[], monthly_salary decimal(15,6));
             create table workers (id int, workers worker[], company text);
-            insert into workers select i, null::worker[], null from generate_series(1, {}) i;
-            copy workers to '{}' with (row_group_size {});
-        ",
-            total_rows, LOCAL_TEST_FILE_PATH, row_group_size
+            insert into workers select i, null::worker[], null from generate_series(1, {total_rows}) i;
+            copy workers to '{LOCAL_TEST_FILE_PATH}' with (row_group_size {row_group_size});
+        "
         );
         Spi::run(&ddls).unwrap();
 
-        let parquet_metadata_command = format!(
-            "select * from parquet.metadata('{}');",
-            LOCAL_TEST_FILE_PATH
-        );
+        let parquet_metadata_command =
+            format!("select * from parquet.metadata('{LOCAL_TEST_FILE_PATH}');");
 
         // Debug (assert_eq! requires) is only implemented for tuples up to 12 elements. This is why we split the
         // metadata into two parts.
@@ -588,17 +583,14 @@ mod tests {
             create type person AS (id int, name text);
             create type worker AS (p person[], monthly_salary decimal(15,6));
             create table workers (id int, workers worker[], company text);
-            insert into workers select i, null::worker[], null from generate_series(1, {}) i;
-            copy workers to '{}' with (row_group_size {});
-        ",
-            total_rows, LOCAL_TEST_FILE_PATH, row_group_size
+            insert into workers select i, null::worker[], null from generate_series(1, {total_rows}) i;
+            copy workers to '{LOCAL_TEST_FILE_PATH}' with (row_group_size {row_group_size});
+        "
         );
         Spi::run(&ddls).unwrap();
 
-        let parquet_file_metadata_command = format!(
-            "select * from parquet.file_metadata('{}');",
-            LOCAL_TEST_FILE_PATH
-        );
+        let parquet_file_metadata_command =
+            format!("select * from parquet.file_metadata('{LOCAL_TEST_FILE_PATH}');");
         let result_file_metadata = Spi::connect(|client| {
             let mut results = Vec::new();
             let tup_table = client
@@ -638,15 +630,13 @@ mod tests {
             create type person AS (id int, name text);
             create type worker AS (p person[], monthly_salary decimal(15,6));
             create table workers (id int, workers worker[], company text);
-            copy workers to '{}';
-        ",
-            LOCAL_TEST_FILE_PATH
+            copy workers to '{LOCAL_TEST_FILE_PATH}';
+        "
         );
         Spi::run(&ddls).unwrap();
 
         let parquet_kv_metadata_command = format!(
-            "select uri, encode(key, 'escape') as key, value from parquet.kv_metadata('{}');",
-            LOCAL_TEST_FILE_PATH
+            "select uri, encode(key, 'escape') as key, value from parquet.kv_metadata('{LOCAL_TEST_FILE_PATH}');"
         );
 
         let result_kv_metadata = Spi::connect(|client| {
@@ -797,8 +787,7 @@ mod tests {
         Spi::run(&ddls).unwrap();
 
         let parquet_column_stats_command = format!(
-            "select * from parquet.column_stats('{}') order by field_id;",
-            LOCAL_TEST_FILE_PATH
+            "select * from parquet.column_stats('{LOCAL_TEST_FILE_PATH}') order by field_id;"
         );
         let result_column_stats = Spi::connect(|client| {
             let mut results = Vec::new();

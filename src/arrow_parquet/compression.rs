@@ -52,10 +52,7 @@ impl PgParquetCompression {
                     BrotliLevel::try_new(compression_level as u32)
                         .unwrap_or_else(|e| panic!("{}", e));
                 }
-                _ => panic!(
-                    "compression level is not supported for \"{}\" compression",
-                    self
-                ),
+                _ => panic!("compression level is not supported for \"{self}\" compression"),
             }
         }
     }
@@ -130,7 +127,7 @@ impl FromStr for PgParquetCompression {
         } else if s == PgParquetCompression::Zstd.to_string() {
             Ok(PgParquetCompression::Zstd)
         } else {
-            Err(format!("uncregonized compression format: {}", s))
+            Err(format!("uncregonized compression format: {s}"))
         }
     }
 }

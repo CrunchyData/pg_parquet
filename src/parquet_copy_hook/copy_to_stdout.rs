@@ -15,7 +15,7 @@ pub(crate) unsafe fn copy_file_to_stdout(uri_info: ParsedUriInfo, natts: i16) {
     let path = uri_as_string(&uri_info.uri);
 
     let mut file = File::open(path).unwrap_or_else(|e| {
-        panic!("could not open temp file: {}", e);
+        panic!("could not open temp file: {e}");
     });
 
     let is_binary = true;
@@ -27,7 +27,7 @@ pub(crate) unsafe fn copy_file_to_stdout(uri_info: ParsedUriInfo, natts: i16) {
 
     loop {
         let bytes_read = file.read(&mut send_buffer).unwrap_or_else(|e| {
-            panic!("could not read from temp file: {}", e);
+            panic!("could not read from temp file: {e}");
         });
 
         if bytes_read == 0 {

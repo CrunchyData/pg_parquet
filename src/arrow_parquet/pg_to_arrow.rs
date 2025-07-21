@@ -178,7 +178,7 @@ fn to_arrow_primitive_array(
                                 NonZeroUsize::new(attribute_context.attnum() as usize)
                                     .expect("invalid attnum"),
                             )
-                            .unwrap_or_else(|e| panic!("failed to get attribute: {}", e));
+                            .unwrap_or_else(|e| panic!("failed to get attribute: {e}"));
 
                         // this trick is needed to avoid having a bunch of
                         // reference counted tupledesc which comes from pgrx's "get_by_name".
@@ -277,7 +277,7 @@ fn to_arrow_list_array(
                                     NonZeroUsize::new(element_context.attnum() as usize)
                                         .expect("invalid attnum"),
                                 )
-                                .unwrap_or_else(|e| panic!("failed to get attribute: {}", e));
+                                .unwrap_or_else(|e| panic!("failed to get attribute: {e}"));
 
                         if let Some(attribute_val) = attribute_val {
                             let attribute_val = attribute_val

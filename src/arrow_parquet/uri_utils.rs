@@ -78,7 +78,7 @@ impl ParsedUriInfo {
     fn try_parse_uri(uri: &str) -> Result<Url, String> {
         if !uri.contains("://") {
             // local file
-            Url::from_file_path(uri).map_err(|_| format!("not a valid file path: {}", uri))
+            Url::from_file_path(uri).map_err(|_| format!("not a valid file path: {uri}"))
         } else {
             Url::parse(uri).map_err(|e| e.to_string())
         }
@@ -87,8 +87,7 @@ impl ParsedUriInfo {
     fn try_parse_scheme(uri: &Url) -> Result<(ObjectStoreScheme, Path), String> {
         ObjectStoreScheme::parse(uri).map_err(|_| {
             format!(
-                "unrecognized uri {}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes.",
-                uri
+                "unrecognized uri {uri}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes."
             )
         })
     }
@@ -148,7 +147,7 @@ pub(crate) fn uri_as_string(uri: &Url) -> String {
         // removes file:// prefix from the local path uri
         return uri
             .to_file_path()
-            .unwrap_or_else(|_| panic!("invalid local path: {}", uri))
+            .unwrap_or_else(|_| panic!("invalid local path: {uri}"))
             .to_string_lossy()
             .to_string();
     }

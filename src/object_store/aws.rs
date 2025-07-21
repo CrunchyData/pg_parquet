@@ -25,7 +25,7 @@ use super::object_store_cache::ObjectStoreWithExpiration;
 // - AWS_ALLOW_HTTP (env var only, object_store specific)
 pub(crate) fn create_s3_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     let bucket_name = parse_s3_bucket(uri).unwrap_or_else(|| {
-        panic!("unsupported s3 uri: {}", uri);
+        panic!("unsupported s3 uri: {uri}");
     });
 
     // we do not use builder::from_env() here because not all environment variables have

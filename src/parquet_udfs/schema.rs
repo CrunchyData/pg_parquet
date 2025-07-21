@@ -41,7 +41,7 @@ mod parquet {
 
         let root_type = parquet_schema.root_schema();
         let thrift_schema_elements = to_thrift(root_type).unwrap_or_else(|e| {
-            panic!("Failed to convert schema to thrift: {}", e);
+            panic!("Failed to convert schema to thrift: {e}");
         });
 
         let mut rows = vec![];

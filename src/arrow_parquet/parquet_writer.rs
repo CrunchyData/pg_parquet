@@ -118,14 +118,14 @@ impl ParquetWriterContext {
 
         PG_BACKEND_TOKIO_RUNTIME
             .block_on(parquet_writer.write(&record_batch))
-            .unwrap_or_else(|e| panic!("failed to write record batch: {}", e));
+            .unwrap_or_else(|e| panic!("failed to write record batch: {e}"));
 
         if parquet_writer.in_progress_rows() >= self.options.row_group_size as _
             || parquet_writer.in_progress_size() >= self.options.row_group_size_bytes as _
         {
             PG_BACKEND_TOKIO_RUNTIME
                 .block_on(parquet_writer.flush())
-                .unwrap_or_else(|e| panic!("failed to flush record batch: {}", e));
+                .unwrap_or_else(|e| panic!("failed to flush record batch: {e}"));
         }
     }
 
@@ -133,7 +133,7 @@ impl ParquetWriterContext {
     pub(crate) fn finalize(&mut self) {
         PG_BACKEND_TOKIO_RUNTIME
             .block_on(self.parquet_writer.finish())
-            .unwrap_or_else(|e| panic!("failed to finish parquet writer: {}", e));
+            .unwrap_or_else(|e| panic!("failed to finish parquet writer: {e}"));
     }
 
     pub(crate) fn bytes_written(&self) -> usize {

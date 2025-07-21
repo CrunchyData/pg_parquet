@@ -32,7 +32,7 @@ pub(crate) static PG_BACKEND_TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(||
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .unwrap_or_else(|e| panic!("failed to create tokio runtime: {}", e))
+        .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"))
 });
 
 #[pg_guard]

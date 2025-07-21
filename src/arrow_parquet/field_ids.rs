@@ -136,8 +136,7 @@ impl FieldIdMapping {
                             }
                             other_type => {
                                 panic!(
-                                "Map entry field should be a struct, but got '{:?}' for field '{}'",
-                                other_type, field_name
+                                "Map entry field should be a struct, but got '{other_type:?}' for field '{field_name}'"
                             );
                             }
                         };
@@ -145,10 +144,7 @@ impl FieldIdMapping {
                         return Ok(());
                     }
                     other_type => {
-                        panic!(
-                            "Unexpected data type '{:?}' for field '{}'",
-                            other_type, field_name
-                        );
+                        panic!("Unexpected data type '{other_type:?}' for field '{field_name}'");
                     }
                 },
             }

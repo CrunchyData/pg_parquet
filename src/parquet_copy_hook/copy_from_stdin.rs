@@ -64,7 +64,7 @@ pub(crate) unsafe fn copy_stdin_to_file(uri_info: &ParsedUriInfo, natts: i16, is
             /* copy bytes from fe_msgbuf to the destination file */
             file.write_all(&receive_buffer[..bytes_read])
                 .unwrap_or_else(|e| {
-                    panic!("could not write to file: {}", e);
+                    panic!("could not write to file: {e}");
                 });
         }
     }
@@ -137,10 +137,7 @@ unsafe fn receive_data_from_client(
                     PQ_SMALL_MESSAGE_LIMIT
                 }
                 _ => {
-                    panic!(
-                        "unexpected message type 0x{:02X} during COPY from stdin",
-                        mtype
-                    );
+                    panic!("unexpected message type 0x{mtype:02X} during COPY from stdin");
                 }
             };
 
@@ -174,10 +171,7 @@ unsafe fn receive_data_from_client(
                     continue;
                 }
                 _ => {
-                    panic!(
-                        "unexpected message type 0x{:02X} during COPY from stdin",
-                        mtype
-                    );
+                    panic!("unexpected message type 0x{mtype:02X} during COPY from stdin");
                 }
             }
         }

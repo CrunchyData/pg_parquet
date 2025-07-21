@@ -60,10 +60,7 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
         };
 
         if format != "parquet" {
-            panic!(
-                "{} is not a valid format. Only parquet format is supported.",
-                format
-            );
+            panic!("{format} is not a valid format. Only parquet format is supported.");
         }
     }
 
@@ -79,7 +76,7 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
         };
 
         parse_file_size(file_size_bytes)
-            .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {}", e));
+            .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {e}"));
     }
 
     let field_ids_option = copy_stmt_get_option(p_stmt, "field_ids");
@@ -173,10 +170,7 @@ pub(crate) fn validate_copy_from_options(p_stmt: &PgBox<PlannedStmt>) {
         };
 
         if format != "parquet" {
-            panic!(
-                "{} is not a valid format. Only parquet format is supported.",
-                format
-            );
+            panic!("{format} is not a valid format. Only parquet format is supported.");
         }
     }
 }
@@ -243,7 +237,7 @@ pub(crate) fn copy_to_stmt_file_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
         };
 
         parse_file_size(file_size_bytes)
-            .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {}", e)) as i64
+            .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {e}")) as i64
     }
 }
 
@@ -459,7 +453,7 @@ fn is_parquet_format_option(p_stmt: &PgBox<PlannedStmt>) -> bool {
     let format = unsafe {
         CStr::from_ptr(format)
             .to_str()
-            .unwrap_or_else(|e| panic!("format option is not a valid CString: {}", e))
+            .unwrap_or_else(|e| panic!("format option is not a valid CString: {e}"))
     };
 
     format == "parquet"
@@ -653,7 +647,7 @@ fn parse_file_size(size_str: &str) -> Result<u64, String> {
 
     // If there's no numeric portion, return an error
     if idx == 0 {
-        return Err(format!("No numeric value found in '{}'", size_str));
+        return Err(format!("No numeric value found in '{size_str}'"));
     }
 
     // Split into numeric part and (optional) unit
@@ -663,7 +657,7 @@ fn parse_file_size(size_str: &str) -> Result<u64, String> {
     // Convert the numeric portion
     let mut bytes = match num_part.parse::<u64>() {
         Ok(n) => n,
-        Err(_) => return Err(format!("Invalid numeric portion in '{}'", size_str)),
+        Err(_) => return Err(format!("Invalid numeric portion in '{size_str}'")),
     };
 
     // Interpret the suffix, if present
@@ -674,15 +668,14 @@ fn parse_file_size(size_str: &str) -> Result<u64, String> {
         "GB" => bytes *= 1_024 * 1_024 * 1_024,
         _ => {
             return Err(format!(
-                "Unrecognized unit '{}'. Allowed units are KB, MB or GB.",
-                unit_part
+                "Unrecognized unit '{unit_part}'. Allowed units are KB, MB or GB."
             ))
         }
     }
 
     // Enforce a minimum of 1MB
     if bytes < 1_024 * 1_024 {
-        return Err(format!("Minimum allowed size is 1MB. Got {} bytes.", bytes));
+        return Err(format!("Minimum allowed size is 1MB. Got {bytes} bytes."));
     }
 
     Ok(bytes)

@@ -22,7 +22,7 @@ use super::object_store_cache::ObjectStoreWithExpiration;
 // - AZURE_ALLOW_HTTP (env var only, object_store specific)
 pub(crate) fn create_azure_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     let container_name = parse_azure_blob_container(uri).unwrap_or_else(|| {
-        panic!("unsupported azure blob storage uri: {}", uri);
+        panic!("unsupported azure blob storage uri: {uri}");
     });
 
     let mut azure_builder = MicrosoftAzureBuilder::new().with_container_name(container_name);

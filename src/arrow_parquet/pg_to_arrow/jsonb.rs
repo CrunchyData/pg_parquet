@@ -15,7 +15,7 @@ impl PgTypeToArrowArray<JsonB> for Vec<Option<JsonB>> {
             .map(|jsonb| {
                 jsonb.map(|jsonb| {
                     serde_json::to_string(&jsonb)
-                        .unwrap_or_else(|e| panic!("failed to serialize jsonb value: {}", e))
+                        .unwrap_or_else(|e| panic!("failed to serialize jsonb value: {e}"))
                 })
             })
             .collect::<Vec<_>>();
@@ -38,7 +38,7 @@ impl PgTypeToArrowArray<JsonB> for Vec<Option<Vec<Option<JsonB>>>> {
             .map(|jsonb| {
                 jsonb.map(|jsonb| {
                     serde_json::to_string(&jsonb)
-                        .unwrap_or_else(|e| panic!("failed to serialize jsonb value: {}", e))
+                        .unwrap_or_else(|e| panic!("failed to serialize jsonb value: {e}"))
                 })
             })
             .collect::<Vec<_>>();

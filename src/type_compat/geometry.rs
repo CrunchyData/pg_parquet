@@ -159,10 +159,7 @@ pub(crate) fn geoparquet_metadata_json_from_tupledesc(tupledesc: &PgTupleDesc) -
 
     geometry_columns_metadata.map(|metadata| {
         serde_json::to_string(&metadata).unwrap_or_else(|_| {
-            panic!(
-                "failed to serialize geometry columns metadata {:?}",
-                metadata
-            )
+            panic!("failed to serialize geometry columns metadata {metadata:?}")
         })
     })
 }

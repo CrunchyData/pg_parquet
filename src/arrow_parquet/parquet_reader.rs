@@ -147,11 +147,11 @@ impl ParquetReaderContext {
                 MatchBy::Position => record_batch
                     .columns()
                     .get(attribute_idx)
-                    .unwrap_or_else(|| panic!("column {} not found", name)),
+                    .unwrap_or_else(|| panic!("column {name} not found")),
 
                 MatchBy::Name => record_batch
                     .column_by_name(name)
-                    .unwrap_or_else(|| panic!("column {} not found", name)),
+                    .unwrap_or_else(|| panic!("column {name} not found")),
             };
 
             let datum = if attribute_context.needs_cast() {
@@ -163,7 +163,7 @@ impl ParquetReaderContext {
 
                 let casted_column_array =
                     cast_with_options(&column_array, attribute_context.data_type(), &cast_options)
-                        .unwrap_or_else(|e| panic!("failed to cast column {}: {}", name, e));
+                        .unwrap_or_else(|e| panic!("failed to cast column {name}: {e}"));
 
                 to_pg_datum(casted_column_array.to_data(), attribute_context)
             } else {
@@ -192,7 +192,7 @@ impl ParquetReaderContext {
 
         if let Some(batch_result) = record_batch {
             let record_batch =
-                batch_result.unwrap_or_else(|e| panic!("failed to read record batch: {}", e));
+                batch_result.unwrap_or_else(|e| panic!("failed to read record batch: {e}"));
 
             let num_rows = record_batch.num_rows();
 

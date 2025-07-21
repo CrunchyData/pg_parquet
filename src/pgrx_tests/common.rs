@@ -25,10 +25,10 @@ pub(crate) fn comma_separated_copy_options(options: &HashMap<String, CopyOptionV
     for (option_idx, (key, value)) in options.iter().enumerate() {
         match value {
             CopyOptionValue::StringOption(value) => {
-                comma_sepated_options.push_str(&format!("{} '{}'", key, value));
+                comma_sepated_options.push_str(&format!("{key} '{value}'"));
             }
             CopyOptionValue::IntOption(value) => {
-                comma_sepated_options.push_str(&format!("{} {}", key, value));
+                comma_sepated_options.push_str(&format!("{key} {value}"));
             }
         }
 
@@ -358,10 +358,8 @@ pub(crate) fn timetz_array_to_utc_time_array(
 }
 
 pub(crate) fn extension_exists(extension_name: &str) -> bool {
-    let query = format!(
-        "select count(*) = 1 from pg_available_extensions where name = '{}'",
-        extension_name
-    );
+    let query =
+        format!("select count(*) = 1 from pg_available_extensions where name = '{extension_name}'");
 
     Spi::get_one(&query).unwrap().unwrap()
 }

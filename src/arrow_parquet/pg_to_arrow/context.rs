@@ -39,7 +39,7 @@ impl PgToArrowAttributeContext {
         let field = fields
             .iter()
             .find(|field| field.name() == &name)
-            .unwrap_or_else(|| panic!("failed to find field {}", name))
+            .unwrap_or_else(|| panic!("failed to find field {name}"))
             .clone();
 
         let type_context =

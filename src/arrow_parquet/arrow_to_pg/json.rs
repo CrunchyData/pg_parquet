@@ -11,7 +11,7 @@ impl ArrowArrayToPgType<Json> for StringArray {
         } else {
             let val = self.value(0);
             Some(Json(
-                serde_json::from_str(val).unwrap_or_else(|_| panic!("invalid json: {}", val)),
+                serde_json::from_str(val).unwrap_or_else(|_| panic!("invalid json: {val}")),
             ))
         }
     }
@@ -23,7 +23,7 @@ impl ArrowArrayToPgType<Vec<Option<Json>>> for StringArray {
         let mut vals = vec![];
         for val in self.iter() {
             let val = val.map(|val| {
-                Json(serde_json::from_str(val).unwrap_or_else(|_| panic!("invalid json: {}", val)))
+                Json(serde_json::from_str(val).unwrap_or_else(|_| panic!("invalid json: {val}")))
             });
             vals.push(val);
         }

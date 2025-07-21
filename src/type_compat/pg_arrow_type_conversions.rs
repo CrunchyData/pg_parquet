@@ -178,7 +178,7 @@ pub(crate) fn i64_to_timetz(i64_timetz: i64) -> TimeWithTimeZone {
 fn error_if_special_numeric(numeric: AnyNumeric) {
     if ["NaN", "Infinity", "-Infinity"]
         .iter()
-        .any(|&s| format!("{}", numeric) == s)
+        .any(|&s| format!("{numeric}") == s)
     {
         ereport!(
         pgrx::PgLogLevel::ERROR,
@@ -195,10 +195,10 @@ pub(crate) fn numeric_to_i128(numeric: AnyNumeric, typmod: i32, col_name: &str) 
     let numeric_str = if is_unbounded_numeric_typmod(typmod) {
         let rescaled_unbounded_numeric = rescale_unbounded_numeric_or_error(numeric, col_name);
 
-        format!("{}", rescaled_unbounded_numeric)
+        format!("{rescaled_unbounded_numeric}")
     } else {
         // format returns a string representation of the numeric value based on numeric_out
-        format!("{}", numeric)
+        format!("{numeric}")
     };
 
     let normalized_numeric_str = numeric_str.replace('.', "");
@@ -253,7 +253,7 @@ fn rescale_unbounded_numeric_or_error(
     unbounded_numeric: AnyNumeric,
     col_name: &str,
 ) -> Numeric<DEFAULT_UNBOUNDED_NUMERIC_PRECISION, DEFAULT_UNBOUNDED_NUMERIC_SCALE> {
-    let unbounded_numeric_str = format!("{}", unbounded_numeric);
+    let unbounded_numeric_str = format!("{unbounded_numeric}");
 
     let (n_integral_digits, n_scale_digits) =
         unbounded_numeric_value_digits(&unbounded_numeric_str);

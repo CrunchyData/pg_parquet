@@ -14,7 +14,7 @@ impl FromStr for MatchBy {
         match s {
             "position" => Ok(MatchBy::Position),
             "name" => Ok(MatchBy::Name),
-            _ => Err(format!("unrecognized match_by method: {}", s)),
+            _ => Err(format!("unrecognized match_by method: {s}")),
         }
     }
 }
