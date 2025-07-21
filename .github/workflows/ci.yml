@@ -122,7 +122,7 @@ jobs:
 
       - name: Install pgrx
         run: |
-          cargo install --locked cargo-pgrx@0.14.1
+          cargo install --locked cargo-pgrx@0.15.0
 
       - name: Install cargo-llvm-cov for coverage report
         run: cargo install --locked cargo-llvm-cov@0.6.12

@@ -1010,6 +1010,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 
 [[package]]
+name = "codepage"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48f68d061bc2828ae826206326e61251aca94c1e4a5305cf52d9138639c918b4"
+dependencies = [
+ "encoding_rs",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1165,6 +1174,15 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "enum-map"
@@ -2574,9 +2592,9 @@ dependencies = [
 
 [[package]]
 name = "pgrx"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab5a7f1a5bac3a76a4fa056655eb80e394c5216717bf4673c99d9d10583e960d"
+checksum = "bab5bc1d60d3bc3c966d307a3c7313b1ebfb49a0ec183be3f1a057df0bcc9988"
 dependencies = [
  "atomic-traits",
  "bitflags",
@@ -2598,9 +2616,9 @@ dependencies = [
 
 [[package]]
 name = "pgrx-bindgen"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09e1a6df74e60ac82d6ad52f8a2a85e5d7004f9dfc7c52c94d461d9193aafa0b"
+checksum = "9804b74c211a9edd550cd974718f8cc407dec50d8e9cafb906e0b042ba434af0"
 dependencies = [
  "bindgen",
  "cc",
@@ -2617,9 +2635,9 @@ dependencies = [
 
 [[package]]
 name = "pgrx-macros"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "868ae3cb1762dcca0e236d4b5368315d4f377acbfff31d8fad9f47394d2e4bcd"
+checksum = "f230769493bf567f137de23264d604d267dd72b8a77c596528e43cf423c6208e"
 dependencies = [
  "pgrx-sql-entity-graph",
  "proc-macro2",
@@ -2629,11 +2647,13 @@ dependencies = [
 
 [[package]]
 name = "pgrx-pg-config"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "421be70840655a502381d4ac84b263da83c6714018e27bfdcd7c48f32ff60ef6"
+checksum = "49b64c071c2a46a19ab4521120a25b02b598f4abf6e9b4b1769a7922edeee3de"
 dependencies = [
  "cargo_toml",
+ "codepage",
+ "encoding_rs",
  "eyre",
  "home",
  "owo-colors",
@@ -2643,13 +2663,14 @@ dependencies = [
  "thiserror 2.0.12",
  "toml",
  "url",
+ "winapi",
 ]
 
 [[package]]
 name = "pgrx-pg-sys"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c844a49ee575cf4bd3340c483e49160a99b1bd8c5fd2e87fc7a9231566cb07f2"
+checksum = "fcbfa98ec7a90252d13a78ac666541173dbb01a2fc1ba20131db6490c0711125"
 dependencies = [
  "cee-scape",
  "libc",
@@ -2662,9 +2683,9 @@ dependencies = [
 
 [[package]]
 name = "pgrx-sql-entity-graph"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "391595ab6d13f65728bdd691fdd58e69bb31f1f092886ed0a11c838de1d01ae9"
+checksum = "e79bbf5a33cff6cfdc6dda3a976cd931c995eaa2c073a7c59b8f8fe8f6faa073"
 dependencies = [
  "convert_case",
  "eyre",
@@ -2678,9 +2699,9 @@ dependencies = [
 
 [[package]]
 name = "pgrx-tests"
-version = "0.14.1"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c526ae1a3c5cdf10fb4a4a7179759d557da1724b38bcfee3f1d0d8fb5fd67509"
+checksum = "9791c709882f3af9545bcca71670fdd82768f67a428b416b6210eae3773dbd0d"
 dependencies = [
  "clap-cargo",
  "eyre",
