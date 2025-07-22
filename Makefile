@@ -1,6 +1,7 @@
 .PHONY: init-pgrx build clean install uninstall package \
 	check check-with-coverage check-minio check-azure check-gcs check-http check-format check-lint \
-	start-containers stop-containers start-minio stop-minio start-azurite stop-azurite start-fake-gcs stop-fake-gcs start-web-dav stop-web-dav
+	start-containers stop-containers start-mitmdump stop-mitmdump start-minio stop-minio \
+	start-azurite stop-azurite start-fake-gcs stop-fake-gcs start-web-dav stop-web-dav
 
 ENVFILE ?= .devcontainer/.env
 
@@ -70,7 +71,16 @@ start-containers: start-minio start-azurite start-fake-gcs start-web-dav
 
 stop-containers: stop-minio stop-azurite stop-fake-gcs stop-web-dav
 
-start-minio:
+start-mitmdump:
+	pipenv run mitmdump -s patch_arn_xml.py \
+				--mode reverse:${AWS_ENDPOINT_URL} \
+				--set keep_host_header=true \
+				--listen-port ${AWS_ENDPOINT_PROXY_PORT} 2>&1 > /dev/null &
+
+stop-mitmdump:
+	pkill -9 mitmdump || true
+
+start-minio: start-mitmdump
 	docker run --rm -d \
 	  --name minio \
 	  --env-file $(ENVFILE) \
@@ -84,7 +94,7 @@ start-minio:
 	  sleep 1; \
 	done
 
-stop-minio:
+stop-minio: stop-mitmdump
 	docker stop minio || true
 
 start-azurite:

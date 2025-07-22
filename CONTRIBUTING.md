@@ -108,6 +108,7 @@ Our [Makefile](Makefile) automates setting up all containers and running tests f
 - docker
 - azure cli
 - pgaudit extension
+- python3.11 and pipenv
 
 # Format and Lint
 

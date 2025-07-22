@@ -14,3 +14,4 @@
 lcov.info
 playground.rs
 *.env
+*.pyc

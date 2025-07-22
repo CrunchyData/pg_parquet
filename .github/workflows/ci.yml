@@ -96,6 +96,17 @@ jobs:
           path: ${{ env.SCCACHE_DIR }}
           key: pg_parquet-sccache-cache-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.github/workflows/ci.yml') }}
 
+      - name: Install python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pipenv' # caching pip dependencies
+
+      - name: Install pipenv
+        run: |
+          curl https://raw.githubusercontent.com/pypa/pipenv/master/get-pipenv.py | python
+          pipenv install --dev
+
       - name: Install PostgreSQL
         run: |
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'

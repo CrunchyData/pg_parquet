@@ -271,8 +271,8 @@ mod tests {
         std::env::remove_var("AWS_SECRET_ACCESS_KEY");
         let region = std::env::var("AWS_REGION").unwrap();
         std::env::remove_var("AWS_REGION");
-        let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap();
         std::env::remove_var("AWS_ENDPOINT_URL");
+        let proxy_port = std::env::var("AWS_ENDPOINT_PROXY_PORT").unwrap();
 
         let profile = "pg_parquet_test";
 
@@ -285,8 +285,8 @@ mod tests {
             [profile {profile}]\n\
             region={region}\n\
             source_profile={profile}-source\n\
-            role_arn=arn:aws:iam::123456789012:dummy\n\
-            endpoint_url={endpoint}\n"
+            role_arn=arn:aws:iam::000000000000:role/DummyRole\n\
+            endpoint_url=http://localhost:{proxy_port}\n"
         );
         std::env::set_var("AWS_PROFILE", profile);
 
