@@ -700,6 +700,20 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_all_null_uuid() {
+        let test_table = TestTable::<Uuid>::new("uuid".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (null), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_all_null_uuid_array() {
+        let test_table = TestTable::<Vec<Option<Uuid>>>::new("uuid[]".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array[null]::uuid[]);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
     fn test_json() {
         let test_table = TestTable::<Json>::new("json".into()).with_order_by_col("a->>'a'".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES ('{\"a\":\"test_json_1\"}'), ('{\"a\":\"test_json_2\"}'), (null);");
