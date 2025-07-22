@@ -14,7 +14,9 @@ impl PgTypeToArrowArray<Uuid> for Vec<Option<Uuid>> {
             .iter()
             .map(|uuid| uuid.as_ref().map(|uuid| uuid.as_bytes().as_slice()))
             .collect::<Vec<_>>();
-        let uuid_array = FixedSizeBinaryArray::from(uuids);
+        let uuid_array =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(uuids.into_iter(), 16)
+                .expect("Failed to create FixedSizeBinaryArray from Uuid");
         Arc::new(uuid_array)
     }
 }
@@ -32,7 +34,9 @@ impl PgTypeToArrowArray<Uuid> for Vec<Option<Vec<Option<Uuid>>>> {
             .map(|uuid| uuid.as_ref().map(|uuid| uuid.as_bytes().as_slice()))
             .collect::<Vec<_>>();
 
-        let uuid_array = FixedSizeBinaryArray::from(pg_array);
+        let uuid_array =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(pg_array.into_iter(), 16)
+                .expect("Failed to create FixedSizeBinaryArray from Uuid");
 
         let list_array = ListArray::new(
             element_context.field(),
