@@ -4,9 +4,10 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-mitmproxy = "==11.0.2"
+mitmproxy = "*"
+mitmproxy-linux = "*"
 
 [dev-packages]
 
 [requires]
-python_version = "3.11"
+python_version = "3"
