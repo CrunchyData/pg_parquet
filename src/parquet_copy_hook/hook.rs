@@ -24,7 +24,7 @@ use super::{
     copy_to_split_dest_receiver::free_copy_to_parquet_split_dest_receiver,
     copy_utils::{
         copy_to_stmt_compression, copy_to_stmt_field_ids, copy_to_stmt_file_size_bytes,
-        validate_copy_from_options, validate_copy_to_options,
+        copy_to_stmt_parquet_version, validate_copy_from_options, validate_copy_to_options,
     },
 };
 
@@ -64,6 +64,7 @@ fn process_copy_to_parquet(
     let row_group_size_bytes = copy_to_stmt_row_group_size_bytes(p_stmt);
     let compression = copy_to_stmt_compression(p_stmt, &uri_info);
     let compression_level = copy_to_stmt_compression_level(p_stmt, &uri_info);
+    let parquet_version = copy_to_stmt_parquet_version(p_stmt);
 
     let parquet_split_dest = create_copy_to_parquet_split_dest_receiver(
         uri_as_string(&uri_info.uri).as_pg_cstr(),
@@ -74,6 +75,7 @@ fn process_copy_to_parquet(
         &row_group_size_bytes,
         &compression,
         &compression_level.unwrap_or(INVALID_COMPRESSION_LEVEL),
+        &parquet_version,
     );
 
     let parquet_split_dest = unsafe { PgBox::from_pg(parquet_split_dest) };

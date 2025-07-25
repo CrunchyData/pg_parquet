@@ -94,6 +94,7 @@ impl ParquetWriterContext {
             .set_statistics_enabled(EnabledStatistics::Page)
             .set_compression(compression.into())
             .set_max_row_group_size(options.row_group_size as usize)
+            .set_writer_version(options.parquet_version.into())
             .set_created_by("pg_parquet".to_string());
 
         let geometry_columns_metadata_value = geoparquet_metadata_json_from_tupledesc(tupledesc);
