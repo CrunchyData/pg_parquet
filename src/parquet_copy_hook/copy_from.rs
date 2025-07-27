@@ -13,8 +13,11 @@ use pgrx::{
 
 use crate::{
     arrow_parquet::{parquet_reader::ParquetReaderContext, uri_utils::ParsedUriInfo},
-    parquet_copy_hook::copy_utils::{
-        copy_from_stmt_create_option_list, copy_stmt_lock_mode, copy_stmt_relation_oid,
+    parquet_copy_hook::{
+        copy_from_program::copy_program_to_file,
+        copy_utils::{
+            copy_from_stmt_create_option_list, copy_stmt_lock_mode, copy_stmt_relation_oid,
+        },
     },
 };
 
@@ -146,7 +149,9 @@ pub(crate) fn execute_copy_from(
     let match_by = copy_from_stmt_match_by(p_stmt);
 
     unsafe {
-        if uri_info.stdio_tmp_fd.is_some() {
+        if uri_info.program.is_some() {
+            copy_program_to_file(uri_info);
+        } else if uri_info.stdio_tmp_fd.is_some() {
             let is_binary = true;
             copy_stdin_to_file(uri_info, tupledesc.natts as _, is_binary);
         }
