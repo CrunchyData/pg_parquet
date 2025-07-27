@@ -40,10 +40,21 @@ pub(crate) struct ParsedUriInfo {
     pub(crate) path: Path,
     pub(crate) scheme: ObjectStoreScheme,
     pub(crate) stdio_tmp_fd: Option<i32>,
+    pub(crate) program: Option<*mut c_char>,
 }
 
 impl ParsedUriInfo {
     pub(crate) fn for_std_inout() -> Self {
+        Self::create_tmp_file()
+    }
+
+    pub(crate) fn for_program(program: *mut c_char) -> Self {
+        let mut uri_info = Self::create_tmp_file();
+        uri_info.program = Some(program);
+        uri_info
+    }
+
+    fn create_tmp_file() -> Self {
         // open temp postgres file, which is removed after transaction ends
         let tmp_path_fd = unsafe { OpenTemporaryFile(false) };
 
@@ -129,6 +140,7 @@ impl TryFrom<&str> for ParsedUriInfo {
             path,
             scheme,
             stdio_tmp_fd: None,
+            program: None,
         })
     }
 }
