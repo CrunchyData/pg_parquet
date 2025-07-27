@@ -1,4 +1,5 @@
 pub(crate) mod copy_from;
+pub(crate) mod copy_from_program;
 pub(crate) mod copy_from_stdin;
 pub(crate) mod copy_to;
 pub(crate) mod copy_to_dest_receiver;
