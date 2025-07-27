@@ -69,6 +69,7 @@ fn process_copy_to_parquet(
     let parquet_split_dest = create_copy_to_parquet_split_dest_receiver(
         uri_as_string(&uri_info.uri).as_pg_cstr(),
         uri_info.stdio_tmp_fd.is_some(),
+        uri_info.program.unwrap_or_default(),
         &file_size_bytes,
         field_ids,
         &row_group_size,
