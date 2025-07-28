@@ -8,7 +8,7 @@ use super::PgToArrowAttributeContext;
 
 // Float64
 impl PgTypeToArrowArray<f64> for Vec<Option<f64>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let double_array = Float64Array::from(self);
         Arc::new(double_array)
     }
@@ -16,7 +16,7 @@ impl PgTypeToArrowArray<f64> for Vec<Option<f64>> {
 
 // Float64[]
 impl PgTypeToArrowArray<f64> for Vec<Option<Vec<Option<f64>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

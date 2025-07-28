@@ -9,7 +9,7 @@ use super::PgToArrowAttributeContext;
 
 // JsonB
 impl PgTypeToArrowArray<JsonB> for Vec<Option<JsonB>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let jsonbs = self
             .into_iter()
             .map(|jsonb| {
@@ -27,7 +27,7 @@ impl PgTypeToArrowArray<JsonB> for Vec<Option<JsonB>> {
 
 // JsonB[]
 impl PgTypeToArrowArray<JsonB> for Vec<Option<Vec<Option<JsonB>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

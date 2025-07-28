@@ -12,7 +12,7 @@ use super::PgToArrowAttributeContext;
 
 // TimestampTz
 impl PgTypeToArrowArray<TimestampWithTimeZone> for Vec<Option<TimestampWithTimeZone>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let timestamptzs = self
             .into_iter()
             .map(|timestamptz| timestamptz.map(timestamptz_to_i64))
@@ -24,7 +24,7 @@ impl PgTypeToArrowArray<TimestampWithTimeZone> for Vec<Option<TimestampWithTimeZ
 
 // TimestampTz[]
 impl PgTypeToArrowArray<TimestampWithTimeZone> for Vec<Option<Vec<Option<TimestampWithTimeZone>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

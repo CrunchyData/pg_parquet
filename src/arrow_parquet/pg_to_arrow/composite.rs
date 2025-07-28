@@ -15,7 +15,7 @@ use super::{to_arrow_array, PgToArrowAttributeContext};
 impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
     for Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>
 {
-    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let struct_field = context.field();
 
         let fields = match struct_field.data_type() {
@@ -48,7 +48,7 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
 impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
     for Vec<Option<Vec<Option<PgHeapTuple<'_, AllocatedByRust>>>>>
 {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

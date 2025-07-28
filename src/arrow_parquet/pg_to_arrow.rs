@@ -21,7 +21,7 @@ use crate::{
     },
     type_compat::{
         fallback_to_text::{reset_fallback_to_text_context, FallbackToText},
-        geometry::{is_postgis_geometry_type, Geometry},
+        geometry::{Geography, Geometry},
         map::{is_map_type, reset_map_type_context, Map},
         pg_arrow_type_conversions::{
             extract_precision_and_scale_from_numeric_typmod, should_write_numeric_as_text,
@@ -38,6 +38,7 @@ pub(crate) mod date;
 pub(crate) mod fallback_to_text;
 pub(crate) mod float4;
 pub(crate) mod float8;
+pub(crate) mod geography;
 pub(crate) mod geometry;
 pub(crate) mod int2;
 pub(crate) mod int4;
@@ -55,12 +56,12 @@ pub(crate) mod timetz;
 pub(crate) mod uuid;
 
 pub(crate) trait PgTypeToArrowArray<T: FromDatum + UnboxDatum> {
-    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef;
+    fn to_arrow_array(self, context: &mut PgToArrowAttributeContext) -> ArrayRef;
 }
 
 pub(crate) fn to_arrow_array(
     tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
-    attribute_context: &PgToArrowAttributeContext,
+    attribute_context: &mut PgToArrowAttributeContext,
 ) -> ArrayRef {
     if attribute_context.is_array() {
         to_arrow_list_array(tuples, attribute_context)
@@ -126,7 +127,7 @@ macro_rules! to_arrow_list_array {
 
 fn to_arrow_primitive_array(
     tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
-    attribute_context: &PgToArrowAttributeContext,
+    attribute_context: &mut PgToArrowAttributeContext,
 ) -> ArrayRef {
     match attribute_context.typoid() {
         FLOAT4OID => to_arrow_primitive_array!(f32, tuples, attribute_context),
@@ -205,6 +206,8 @@ fn to_arrow_primitive_array(
                 to_arrow_primitive_array!(Map, tuples, attribute_context)
             } else if attribute_context.is_geometry() {
                 to_arrow_primitive_array!(Geometry, tuples, attribute_context)
+            } else if attribute_context.is_geography() {
+                to_arrow_primitive_array!(Geography, tuples, attribute_context)
             } else {
                 reset_fallback_to_text_context(
                     attribute_context.typoid(),
@@ -219,7 +222,7 @@ fn to_arrow_primitive_array(
 
 fn to_arrow_list_array(
     tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
-    attribute_context: &PgToArrowAttributeContext,
+    attribute_context: &mut PgToArrowAttributeContext,
 ) -> ArrayRef {
     let element_context = attribute_context.element_context();
     let element_typoid = element_context.typoid();
@@ -314,6 +317,8 @@ fn to_arrow_list_array(
                 to_arrow_list_array!(pgrx::Array<Map>, tuples, element_context)
             } else if element_context.is_geometry() {
                 to_arrow_list_array!(pgrx::Array<Geometry>, tuples, element_context)
+            } else if element_context.is_geography() {
+                to_arrow_list_array!(pgrx::Array<Geography>, tuples, element_context)
             } else {
                 reset_fallback_to_text_context(element_typoid, element_typmod);
 

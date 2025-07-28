@@ -8,7 +8,7 @@ use super::PgToArrowAttributeContext;
 
 // Bytea
 impl PgTypeToArrowArray<&[u8]> for Vec<Option<&[u8]>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let byte_array = BinaryArray::from(self);
         Arc::new(byte_array)
     }
@@ -16,7 +16,7 @@ impl PgTypeToArrowArray<&[u8]> for Vec<Option<&[u8]>> {
 
 // Bytea[]
 impl PgTypeToArrowArray<&[u8]> for Vec<Option<Vec<Option<&[u8]>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

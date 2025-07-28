@@ -8,7 +8,7 @@ use super::PgToArrowAttributeContext;
 
 // Char
 impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let chars = self
             .into_iter()
             .map(|c| c.map(|c| (c as u8 as char).to_string()))
@@ -20,7 +20,7 @@ impl PgTypeToArrowArray<i8> for Vec<Option<i8>> {
 
 // "Char"[]
 impl PgTypeToArrowArray<i8> for Vec<Option<Vec<Option<i8>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

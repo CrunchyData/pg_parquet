@@ -23,7 +23,7 @@ use crate::{
         is_composite_type, is_generated_attribute, tuple_desc, CollectAttributesFor,
     },
     type_compat::{
-        geometry::is_postgis_geometry_type,
+        geometry::{is_postgis_geography_type, is_postgis_geometry_type},
         map::is_map_type,
         pg_arrow_type_conversions::{
             extract_precision_and_scale_from_numeric_typmod, should_write_numeric_as_text,
@@ -411,7 +411,7 @@ fn parse_primitive_schema(
         BYTEAOID => Field::new(scalar_name, arrow::datatypes::DataType::Binary, nullable),
         OIDOID => Field::new(scalar_name, arrow::datatypes::DataType::UInt32, nullable),
         _ => {
-            if is_postgis_geometry_type(typoid) {
+            if is_postgis_geometry_type(typoid) || is_postgis_geography_type(typoid) {
                 Field::new(scalar_name, arrow::datatypes::DataType::Binary, nullable)
             } else {
                 Field::new(scalar_name, arrow::datatypes::DataType::Utf8, nullable)

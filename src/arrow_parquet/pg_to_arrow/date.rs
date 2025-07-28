@@ -12,7 +12,7 @@ use super::PgToArrowAttributeContext;
 
 // Date
 impl PgTypeToArrowArray<Date> for Vec<Option<Date>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let dates = self
             .into_iter()
             .map(|date| date.map(date_to_i32))
@@ -24,7 +24,7 @@ impl PgTypeToArrowArray<Date> for Vec<Option<Date>> {
 
 // Date[]
 impl PgTypeToArrowArray<pgrx::Array<'_, Date>> for Vec<Option<Vec<Option<Date>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

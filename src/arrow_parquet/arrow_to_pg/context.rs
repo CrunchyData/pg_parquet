@@ -6,11 +6,14 @@ use pgrx::{
     PgTupleDesc,
 };
 
-use crate::type_compat::pg_arrow_type_conversions::extract_precision_and_scale_from_numeric_typmod;
+use crate::type_compat::{
+    geometry::{is_postgis_geography_type, is_postgis_geometry_type},
+    pg_arrow_type_conversions::extract_precision_and_scale_from_numeric_typmod,
+};
 
 use super::{
     array_element_typoid, collect_attributes_for, domain_array_base_elem_type, is_array_type,
-    is_composite_type, is_map_type, is_postgis_geometry_type, tuple_desc, CollectAttributesFor,
+    is_composite_type, is_map_type, tuple_desc, CollectAttributesFor,
 };
 
 // ArrowToPgAttributeContext contains the information needed to convert an Arrow array
@@ -100,6 +103,7 @@ impl ArrowToPgAttributeContext {
 pub(crate) enum ArrowToPgAttributeTypeContext {
     Primitive {
         is_geometry: bool,
+        is_geography: bool,
         precision: Option<u32>,
         scale: Option<u32>,
         timezone: Option<String>,
@@ -144,6 +148,8 @@ impl ArrowToPgAttributeTypeContext {
 
         let is_geometry = is_postgis_geometry_type(typoid);
 
+        let is_geography = is_postgis_geography_type(typoid);
+
         let timezone = match &data_type {
             DataType::Timestamp(_, Some(timezone)) => Some(timezone.to_string()),
             _ => None,
@@ -151,6 +157,7 @@ impl ArrowToPgAttributeTypeContext {
 
         Self::Primitive {
             is_geometry,
+            is_geography,
             precision,
             scale,
             timezone,
@@ -275,6 +282,13 @@ impl ArrowToPgAttributeTypeContext {
     pub(crate) fn is_geometry(&self) -> bool {
         match &self {
             ArrowToPgAttributeTypeContext::Primitive { is_geometry, .. } => *is_geometry,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn is_geography(&self) -> bool {
+        match &self {
+            ArrowToPgAttributeTypeContext::Primitive { is_geography, .. } => *is_geography,
             _ => false,
         }
     }

@@ -1,4 +1,8 @@
-use std::ops::Deref;
+use std::{
+    cell::RefCell,
+    ops::{Deref, DerefMut},
+    rc::Rc,
+};
 
 use arrow_schema::{FieldRef, Fields};
 use pgrx::{
@@ -6,10 +10,14 @@ use pgrx::{
     PgTupleDesc,
 };
 
+use crate::type_compat::geometry::{
+    is_postgis_geography_type, is_postgis_geometry_type, GeoparquetMetadata,
+};
+
 use super::{
     array_element_typoid, collect_attributes_for, domain_array_base_elem_type,
     extract_precision_and_scale_from_numeric_typmod, is_array_type, is_composite_type, is_map_type,
-    is_postgis_geometry_type, tuple_desc, CollectAttributesFor,
+    tuple_desc, CollectAttributesFor,
 };
 
 // PgToArrowAttributeContext contains the information needed to convert a PostgreSQL attribute
@@ -34,16 +42,34 @@ impl Deref for PgToArrowAttributeContext {
     }
 }
 
+impl DerefMut for PgToArrowAttributeContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.type_context
+    }
+}
+
 impl PgToArrowAttributeContext {
-    fn new(name: String, attnum: i16, typoid: Oid, typmod: i32, fields: Fields) -> Self {
+    fn new(
+        name: String,
+        attnum: i16,
+        typoid: Oid,
+        typmod: i32,
+        fields: Fields,
+        geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
+    ) -> Self {
         let field = fields
             .iter()
             .find(|field| field.name() == &name)
             .unwrap_or_else(|| panic!("failed to find field {name}"))
             .clone();
 
-        let type_context =
-            PgToArrowAttributeTypeContext::new(attnum, typoid, typmod, field.clone());
+        let type_context = PgToArrowAttributeTypeContext::new(
+            attnum,
+            typoid,
+            typmod,
+            field.clone(),
+            geoparquet_metadata,
+        );
 
         Self {
             field,
@@ -77,6 +103,8 @@ impl PgToArrowAttributeContext {
 pub(crate) enum PgToArrowAttributeTypeContext {
     Primitive {
         is_geometry: bool,
+        is_geography: bool,
+        geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
         precision: Option<u32>,
         scale: Option<u32>,
     },
@@ -94,19 +122,29 @@ pub(crate) enum PgToArrowAttributeTypeContext {
 
 impl PgToArrowAttributeTypeContext {
     // constructors
-    fn new(attnum: i16, typoid: Oid, typmod: i32, field: FieldRef) -> Self {
+    fn new(
+        attnum: i16,
+        typoid: Oid,
+        typmod: i32,
+        field: FieldRef,
+        geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
+    ) -> Self {
         if is_array_type(typoid) {
-            Self::new_array(attnum, typoid, typmod, field)
+            Self::new_array(attnum, typoid, typmod, field, geoparquet_metadata)
         } else if is_composite_type(typoid) {
-            Self::new_composite(typoid, typmod, field)
+            Self::new_composite(typoid, typmod, field, geoparquet_metadata)
         } else if is_map_type(typoid) {
-            Self::new_map(attnum, typoid, field)
+            Self::new_map(attnum, typoid, field, geoparquet_metadata)
         } else {
-            Self::new_primitive(typoid, typmod)
+            Self::new_primitive(typoid, typmod, geoparquet_metadata)
         }
     }
 
-    fn new_primitive(typoid: Oid, typmod: i32) -> Self {
+    fn new_primitive(
+        typoid: Oid,
+        typmod: i32,
+        geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
+    ) -> Self {
         let precision;
         let scale;
         if typoid == NUMERICOID {
@@ -120,14 +158,24 @@ impl PgToArrowAttributeTypeContext {
 
         let is_geometry = is_postgis_geometry_type(typoid);
 
+        let is_geography = is_postgis_geography_type(typoid);
+
         Self::Primitive {
             is_geometry,
+            is_geography,
+            geoparquet_metadata,
             precision,
             scale,
         }
     }
 
-    fn new_array(attnum: i16, typoid: Oid, typmod: i32, field: FieldRef) -> Self {
+    fn new_array(
+        attnum: i16,
+        typoid: Oid,
+        typmod: i32,
+        field: FieldRef,
+        geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
+    ) -> Self {
         let element_typoid = array_element_typoid(typoid);
         let element_typmod = typmod;
 
@@ -141,6 +189,7 @@ impl PgToArrowAttributeTypeContext {
             element_typoid,
             element_typmod,
             element_field.clone(),
+            geoparquet_metadata,
         );
 
         let element_context = Box::new(PgToArrowAttributeContext {
@@ -154,7 +203,12 @@ impl PgToArrowAttributeTypeContext {
         Self::Array { element_context }
     }
 
-    fn new_composite(typoid: Oid, typmod: i32, field: FieldRef) -> Self {
+    fn new_composite(
+        typoid: Oid,
+        typmod: i32,
+        field: FieldRef,
+        geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
+    ) -> Self {
         let tupledesc = tuple_desc(typoid, typmod);
         let fields = match field.data_type() {
             arrow::datatypes::DataType::Struct(fields) => fields.clone(),
@@ -163,7 +217,8 @@ impl PgToArrowAttributeTypeContext {
 
         let attributes = collect_attributes_for(CollectAttributesFor::Other, &tupledesc);
 
-        let attribute_contexts = collect_pg_to_arrow_attribute_contexts(&attributes, &fields);
+        let attribute_contexts =
+            collect_pg_to_arrow_attribute_contexts(&attributes, &fields, geoparquet_metadata);
 
         Self::Composite {
             tupledesc,
@@ -171,7 +226,12 @@ impl PgToArrowAttributeTypeContext {
         }
     }
 
-    fn new_map(attnum: i16, typoid: Oid, field: FieldRef) -> Self {
+    fn new_map(
+        attnum: i16,
+        typoid: Oid,
+        field: FieldRef,
+        geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
+    ) -> Self {
         let (entries_typoid, entries_typmod) = domain_array_base_elem_type(typoid);
 
         let entries_field = match field.data_type() {
@@ -184,6 +244,7 @@ impl PgToArrowAttributeTypeContext {
             entries_typoid,
             entries_typmod,
             entries_field.clone(),
+            geoparquet_metadata,
         );
 
         let entries_context = Box::new(PgToArrowAttributeContext {
@@ -224,7 +285,7 @@ impl PgToArrowAttributeTypeContext {
         }
     }
 
-    pub(crate) fn attribute_contexts(&self) -> &Vec<PgToArrowAttributeContext> {
+    pub(crate) fn attribute_contexts(&mut self) -> &mut Vec<PgToArrowAttributeContext> {
         match self {
             Self::Composite {
                 attribute_contexts, ..
@@ -234,7 +295,7 @@ impl PgToArrowAttributeTypeContext {
     }
 
     // map type methods
-    pub(crate) fn entries_context(&self) -> &PgToArrowAttributeContext {
+    pub(crate) fn entries_context(&mut self) -> &mut PgToArrowAttributeContext {
         match self {
             Self::Map { entries_context } => entries_context,
             _ => panic!("missing entries context in context"),
@@ -242,7 +303,7 @@ impl PgToArrowAttributeTypeContext {
     }
 
     // array type methods
-    pub(crate) fn element_context(&self) -> &PgToArrowAttributeContext {
+    pub(crate) fn element_context(&mut self) -> &mut PgToArrowAttributeContext {
         match self {
             Self::Array {
                 element_context, ..
@@ -270,11 +331,29 @@ impl PgToArrowAttributeTypeContext {
             _ => false,
         }
     }
+
+    pub(crate) fn is_geography(&self) -> bool {
+        match &self {
+            PgToArrowAttributeTypeContext::Primitive { is_geography, .. } => *is_geography,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn geoparquet_metadata(&mut self) -> Rc<RefCell<GeoparquetMetadata>> {
+        match self {
+            PgToArrowAttributeTypeContext::Primitive {
+                geoparquet_metadata,
+                ..
+            } => geoparquet_metadata.clone(),
+            _ => panic!("missing geoparquet metadata in context"),
+        }
+    }
 }
 
 pub(crate) fn collect_pg_to_arrow_attribute_contexts(
     attributes: &[FormData_pg_attribute],
     fields: &Fields,
+    geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
 ) -> Vec<PgToArrowAttributeContext> {
     let mut attribute_contexts = vec![];
 
@@ -290,6 +369,7 @@ pub(crate) fn collect_pg_to_arrow_attribute_contexts(
             attribute_typoid,
             attribute_typmod,
             fields.clone(),
+            geoparquet_metadata.clone(),
         );
 
         attribute_contexts.push(attribute_context);
