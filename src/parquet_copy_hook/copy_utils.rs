@@ -24,7 +24,7 @@ use crate::{
         parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
         uri_utils::ParsedUriInfo,
     },
-    pgrx_utils::extension_exists,
+    pgrx_utils::is_extension_created,
 };
 
 use self::field_ids::FieldIds;
@@ -483,12 +483,12 @@ fn is_copy_parquet_stmt(p_stmt: &PgBox<PlannedStmt>, copy_from: bool) -> bool {
     // this is why we check them after the uri checks
 
     // crunchy_query_engine should not be created
-    if extension_exists("crunchy_query_engine") {
+    if is_extension_created("crunchy_query_engine") {
         return false;
     }
 
     // pg_parquet should be created
-    if !extension_exists("pg_parquet") {
+    if !is_extension_created("pg_parquet") {
         ereport!(
             PgLogLevel::WARNING,
             PgSqlErrorCode::ERRCODE_WARNING,

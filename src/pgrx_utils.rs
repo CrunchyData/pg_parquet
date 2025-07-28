@@ -107,7 +107,7 @@ pub(crate) fn domain_array_base_elem_type(domain_typoid: Oid) -> (Oid, i32) {
     (array_element_typoid(base_array_typoid), base_array_typmod)
 }
 
-pub(crate) fn extension_exists(extension_name: &str) -> bool {
+pub(crate) fn is_extension_created(extension_name: &str) -> bool {
     let extension_name = extension_name.as_pg_cstr();
     let extension_oid = unsafe { get_extension_oid(extension_name, true) };
     extension_oid != InvalidOid

@@ -20,7 +20,7 @@ use crate::{
     },
     type_compat::{
         fallback_to_text::{reset_fallback_to_text_context, FallbackToText},
-        geometry::{is_postgis_geometry_type, Geometry},
+        geometry::{Geography, Geometry},
         map::{is_map_type, reset_map_type_context, Map},
     },
 };
@@ -34,6 +34,7 @@ pub(crate) mod date;
 pub(crate) mod fallback_to_text;
 pub(crate) mod float4;
 pub(crate) mod float8;
+pub(crate) mod geography;
 pub(crate) mod geometry;
 pub(crate) mod int2;
 pub(crate) mod int4;
@@ -127,6 +128,8 @@ fn to_pg_nonarray_datum(
         DataType::Binary => {
             if attribute_context.is_geometry() {
                 to_pg_datum!(BinaryArray, Geometry, primitive_array, attribute_context)
+            } else if attribute_context.is_geography() {
+                to_pg_datum!(BinaryArray, Geography, primitive_array, attribute_context)
             } else {
                 to_pg_datum!(BinaryArray, Vec<u8>, primitive_array, attribute_context)
             }
@@ -268,6 +271,13 @@ fn to_pg_array_datum(
                 to_pg_datum!(
                     BinaryArray,
                     Vec<Option<Geometry>>,
+                    list_array,
+                    element_context
+                )
+            } else if element_context.is_geography() {
+                to_pg_datum!(
+                    BinaryArray,
+                    Vec<Option<Geography>>,
                     list_array,
                     element_context
                 )

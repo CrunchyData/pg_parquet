@@ -5,7 +5,7 @@ mod tests {
     use std::vec;
 
     use crate::pgrx_tests::common::{
-        extension_exists, write_record_batch_to_parquet, LOCAL_TEST_FILE_PATH,
+        is_extension_available, write_record_batch_to_parquet, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::pg_arrow_type_conversions::{
         date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
@@ -886,7 +886,7 @@ mod tests {
     #[pg_test]
     fn test_coerce_map_types() {
         // Skip the test if crunchy_map extension is not available
-        if !extension_exists("crunchy_map") {
+        if !is_extension_available("crunchy_map") {
             return;
         }
 
@@ -946,7 +946,7 @@ mod tests {
     #[pg_test]
     fn test_coerce_list_of_map() {
         // Skip the test if crunchy_map extension is not available
-        if !extension_exists("crunchy_map") {
+        if !is_extension_available("crunchy_map") {
             return;
         }
 

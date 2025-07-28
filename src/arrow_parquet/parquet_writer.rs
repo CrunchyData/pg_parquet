@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -24,7 +24,7 @@ use crate::{
     parquet_copy_hook::copy_to_split_dest_receiver::CopyToParquetOptions,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
     type_compat::{
-        geometry::{geoparquet_metadata_json_from_tupledesc, reset_postgis_context},
+        geometry::{geoparquet_metadata_to_json, reset_postgis_context, GeoparquetMetadata},
         map::reset_map_context,
     },
     PG_BACKEND_TOKIO_RUNTIME,
@@ -43,6 +43,7 @@ pub(crate) struct ParquetWriterContext {
     parquet_writer: AsyncArrowWriter<ParquetObjectWriter>,
     schema: SchemaRef,
     attribute_contexts: Vec<PgToArrowAttributeContext>,
+    geoparquet_metadata: Rc<RefCell<GeoparquetMetadata>>,
     options: CopyToParquetOptions,
 }
 
@@ -71,44 +72,41 @@ impl ParquetWriterContext {
 
         let schema = Arc::new(schema);
 
-        let writer_props = Self::writer_props(tupledesc, options);
+        let writer_props = Self::writer_props(options);
 
         let parquet_writer = parquet_writer_from_uri(&uri_info, schema.clone(), writer_props);
 
-        let attribute_contexts =
-            collect_pg_to_arrow_attribute_contexts(&attributes, &schema.fields);
+        let geoparquet_metadata = Rc::new(RefCell::new(GeoparquetMetadata::new()));
+
+        let attribute_contexts = collect_pg_to_arrow_attribute_contexts(
+            &attributes,
+            &schema.fields,
+            geoparquet_metadata.clone(),
+        );
 
         ParquetWriterContext {
             parquet_writer,
             schema,
             attribute_contexts,
+            geoparquet_metadata,
             options,
         }
     }
 
-    fn writer_props(tupledesc: &PgTupleDesc, options: CopyToParquetOptions) -> WriterProperties {
+    fn writer_props(options: CopyToParquetOptions) -> WriterProperties {
         let compression = PgParquetCompressionWithLevel {
             compression: options.compression,
             compression_level: options.compression_level,
         };
 
-        let mut writer_props_builder = WriterProperties::builder()
-            .set_statistics_enabled(EnabledStatistics::Page)
+        WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .set_offset_index_disabled(true) // use page index instead of data page statistics
             .set_compression(compression.into())
             .set_max_row_group_size(options.row_group_size as usize)
+            .set_created_by("pg_parquet".to_string())
             .set_writer_version(options.parquet_version.into())
-            .set_created_by("pg_parquet".to_string());
-
-        let geometry_columns_metadata_value = geoparquet_metadata_json_from_tupledesc(tupledesc);
-
-        if geometry_columns_metadata_value.is_some() {
-            let key_value_metadata = KeyValue::new("geo".into(), geometry_columns_metadata_value);
-
-            writer_props_builder =
-                writer_props_builder.set_key_value_metadata(Some(vec![key_value_metadata]));
-        }
-
-        writer_props_builder.build()
+            .build()
     }
 
     // write_tuples writes the tuples to the parquet file. It flushes the in progress rows to a new row group
@@ -132,10 +130,32 @@ impl ParquetWriterContext {
         }
     }
 
+    fn write_geoparquet_metadata_if_exists(&mut self) {
+        let geoparquet_metadata = self.geoparquet_metadata.borrow_mut();
+
+        let has_geoparquet_columns = !geoparquet_metadata.columns.is_empty();
+
+        if !has_geoparquet_columns {
+            // No geoparquet columns to write, so we skip writing metadata.
+            return;
+        }
+
+        let geometry_columns_metadata_value = geoparquet_metadata_to_json(&geoparquet_metadata);
+
+        let key_value_metadata = KeyValue::new("geo".into(), geometry_columns_metadata_value);
+
+        self.parquet_writer
+            .append_key_value_metadata(key_value_metadata);
+    }
+
     // finalize flushes the in progress rows to a new row group and finally writes metadata to the file.
     pub(crate) fn finalize(&mut self) {
         PG_BACKEND_TOKIO_RUNTIME
-            .block_on(self.parquet_writer.finish())
+            .block_on(async {
+                self.write_geoparquet_metadata_if_exists();
+
+                self.parquet_writer.finish().await
+            })
             .unwrap_or_else(|e| panic!("failed to finish parquet writer: {e}"));
     }
 
