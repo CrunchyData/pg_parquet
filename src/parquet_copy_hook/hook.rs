@@ -13,8 +13,9 @@ use crate::{
     },
     create_copy_to_parquet_split_dest_receiver,
     parquet_copy_hook::copy_utils::{
-        copy_stmt_uri, copy_to_stmt_compression_level, copy_to_stmt_row_group_size,
-        copy_to_stmt_row_group_size_bytes, is_copy_from_parquet_stmt, is_copy_to_parquet_stmt,
+        copy_stmt_is_std_inout, copy_stmt_program, copy_stmt_uri, copy_to_stmt_compression_level,
+        copy_to_stmt_row_group_size, copy_to_stmt_row_group_size_bytes, is_copy_from_parquet_stmt,
+        is_copy_to_parquet_stmt,
     },
 };
 
@@ -53,6 +54,14 @@ fn process_copy_to_parquet(
 ) -> u64 {
     let uri_info = copy_stmt_uri(p_stmt).unwrap_or_else(|e| panic!("{}", e));
 
+    let program = if let Some(program) = copy_stmt_program(p_stmt) {
+        program.as_pg_cstr()
+    } else {
+        std::ptr::null_mut()
+    };
+
+    let is_std_inout = copy_stmt_is_std_inout(p_stmt);
+
     let copy_from = false;
     ensure_access_privilege_to_uri(&uri_info, copy_from);
 
@@ -68,8 +77,8 @@ fn process_copy_to_parquet(
 
     let parquet_split_dest = create_copy_to_parquet_split_dest_receiver(
         uri_as_string(&uri_info.uri).as_pg_cstr(),
-        uri_info.stdio_tmp_fd.is_some(),
-        uri_info.program.unwrap_or_default(),
+        program,
+        is_std_inout,
         &file_size_bytes,
         field_ids,
         &row_group_size,
@@ -109,7 +118,7 @@ fn process_copy_from_parquet(
 
     validate_copy_from_options(p_stmt);
 
-    PgTryBuilder::new(|| execute_copy_from(p_stmt, query_string, query_env, &uri_info))
+    PgTryBuilder::new(|| execute_copy_from(p_stmt, query_string, query_env, uri_info))
         .catch_others(|cause| {
             // make sure to pop the parquet reader context
             // In case we did not push the context, we should not throw an error while popping

@@ -36,8 +36,8 @@ pub(crate) struct CopyToParquetDestReceiver {
     collected_tuple_column_sizes: *mut i64,
     target_batch_size: i64,
     uri: *const c_char,
-    is_to_stdout: bool,
     program: *mut c_char,
+    is_to_stdout: bool,
     copy_options: CopyToParquetOptions,
     copy_memory_context: MemoryContext,
     row_group_memory_context: MemoryContext,
@@ -156,10 +156,16 @@ impl CopyToParquetDestReceiver {
 
     fn copy_to_program(&self) {
         if !self.program.is_null() {
-            let uri = unsafe { CStr::from_ptr(self.uri).to_str().expect("invalid uri") };
-            let uri_info = ParsedUriInfo::try_from(uri).expect("invalid uri");
+            let program = unsafe {
+                CStr::from_ptr(self.program)
+                    .to_str()
+                    .expect("invalid program")
+            };
 
-            unsafe { copy_file_to_program(uri_info, self.program) };
+            let uri = unsafe { CStr::from_ptr(self.uri).to_str().expect("invalid uri") };
+            let mut uri_info = ParsedUriInfo::try_from(uri).expect("invalid uri");
+
+            unsafe { copy_file_to_program(&mut uri_info, program) };
         }
     }
 
@@ -370,8 +376,8 @@ fn tuple_column_sizes(tuple_datums: &[Option<Datum>], tupledesc: &PgTupleDesc) -
 #[pg_guard]
 pub(crate) extern "C-unwind" fn create_copy_to_parquet_dest_receiver(
     uri: *const c_char,
-    is_to_stdout: bool,
     program: *mut c_char,
+    is_to_stdout: bool,
     options: CopyToParquetOptions,
 ) -> *mut CopyToParquetDestReceiver {
     let row_group_memory_context = unsafe {
@@ -403,8 +409,8 @@ pub(crate) extern "C-unwind" fn create_copy_to_parquet_dest_receiver(
     parquet_dest.dest.rDestroy = Some(copy_destroy);
     parquet_dest.dest.mydest = CommandDest::DestCopyOut;
     parquet_dest.uri = uri;
-    parquet_dest.is_to_stdout = is_to_stdout;
     parquet_dest.program = program;
+    parquet_dest.is_to_stdout = is_to_stdout;
     parquet_dest.tupledesc = std::ptr::null_mut();
     parquet_dest.parquet_writer_context = std::ptr::null_mut();
     parquet_dest.natts = 0;
