@@ -9,7 +9,7 @@ mod tests {
     };
     use crate::type_compat::fallback_to_text::FallbackToText;
     use crate::type_compat::geometry::{
-        Geometry, GeometryColumnsMetadata, GeometryEncoding, GeometryType,
+        Geometry, GeometryEncoding, GeometryType, GeoparquetMetadata,
     };
     use crate::type_compat::map::Map;
     use crate::type_compat::pg_arrow_type_conversions::{
@@ -1117,7 +1117,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let geoparquet_metadata: GeometryColumnsMetadata =
+        let geoparquet_metadata: GeoparquetMetadata =
             serde_json::from_value(geoparquet_metadata_json.0).unwrap();
 
         // assert common metadata

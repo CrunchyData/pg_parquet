@@ -12,7 +12,7 @@ use super::PgToArrowAttributeContext;
 
 // Numeric
 impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
-    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let numerics = self
             .into_iter()
             .map(|numeric| {
@@ -32,7 +32,7 @@ impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<AnyNumeric>> {
 
 // Numeric[]
 impl PgTypeToArrowArray<AnyNumeric> for Vec<Option<Vec<Option<AnyNumeric>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

@@ -5,26 +5,26 @@ use pgrx::IntoDatum;
 
 use crate::{
     arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray},
-    type_compat::geometry::Geometry,
+    type_compat::geometry::Geography,
 };
 
 use super::PgToArrowAttributeContext;
 
-// Geometry
-impl PgTypeToArrowArray<Geometry> for Vec<Option<Geometry>> {
+// Geography
+impl PgTypeToArrowArray<Geography> for Vec<Option<Geography>> {
     fn to_arrow_array(self, context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let wkbs = self
             .iter()
-            .map(|geometry| {
+            .map(|geography| {
                 let geoparquet_metadata = context.geoparquet_metadata();
 
                 geoparquet_metadata.borrow_mut().update_with_datum(
-                    geometry.clone().into_datum(),
+                    geography.clone().into_datum(),
                     context.typoid(),
                     context.field().name().clone(),
                 );
 
-                geometry.as_deref()
+                geography.as_deref()
             })
             .collect::<Vec<_>>();
         let wkb_array = BinaryArray::from(wkbs);
@@ -32,8 +32,8 @@ impl PgTypeToArrowArray<Geometry> for Vec<Option<Geometry>> {
     }
 }
 
-// Geometry[]
-impl PgTypeToArrowArray<Geometry> for Vec<Option<Vec<Option<Geometry>>>> {
+// Geography[]
+impl PgTypeToArrowArray<Geography> for Vec<Option<Vec<Option<Geography>>>> {
     fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
@@ -42,16 +42,16 @@ impl PgTypeToArrowArray<Geometry> for Vec<Option<Vec<Option<Geometry>>>> {
 
         let wkbs = pg_array
             .iter()
-            .map(|geometry| {
+            .map(|geography| {
                 let geoparquet_metadata = element_context.geoparquet_metadata();
 
                 geoparquet_metadata.borrow_mut().update_with_datum(
-                    geometry.clone().into_datum(),
+                    geography.clone().into_datum(),
                     element_context.typoid(),
                     element_context.field().name().clone(),
                 );
 
-                geometry.as_deref()
+                geography.as_deref()
             })
             .collect::<Vec<_>>();
 

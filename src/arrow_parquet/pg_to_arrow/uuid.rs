@@ -9,7 +9,7 @@ use super::PgToArrowAttributeContext;
 
 // Uuid
 impl PgTypeToArrowArray<Uuid> for Vec<Option<Uuid>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let uuids = self
             .iter()
             .map(|uuid| uuid.as_ref().map(|uuid| uuid.as_bytes().as_slice()))
@@ -23,7 +23,7 @@ impl PgTypeToArrowArray<Uuid> for Vec<Option<Uuid>> {
 
 // Uuid[]
 impl PgTypeToArrowArray<Uuid> for Vec<Option<Vec<Option<Uuid>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

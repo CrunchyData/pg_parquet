@@ -8,7 +8,7 @@ use super::PgToArrowAttributeContext;
 
 // Bool
 impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let bool_array = BooleanArray::from(self);
         Arc::new(bool_array)
     }
@@ -16,7 +16,7 @@ impl PgTypeToArrowArray<bool> for Vec<Option<bool>> {
 
 // Bool[]
 impl PgTypeToArrowArray<bool> for Vec<Option<Vec<Option<bool>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

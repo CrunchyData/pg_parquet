@@ -12,7 +12,7 @@ use super::PgToArrowAttributeContext;
 
 // Timestamp
 impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
-    fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, _context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let timestamps = self
             .into_iter()
             .map(|timestamp| timestamp.map(timestamp_to_i64))
@@ -24,7 +24,7 @@ impl PgTypeToArrowArray<Timestamp> for Vec<Option<Timestamp>> {
 
 // Timestamp[]
 impl PgTypeToArrowArray<Timestamp> for Vec<Option<Vec<Option<Timestamp>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.

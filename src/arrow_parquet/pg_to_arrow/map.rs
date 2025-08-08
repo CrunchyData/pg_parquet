@@ -14,7 +14,7 @@ use super::PgToArrowAttributeContext;
 
 // crunchy_map.key_<type1>_val_<type2>
 impl<'b> PgTypeToArrowArray<Map<'b>> for Vec<Option<Map<'b>>> {
-    fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (map_offsets, map_nulls) = arrow_map_offsets(&self);
 
         let maps = self;
@@ -50,7 +50,7 @@ impl<'b> PgTypeToArrowArray<Map<'b>> for Vec<Option<Map<'b>>> {
 
 // crunchy_map.key_<type1>_val_<type2>[]
 impl<'b> PgTypeToArrowArray<Map<'b>> for Vec<Option<Vec<Option<Map<'b>>>>> {
-    fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
+    fn to_arrow_array(self, element_context: &mut PgToArrowAttributeContext) -> ArrayRef {
         let (list_offsets, list_nulls) = arrow_array_offsets(&self);
 
         // gets rid of the first level of Option, then flattens the inner Vec<Option<bool>>.
