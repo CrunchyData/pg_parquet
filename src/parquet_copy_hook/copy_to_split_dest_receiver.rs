@@ -23,8 +23,8 @@ pub(crate) const INVALID_FILE_SIZE_BYTES: i64 = 0;
 struct CopyToParquetSplitDestReceiver {
     dest: DestReceiver,
     uri: *const c_char,
-    is_to_stdout: bool,
     program: *mut c_char,
+    is_to_stdout: bool,
     tupledesc: TupleDesc,
     operation: i32,
     options: CopyToParquetOptions,
@@ -50,8 +50,8 @@ impl CopyToParquetSplitDestReceiver {
         let child_uri = self.create_uri_for_child();
         self.current_child_receiver = create_copy_to_parquet_dest_receiver(
             child_uri,
-            self.is_to_stdout,
             self.program,
+            self.is_to_stdout,
             self.options,
         );
         self.current_child_id += 1;
@@ -212,8 +212,8 @@ extern "C-unwind" fn copy_split_destroy(_dest: *mut DestReceiver) {}
 #[allow(clippy::too_many_arguments)]
 pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
     uri: *const c_char,
-    is_to_stdout: bool,
     program: *mut c_char,
+    is_to_stdout: bool,
     file_size_bytes: *const i64,
     field_ids: *const c_char,
     row_group_size: *const i64,

@@ -16,7 +16,8 @@ use crate::{
     parquet_copy_hook::{
         copy_from_program::copy_program_to_file,
         copy_utils::{
-            copy_from_stmt_create_option_list, copy_stmt_lock_mode, copy_stmt_relation_oid,
+            copy_from_stmt_create_option_list, copy_stmt_is_std_inout, copy_stmt_lock_mode,
+            copy_stmt_program, copy_stmt_relation_oid,
         },
     },
 };
@@ -120,7 +121,7 @@ pub(crate) fn execute_copy_from(
     p_stmt: &PgBox<PlannedStmt>,
     query_string: &CStr,
     query_env: &PgBox<QueryEnvironment>,
-    uri_info: &ParsedUriInfo,
+    mut uri_info: ParsedUriInfo,
 ) -> u64 {
     let rel_oid = copy_stmt_relation_oid(p_stmt);
 
@@ -149,15 +150,15 @@ pub(crate) fn execute_copy_from(
     let match_by = copy_from_stmt_match_by(p_stmt);
 
     unsafe {
-        if uri_info.program.is_some() {
-            copy_program_to_file(uri_info);
-        } else if uri_info.stdio_tmp_fd.is_some() {
+        if let Some(program) = copy_stmt_program(p_stmt) {
+            copy_program_to_file(&mut uri_info, &program);
+        } else if copy_stmt_is_std_inout(p_stmt) {
             let is_binary = true;
-            copy_stdin_to_file(uri_info, tupledesc.natts as _, is_binary);
+            copy_stdin_to_file(&uri_info, tupledesc.natts as _, is_binary);
         }
 
         // parquet reader context is used throughout the COPY FROM operation.
-        let parquet_reader_context = ParquetReaderContext::new(uri_info, match_by, &tupledesc);
+        let parquet_reader_context = ParquetReaderContext::new(&uri_info, match_by, &tupledesc);
         push_parquet_reader_context(parquet_reader_context);
 
         // makes sure to set binary format
