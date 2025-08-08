@@ -420,10 +420,8 @@ mod tests {
     fn test_parquet_version() {
         let fetch_parquet_version = || {
             Spi::connect(|client| {
-                let parquet_file_metadata_command = format!(
-                    "select * from parquet.file_metadata('{}');",
-                    LOCAL_TEST_FILE_PATH
-                );
+                let parquet_file_metadata_command =
+                    format!("select * from parquet.file_metadata('{LOCAL_TEST_FILE_PATH}');",);
 
                 let mut results = Vec::new();
                 let tup_table = client

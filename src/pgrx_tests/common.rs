@@ -229,21 +229,16 @@ where
 }
 
 pub(crate) fn assert_int_text_map(expected: Option<Map>, actual: Option<Map>) {
-    if expected.is_none() {
-        assert!(actual.is_none());
-    } else {
+    if let Some(expected) = expected {
         assert!(actual.is_some());
 
-        let expected = expected.unwrap().entries;
+        let expected = expected.entries;
         let actual = actual.unwrap().entries;
 
         for (expected, actual) in expected.iter().zip(actual.iter()) {
-            if expected.is_none() {
-                assert!(actual.is_none());
-            } else {
+            if let Some(expected) = expected {
                 assert!(actual.is_some());
 
-                let expected = expected.unwrap();
                 let actual = actual.unwrap();
 
                 let expected_key: Option<i32> = expected.get_by_name("key").unwrap();
@@ -255,21 +250,20 @@ pub(crate) fn assert_int_text_map(expected: Option<Map>, actual: Option<Map>) {
                 let actual_val: Option<String> = actual.get_by_name("val").unwrap();
 
                 assert_eq!(expected_val, actual_val);
+            } else {
+                assert!(actual.is_none());
             }
         }
+    } else {
+        assert!(actual.is_none());
     }
 }
 
 pub(crate) fn assert_float(expected_result: Vec<Option<f32>>, result: Vec<Option<f32>>) {
     for (expected, actual) in expected_result.into_iter().zip(result.into_iter()) {
-        if expected.is_none() {
-            assert!(actual.is_none());
-        }
-
-        if expected.is_some() {
+        if let Some(expected) = expected {
             assert!(actual.is_some());
 
-            let expected = expected.unwrap();
             let actual = actual.unwrap();
 
             if expected.is_nan() {
@@ -280,20 +274,17 @@ pub(crate) fn assert_float(expected_result: Vec<Option<f32>>, result: Vec<Option
             } else {
                 assert_eq!(expected, actual);
             }
+        } else {
+            assert!(actual.is_none());
         }
     }
 }
 
 pub(crate) fn assert_double(expected_result: Vec<Option<f64>>, result: Vec<Option<f64>>) {
     for (expected, actual) in expected_result.into_iter().zip(result.into_iter()) {
-        if expected.is_none() {
-            assert!(actual.is_none());
-        }
-
-        if expected.is_some() {
+        if let Some(expected) = expected {
             assert!(actual.is_some());
 
-            let expected = expected.unwrap();
             let actual = actual.unwrap();
 
             if expected.is_nan() {
@@ -304,40 +295,36 @@ pub(crate) fn assert_double(expected_result: Vec<Option<f64>>, result: Vec<Optio
             } else {
                 assert_eq!(expected, actual);
             }
+        } else {
+            assert!(actual.is_none());
         }
     }
 }
 
 pub(crate) fn assert_json(expected: Vec<Option<Json>>, result: Vec<Option<Json>>) {
     for (expected, actual) in expected.into_iter().zip(result.into_iter()) {
-        if expected.is_none() {
-            assert!(actual.is_none());
-        }
-
-        if expected.is_some() {
+        if let Some(expected) = expected {
             assert!(actual.is_some());
 
-            let expected = expected.unwrap();
             let actual = actual.unwrap();
 
             assert_eq!(expected.0, actual.0);
+        } else {
+            assert!(actual.is_none());
         }
     }
 }
 
 pub(crate) fn assert_jsonb(expected: Vec<Option<JsonB>>, result: Vec<Option<JsonB>>) {
     for (expected, actual) in expected.into_iter().zip(result.into_iter()) {
-        if expected.is_none() {
-            assert!(actual.is_none());
-        }
-
-        if expected.is_some() {
+        if let Some(expected) = expected {
             assert!(actual.is_some());
 
-            let expected = expected.unwrap();
             let actual = actual.unwrap();
 
             assert_eq!(expected.0, actual.0);
+        } else {
+            assert!(actual.is_none());
         }
     }
 }

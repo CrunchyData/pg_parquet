@@ -91,17 +91,14 @@ mod tests {
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
         for ((expected,), (result,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(result.is_none());
-            }
-
-            if expected.is_some() {
+            if let Some(expected) = expected {
                 assert!(result.is_some());
 
-                let expected = expected.unwrap();
                 let result = result.unwrap();
 
                 assert_float(expected, result);
+            } else {
+                assert!(result.is_none());
             }
         }
     }
@@ -128,17 +125,14 @@ mod tests {
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
         for ((expected,), (result,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(result.is_none());
-            }
-
-            if expected.is_some() {
+            if let Some(expected) = expected {
                 assert!(result.is_some());
 
-                let expected = expected.unwrap();
                 let result = result.unwrap();
 
                 assert_double(expected, result);
+            } else {
+                assert!(result.is_none());
             }
         }
     }
@@ -345,19 +339,16 @@ mod tests {
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(actual.is_none());
-            }
-
-            if expected.is_some() {
+            if let Some(expected) = expected {
                 assert!(actual.is_some());
 
-                let expected = expected.unwrap();
                 let actual = actual.unwrap();
 
                 for (expected, actual) in expected.iter().zip(actual.iter()) {
                     assert_eq!(expected, actual);
                 }
+            } else {
+                assert!(actual.is_none());
             }
         }
     }
@@ -417,17 +408,16 @@ mod tests {
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
         for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(actual.is_none());
-            } else {
+            if let Some(expected) = expected {
                 assert!(actual.is_some());
 
-                let expected = expected.unwrap();
                 let actual = actual.unwrap();
 
                 for (expected, actual) in expected.into_iter().zip(actual.into_iter()) {
                     assert_int_text_map(expected, actual);
                 }
+            } else {
+                assert!(actual.is_none());
             }
         }
     }
@@ -732,17 +722,14 @@ mod tests {
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
         for ((expected,), (result,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(result.is_none());
-            }
-
-            if expected.is_some() {
+            if let Some(expected) = expected {
                 assert!(result.is_some());
 
-                let expected = expected.unwrap();
                 let result = result.unwrap();
 
                 assert_json(expected, result);
+            } else {
+                assert!(result.is_none());
             }
         }
     }
@@ -766,17 +753,14 @@ mod tests {
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
         for ((expected,), (result,)) in expected.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(result.is_none());
-            }
-
-            if expected.is_some() {
+            if let Some(expected) = expected {
                 assert!(result.is_some());
 
-                let expected = expected.unwrap();
                 let result = result.unwrap();
 
                 assert_jsonb(expected, result);
+            } else {
+                assert!(result.is_none());
             }
         }
     }
@@ -1245,12 +1229,9 @@ mod tests {
         });
 
         for (expected, actual) in expected_result.into_iter().zip(result.into_iter()) {
-            if expected.is_none() {
-                assert!(actual.is_none());
-            } else if expected.is_some() {
+            if let Some(expected) = expected {
                 assert!(actual.is_some());
 
-                let expected = expected.unwrap();
                 let actual = actual.unwrap();
 
                 assert_eq!(
@@ -1265,21 +1246,15 @@ mod tests {
                     .get_by_name::<pgrx::Array<composite_type!("dog")>>("dogs")
                     .unwrap();
 
-                if expected_dogs.is_none() {
-                    assert!(actual_dogs.is_none());
-                } else if expected_dogs.is_some() {
+                if let Some(expected_dogs) = expected_dogs {
                     assert!(actual_dogs.is_some());
 
-                    let expected_dogs = expected_dogs.unwrap();
                     let actual_dogs = actual_dogs.unwrap();
 
                     for (expected_dog, actual_dog) in expected_dogs.iter().zip(actual_dogs.iter()) {
                         if expected_dog.is_none() {
                             assert!(actual_dog.is_none());
-                        } else if expected_dog.is_some() {
-                            assert!(actual_dog.is_some());
-
-                            let expected_dog = expected_dog.unwrap();
+                        } else if let Some(expected_dog) = expected_dog {
                             let actual_dog = actual_dog.unwrap();
 
                             assert_eq!(
@@ -1293,6 +1268,8 @@ mod tests {
                             );
                         }
                     }
+                } else {
+                    assert!(actual_dogs.is_none());
                 }
 
                 let expected_lucky_numbers = expected
@@ -1303,12 +1280,7 @@ mod tests {
                     .get_by_name::<pgrx::Array<i32>>("lucky_numbers")
                     .unwrap();
 
-                if expected_lucky_numbers.is_none() {
-                    assert!(actual_lucky_numbers.is_none());
-                } else if expected_lucky_numbers.is_some() {
-                    assert!(actual_lucky_numbers.is_some());
-
-                    let expected_lucky_numbers = expected_lucky_numbers.unwrap();
+                if let Some(expected_lucky_numbers) = expected_lucky_numbers {
                     let actual_lucky_numbers = actual_lucky_numbers.unwrap();
 
                     for (expected_lucky_number, actual_lucky_number) in expected_lucky_numbers
@@ -1317,7 +1289,11 @@ mod tests {
                     {
                         assert_eq!(expected_lucky_number, actual_lucky_number);
                     }
+                } else {
+                    assert!(actual_lucky_numbers.is_none());
                 }
+            } else {
+                assert!(actual.is_none());
             }
         }
 
