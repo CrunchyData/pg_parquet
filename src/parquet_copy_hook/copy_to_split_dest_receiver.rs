@@ -24,6 +24,7 @@ struct CopyToParquetSplitDestReceiver {
     dest: DestReceiver,
     uri: *const c_char,
     is_to_stdout: bool,
+    program: *mut c_char,
     tupledesc: TupleDesc,
     operation: i32,
     options: CopyToParquetOptions,
@@ -47,8 +48,12 @@ impl CopyToParquetSplitDestReceiver {
     fn create_new_child(&mut self) {
         // create a new child receiver
         let child_uri = self.create_uri_for_child();
-        self.current_child_receiver =
-            create_copy_to_parquet_dest_receiver(child_uri, self.is_to_stdout, self.options);
+        self.current_child_receiver = create_copy_to_parquet_dest_receiver(
+            child_uri,
+            self.is_to_stdout,
+            self.program,
+            self.options,
+        );
         self.current_child_id += 1;
 
         // start the child receiver
@@ -208,6 +213,7 @@ extern "C-unwind" fn copy_split_destroy(_dest: *mut DestReceiver) {}
 pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
     uri: *const c_char,
     is_to_stdout: bool,
+    program: *mut c_char,
     file_size_bytes: *const i64,
     field_ids: *const c_char,
     row_group_size: *const i64,
@@ -280,6 +286,7 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
     split_dest.dest.mydest = CommandDest::DestCopyOut;
     split_dest.uri = uri;
     split_dest.is_to_stdout = is_to_stdout;
+    split_dest.program = program;
     split_dest.tupledesc = std::ptr::null_mut();
     split_dest.operation = -1;
     split_dest.options = options;

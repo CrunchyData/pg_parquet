@@ -40,10 +40,21 @@ pub(crate) struct ParsedUriInfo {
     pub(crate) path: Path,
     pub(crate) scheme: ObjectStoreScheme,
     pub(crate) stdio_tmp_fd: Option<i32>,
+    pub(crate) program: Option<*mut c_char>,
 }
 
 impl ParsedUriInfo {
     pub(crate) fn for_std_inout() -> Self {
+        Self::create_tmp_file()
+    }
+
+    pub(crate) fn for_program(program: *mut c_char) -> Self {
+        let mut uri_info = Self::create_tmp_file();
+        uri_info.program = Some(program);
+        uri_info
+    }
+
+    fn create_tmp_file() -> Self {
         // open temp postgres file, which is removed after transaction ends
         let tmp_path_fd = unsafe { OpenTemporaryFile(false) };
 
@@ -129,6 +140,7 @@ impl TryFrom<&str> for ParsedUriInfo {
             path,
             scheme,
             stdio_tmp_fd: None,
+            program: None,
         })
     }
 }
@@ -274,31 +286,44 @@ pub(crate) fn ensure_access_privilege_to_uri(uri_info: &ParsedUriInfo, copy_from
         return;
     }
 
+    let is_program = uri_info.program.is_some();
+
     // permission check is not needed for stdin/out
-    if uri_info.stdio_tmp_fd.is_some() {
+    if uri_info.stdio_tmp_fd.is_some() && !is_program {
         return;
     }
 
     let user_id = unsafe { GetUserId() };
     let is_file = uri_info.uri.scheme() == "file";
 
-    let required_role_name = if is_file {
+    let required_role_name = if is_program {
+        "pg_execute_server_program"
+    } else if is_file {
         if copy_from {
             "pg_read_server_files"
         } else {
             "pg_write_server_files"
         }
-    } else if copy_from {
-        PARQUET_OBJECT_STORE_READ_ROLE
     } else {
-        PARQUET_OBJECT_STORE_WRITE_ROLE
+        // object_store
+        if copy_from {
+            PARQUET_OBJECT_STORE_READ_ROLE
+        } else {
+            PARQUET_OBJECT_STORE_WRITE_ROLE
+        }
     };
 
     let required_role_id =
         unsafe { get_role_oid(required_role_name.to_string().as_pg_cstr(), false) };
 
     let operation_str = if copy_from { "from" } else { "to" };
-    let object_type = if is_file { "file" } else { "remote uri" };
+    let object_type = if is_program {
+        "program"
+    } else if is_file {
+        "file"
+    } else {
+        "remote uri"
+    };
 
     if !unsafe { has_privs_of_role(user_id, required_role_id) } {
         ereport!(

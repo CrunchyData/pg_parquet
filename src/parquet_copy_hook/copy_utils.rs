@@ -222,7 +222,7 @@ pub(crate) fn copy_stmt_uri(p_stmt: &PgBox<PlannedStmt>) -> Result<ParsedUriInfo
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(p_stmt.utilityStmt as _) };
 
     if copy_stmt.is_program {
-        return Err("program is not supported".to_string());
+        return Ok(ParsedUriInfo::for_program(copy_stmt.filename));
     }
 
     if copy_stmt.filename.is_null() {
@@ -420,10 +420,6 @@ fn is_copy_parquet_stmt(p_stmt: &PgBox<PlannedStmt>, copy_from: bool) -> bool {
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(p_stmt.utilityStmt as _) };
 
     if copy_from != copy_stmt.is_from {
-        return false;
-    }
-
-    if copy_stmt.is_program {
         return false;
     }
 
