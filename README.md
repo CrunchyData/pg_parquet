@@ -18,7 +18,9 @@ COPY table FROM 's3://mybucket/data.parquet' WITH (format 'parquet');
 ## Quick Reference
 - [Installation From Source](#installation-from-source)
 - [Usage](#usage)
-  - [Copy FROM/TO Parquet files TO/FROM Postgres tables](#copy-tofrom-parquet-files-fromto-postgres-tables)
+  - [Copy FROM/TO Parquet files TO/FROM Postgres tables](#copy-fromto-parquet-files-tofrom-postgres-tables)
+  - [COPY FROM/TO Parquet stdin/stdout TO/FROM Postgres tables)](#copy-fromto-parquet-stdinstdout-tofrom-postgres-tables)
+  - [COPY FROM/TO Parquet program stream TO/FROM Postgres tables)](#copy-fromto-parquet-program-stream-tofrom-postgres-tables)
   - [Inspect Parquet schema](#inspect-parquet-schema)
   - [Inspect Parquet metadata](#inspect-parquet-metadata)
   - [Inspect Parquet column statistics](#inspect-parquet-column-statistics)
@@ -64,11 +66,11 @@ psql> "CREATE EXTENSION pg_parquet;"
 
 ## Usage
 There are mainly 3 things that you can do with `pg_parquet`:
-1. You can export Postgres tables/queries to Parquet files,
+1. You can export Postgres tables/queries to Parquet files, stdin/stdout or a program's stream,
 2. You can ingest data from Parquet files to Postgres tables,
 3. You can inspect the schema and metadata of Parquet files.
 
-### COPY to/from Parquet files from/to Postgres tables
+### COPY from/to Parquet files to/from Postgres tables
 You can use PostgreSQL's `COPY` command to read and write from/to Parquet files. Below is an example of how to write a PostgreSQL table, with complex types, into a Parquet file and then to read the Parquet file content back into the same table.
 
 ```sql
@@ -107,7 +109,9 @@ COPY product_example FROM '/tmp/product_example.parquet';
 SELECT * FROM product_example;
 ```
 
-You can also use `COPY` command to read and write Parquet stream from/to standard input and output. Below is an example usage (you have to specify `format = parquet`):
+### COPY from/to Parquet stdin/stdout to/from Postgres tables
+
+You can use `COPY` command to read and write Parquet stream from/to standard input and output. Below is an example usage (you have to specify `format = parquet`):
 
 ```bash
 psql -d pg_parquet -p 28817 -h localhost -c "create table product_example_reconstructed (like product_example);"
@@ -116,6 +120,19 @@ psql -d pg_parquet -p 28817 -h localhost -c "create table product_example_recons
 psql -d pg_parquet -p 28817 -h localhost -c "copy product_example to stdout (format parquet);" | psql -d pg_parquet -p 28817 -h localhost -c "copy product_example_reconstructed from stdin (format parquet);"
  COPY 2
 ```
+
+### COPY from/to Parquet program stream to/from Postgres tables
+
+You can use `COPY` command to read and write Parquet stream from/to a program's input and output. Below is an example usage (you have to specify `format = parquet`):
+
+```bash
+psql -d pg_parquet -p 28817 -h localhost -c "copy product_example_reconstructed to program 'cat > /tmp/test.parquet' (format parquet);"
+ COPY 2
+
+psql -d pg_parquet -p 28817 -h localhost -c "copy product_example_reconstructed from program 'cat /tmp/test.parquet' (format parquet);"
+ COPY 2
+```
+
 
 ### Inspect Parquet schema
 You can call `SELECT * FROM parquet.schema(<uri>)` to discover the schema of the Parquet file at given uri.

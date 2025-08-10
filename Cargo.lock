@@ -2528,6 +2528,7 @@ dependencies = [
  "cfg_aliases",
  "futures",
  "home",
+ "libc",
  "object_store",
  "once_cell",
  "parquet",
