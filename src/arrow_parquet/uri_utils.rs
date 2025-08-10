@@ -17,7 +17,7 @@ use pgrx::{
     pg_sys::{
         get_role_oid, has_privs_of_role, palloc0, superuser, AsPgCStr, ClosePipeStream, DataDir,
         FileClose, FilePathName, GetUserId, InvalidOid, OpenPipeStream, OpenTemporaryFile,
-        TempTablespacePath, __sFILE, MAXPGPATH, PG_BINARY_R, PG_BINARY_W,
+        TempTablespacePath, MAXPGPATH, PG_BINARY_R, PG_BINARY_W,
     },
 };
 use url::Url;
@@ -45,7 +45,7 @@ pub(crate) struct ParsedUriInfo {
     // pipe_file is used to hold the pipe file descriptor for copying data to/from a program
     // call open_program_pipe to open the pipe to a program
     pub(crate) is_program: bool,
-    pub(crate) pipe_file: *mut __sFILE,
+    pub(crate) pipe_file: *mut libc::FILE,
 }
 
 impl ParsedUriInfo {
@@ -68,11 +68,15 @@ impl ParsedUriInfo {
             panic!("Failed to open pipe stream for program: {}", program);
         }
 
-        self.pipe_file = pipe_file;
+        self.pipe_file = pipe_file as _;
 
-        let pipe_fd = (unsafe { *self.pipe_file })._file;
+        let fd = unsafe { libc::fileno(self.pipe_file) };
 
-        unsafe { File::from_raw_fd(pipe_fd as _) }
+        if fd < 0 {
+            panic!("Failed to get file descriptor for pipe stream: {}", program);
+        }
+
+        unsafe { File::from_raw_fd(fd) }
     }
 
     fn with_tmp_file() -> Self {
@@ -180,7 +184,7 @@ impl Drop for ParsedUriInfo {
 
         if !self.pipe_file.is_null() {
             // close pipe file, postgres api will remove it on close
-            unsafe { ClosePipeStream(self.pipe_file) };
+            unsafe { ClosePipeStream(self.pipe_file as _) };
         }
     }
 }
