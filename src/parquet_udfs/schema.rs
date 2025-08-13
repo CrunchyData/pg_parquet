@@ -131,6 +131,7 @@ fn thrift_logical_type_to_str(logical_type: LogicalType) -> String {
         LogicalType::BSON(_) => "BSON",
         LogicalType::UUID(_) => "UUID",
         LogicalType::FLOAT16(_) => "FLOAT16",
+        _ => "UNKNOWN",
     }
     .into()
 }
@@ -159,7 +160,7 @@ fn thrift_converted_type_to_str(converted_type: ConvertedType) -> String {
         ConvertedType::JSON => "JSON",
         ConvertedType::BSON => "BSON",
         ConvertedType::INTERVAL => "INTERVAL",
-        _ => "UNKOWN",
+        _ => "UNKNOWN",
     }
     .into()
 }

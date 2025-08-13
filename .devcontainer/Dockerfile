@@ -49,7 +49,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
 ENV PATH="/home/rust/.cargo/bin:${PATH}"
 
 # install and configure pgrx
-ARG PGRX_VERSION=0.15.0
+ARG PGRX_VERSION=0.16.0
 RUN cargo install --locked cargo-pgrx@${PGRX_VERSION}
 RUN cargo pgrx init --pg${PG_MAJOR} $(which pg_config)
 RUN echo "shared_preload_libraries = 'pgaudit,pg_parquet'" >> $HOME/.pgrx/data-${PG_MAJOR}/postgresql.conf
