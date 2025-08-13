@@ -1,4 +1,4 @@
-use std::{ffi::CStr, panic, sync::Arc};
+use std::{ffi::CStr, fs::File, os::fd::FromRawFd, panic, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use object_store::{path::Path, ObjectStoreScheme};
@@ -15,8 +15,9 @@ use pgrx::{
     ereport,
     ffi::c_char,
     pg_sys::{
-        get_role_oid, has_privs_of_role, palloc0, superuser, AsPgCStr, DataDir, FileClose,
-        FilePathName, GetUserId, InvalidOid, OpenTemporaryFile, TempTablespacePath, MAXPGPATH,
+        get_role_oid, has_privs_of_role, palloc0, superuser, AsPgCStr, ClosePipeStream, DataDir,
+        FileClose, FilePathName, GetUserId, InvalidOid, OpenPipeStream, OpenTemporaryFile,
+        TempTablespacePath, MAXPGPATH, PG_BINARY_R, PG_BINARY_W,
     },
 };
 use url::Url;
@@ -39,11 +40,46 @@ pub(crate) struct ParsedUriInfo {
     pub(crate) bucket: Option<String>,
     pub(crate) path: Path,
     pub(crate) scheme: ObjectStoreScheme,
-    pub(crate) stdio_tmp_fd: Option<i32>,
+    // tmp_fd is used as intermediate file for copying data to/from stdin/out or program pipes
+    pub(crate) tmp_fd: Option<i32>,
+    // pipe_file is used to hold the pipe file descriptor for copying data to/from a program
+    // call open_program_pipe to open the pipe to a program
+    pub(crate) is_program: bool,
+    pub(crate) pipe_file: *mut libc::FILE,
 }
 
 impl ParsedUriInfo {
     pub(crate) fn for_std_inout() -> Self {
+        Self::with_tmp_file()
+    }
+
+    pub(crate) fn for_program() -> Self {
+        let mut uri_info = Self::with_tmp_file();
+        uri_info.is_program = true;
+        uri_info
+    }
+
+    pub(crate) fn open_program_pipe(&mut self, program: &str, copy_from: bool) -> File {
+        let pipe_mode = if copy_from { PG_BINARY_R } else { PG_BINARY_W };
+
+        let pipe_file = unsafe { OpenPipeStream(program.as_pg_cstr(), pipe_mode.as_ptr()) };
+
+        if pipe_file.is_null() {
+            panic!("Failed to open pipe stream for program: {}", program);
+        }
+
+        self.pipe_file = pipe_file as _;
+
+        let fd = unsafe { libc::fileno(self.pipe_file) };
+
+        if fd < 0 {
+            panic!("Failed to get file descriptor for pipe stream: {}", program);
+        }
+
+        unsafe { File::from_raw_fd(fd) }
+    }
+
+    fn with_tmp_file() -> Self {
         // open temp postgres file, which is removed after transaction ends
         let tmp_path_fd = unsafe { OpenTemporaryFile(false) };
 
@@ -70,9 +106,13 @@ impl ParsedUriInfo {
 
         let mut parsed_uri = Self::try_from(tmp_path.as_str()).unwrap_or_else(|e| panic!("{}", e));
 
-        parsed_uri.stdio_tmp_fd = Some(tmp_path_fd);
+        parsed_uri.tmp_fd = Some(tmp_path_fd);
 
         parsed_uri
+    }
+
+    fn is_std_inout(&self) -> bool {
+        self.tmp_fd.is_some() && !self.is_program
     }
 
     fn try_parse_uri(uri: &str) -> Result<Url, String> {
@@ -128,16 +168,23 @@ impl TryFrom<&str> for ParsedUriInfo {
             bucket,
             path,
             scheme,
-            stdio_tmp_fd: None,
+            tmp_fd: None,
+            is_program: false,
+            pipe_file: std::ptr::null_mut(),
         })
     }
 }
 
 impl Drop for ParsedUriInfo {
     fn drop(&mut self) {
-        if let Some(stdio_tmp_fd) = self.stdio_tmp_fd {
+        if let Some(tmp_fd) = self.tmp_fd {
             // close temp file, postgres api will remove it on close
-            unsafe { FileClose(stdio_tmp_fd) };
+            unsafe { FileClose(tmp_fd) };
+        }
+
+        if !self.pipe_file.is_null() {
+            // close pipe file, postgres api will remove it on close
+            unsafe { ClosePipeStream(self.pipe_file as _) };
         }
     }
 }
@@ -275,30 +322,41 @@ pub(crate) fn ensure_access_privilege_to_uri(uri_info: &ParsedUriInfo, copy_from
     }
 
     // permission check is not needed for stdin/out
-    if uri_info.stdio_tmp_fd.is_some() {
+    if uri_info.is_std_inout() {
         return;
     }
 
     let user_id = unsafe { GetUserId() };
     let is_file = uri_info.uri.scheme() == "file";
 
-    let required_role_name = if is_file {
+    let required_role_name = if uri_info.is_program {
+        "pg_execute_server_program"
+    } else if is_file {
         if copy_from {
             "pg_read_server_files"
         } else {
             "pg_write_server_files"
         }
-    } else if copy_from {
-        PARQUET_OBJECT_STORE_READ_ROLE
     } else {
-        PARQUET_OBJECT_STORE_WRITE_ROLE
+        // object_store
+        if copy_from {
+            PARQUET_OBJECT_STORE_READ_ROLE
+        } else {
+            PARQUET_OBJECT_STORE_WRITE_ROLE
+        }
     };
 
     let required_role_id =
         unsafe { get_role_oid(required_role_name.to_string().as_pg_cstr(), false) };
 
     let operation_str = if copy_from { "from" } else { "to" };
-    let object_type = if is_file { "file" } else { "remote uri" };
+    let object_type = if uri_info.is_program {
+        "program"
+    } else if is_file {
+        "file"
+    } else {
+        "remote uri"
+    };
 
     if !unsafe { has_privs_of_role(user_id, required_role_id) } {
         ereport!(

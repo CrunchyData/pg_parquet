@@ -12,10 +12,13 @@ use pg_sys::{
 };
 use pgrx::{prelude::*, FromDatum, PgList, PgMemoryContexts, PgTupleDesc};
 
-use crate::arrow_parquet::{
-    field_ids::FieldIds,
-    parquet_writer::ParquetWriterContext,
-    uri_utils::{ParsedUriInfo, RECORD_BATCH_SIZE},
+use crate::{
+    arrow_parquet::{
+        field_ids::FieldIds,
+        parquet_writer::ParquetWriterContext,
+        uri_utils::{ParsedUriInfo, RECORD_BATCH_SIZE},
+    },
+    parquet_copy_hook::copy_to_program::copy_file_to_program,
 };
 
 use super::{
@@ -33,6 +36,7 @@ pub(crate) struct CopyToParquetDestReceiver {
     collected_tuple_column_sizes: *mut i64,
     target_batch_size: i64,
     uri: *const c_char,
+    program: *mut c_char,
     is_to_stdout: bool,
     copy_options: CopyToParquetOptions,
     copy_memory_context: MemoryContext,
@@ -147,6 +151,21 @@ impl CopyToParquetDestReceiver {
             let uri_info = ParsedUriInfo::try_from(uri).expect("invalid uri");
 
             unsafe { copy_file_to_stdout(uri_info, self.natts as _) };
+        }
+    }
+
+    fn copy_to_program(&self) {
+        if !self.program.is_null() {
+            let program = unsafe {
+                CStr::from_ptr(self.program)
+                    .to_str()
+                    .expect("invalid program")
+            };
+
+            let uri = unsafe { CStr::from_ptr(self.uri).to_str().expect("invalid uri") };
+            let mut uri_info = ParsedUriInfo::try_from(uri).expect("invalid uri");
+
+            unsafe { copy_file_to_program(&mut uri_info, program) };
         }
     }
 
@@ -301,7 +320,9 @@ pub(crate) extern "C-unwind" fn copy_shutdown(dest: *mut DestReceiver) {
 
     parquet_dest.finish();
 
-    if parquet_dest.is_to_stdout {
+    if !parquet_dest.program.is_null() {
+        parquet_dest.copy_to_program();
+    } else if parquet_dest.is_to_stdout {
         parquet_dest.copy_to_stdout();
     }
 
@@ -355,6 +376,7 @@ fn tuple_column_sizes(tuple_datums: &[Option<Datum>], tupledesc: &PgTupleDesc) -
 #[pg_guard]
 pub(crate) extern "C-unwind" fn create_copy_to_parquet_dest_receiver(
     uri: *const c_char,
+    program: *mut c_char,
     is_to_stdout: bool,
     options: CopyToParquetOptions,
 ) -> *mut CopyToParquetDestReceiver {
@@ -387,6 +409,7 @@ pub(crate) extern "C-unwind" fn create_copy_to_parquet_dest_receiver(
     parquet_dest.dest.rDestroy = Some(copy_destroy);
     parquet_dest.dest.mydest = CommandDest::DestCopyOut;
     parquet_dest.uri = uri;
+    parquet_dest.program = program;
     parquet_dest.is_to_stdout = is_to_stdout;
     parquet_dest.tupledesc = std::ptr::null_mut();
     parquet_dest.parquet_writer_context = std::ptr::null_mut();

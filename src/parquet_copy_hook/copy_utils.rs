@@ -222,7 +222,7 @@ pub(crate) fn copy_stmt_uri(p_stmt: &PgBox<PlannedStmt>) -> Result<ParsedUriInfo
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(p_stmt.utilityStmt as _) };
 
     if copy_stmt.is_program {
-        return Err("program is not supported".to_string());
+        return Ok(ParsedUriInfo::for_program());
     }
 
     if copy_stmt.filename.is_null() {
@@ -236,6 +236,28 @@ pub(crate) fn copy_stmt_uri(p_stmt: &PgBox<PlannedStmt>) -> Result<ParsedUriInfo
     };
 
     ParsedUriInfo::try_from(uri)
+}
+
+pub(crate) fn copy_stmt_program(p_stmt: &PgBox<PlannedStmt>) -> Option<String> {
+    let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(p_stmt.utilityStmt as _) };
+
+    if copy_stmt.is_program {
+        let program = unsafe {
+            CStr::from_ptr(copy_stmt.filename)
+                .to_str()
+                .expect("program option is not a valid CString")
+        };
+
+        Some(program.to_string())
+    } else {
+        None
+    }
+}
+
+pub(crate) fn copy_stmt_is_std_inout(p_stmt: &PgBox<PlannedStmt>) -> bool {
+    let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(p_stmt.utilityStmt as _) };
+
+    copy_stmt.filename.is_null() && !copy_stmt.is_program
 }
 
 pub(crate) fn copy_to_stmt_file_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
@@ -420,10 +442,6 @@ fn is_copy_parquet_stmt(p_stmt: &PgBox<PlannedStmt>, copy_from: bool) -> bool {
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(p_stmt.utilityStmt as _) };
 
     if copy_from != copy_stmt.is_from {
-        return false;
-    }
-
-    if copy_stmt.is_program {
         return false;
     }
 
