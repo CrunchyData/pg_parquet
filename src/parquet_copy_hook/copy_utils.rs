@@ -1,15 +1,15 @@
 use std::{ffi::CStr, str::FromStr};
 
 use pgrx::{
-    ereport,
-    ffi::c_char,
-    is_a,
+    ereport, is_a,
     pg_sys::{
-        addRangeTableEntryForRelation, defGetInt32, defGetInt64, defGetString, get_namespace_name,
-        get_rel_namespace, makeDefElem, makeString, make_parsestate, quote_qualified_identifier,
-        AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc, DefElem, List, NoLock, Node,
-        NodeTag::T_CopyStmt, Oid, ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment,
-        RangeVar, RangeVarGetRelidExtended, RowExclusiveLock, TupleDescInitEntry,
+        addRangeTableEntryForRelation, defGetInt32, defGetInt64, defGetString, exprCollation,
+        exprType, exprTypmod, get_namespace_name, get_rel_namespace, makeDefElem, makeString,
+        make_parsestate, quote_qualified_identifier, AccessShareLock, AsPgCStr, CopyStmt,
+        CreateTemplateTupleDesc, DefElem, List, NoLock, Node, NodeTag::T_CopyStmt, Oid,
+        ParseNamespaceItem, ParseState, PlannedStmt, Query, QueryEnvironment, RangeVar,
+        RangeVarGetRelidExtended, RawStmt, RowExclusiveLock, TargetEntry, TupleDescInitEntry,
+        TupleDescInitEntryCollation,
     },
     PgBox, PgList, PgLogLevel, PgRelation, PgSqlErrorCode, PgTupleDesc,
 };
@@ -21,18 +21,15 @@ use crate::{
         field_ids,
         match_by::MatchBy,
         parquet_version::ParquetVersion,
-        parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
         uri_utils::ParsedUriInfo,
     },
+    parquet_copy_hook::pg_compat::pg_analyze_and_rewrite,
     pgrx_utils::extension_exists,
 };
 
 use self::field_ids::FieldIds;
 
-use super::{
-    copy_to_split_dest_receiver::INVALID_FILE_SIZE_BYTES, hook::ENABLE_PARQUET_COPY_HOOK,
-    pg_compat::strVal,
-};
+use super::{hook::ENABLE_PARQUET_COPY_HOOK, pg_compat::strVal};
 
 pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &ParsedUriInfo) {
     validate_copy_option_names(
@@ -153,7 +150,9 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
 
         let compression = copy_to_stmt_compression(p_stmt, uri_info);
 
-        compression.ensure_compression_level(compression_level);
+        if let Some(compression) = compression {
+            compression.ensure_compression_level(compression_level);
+        }
     }
 
     let parquet_version_option = copy_stmt_get_option(p_stmt, "parquet_version");
@@ -238,11 +237,11 @@ pub(crate) fn copy_stmt_uri(p_stmt: &PgBox<PlannedStmt>) -> Result<ParsedUriInfo
     ParsedUriInfo::try_from(uri)
 }
 
-pub(crate) fn copy_to_stmt_file_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
+pub(crate) fn copy_to_stmt_file_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> Option<i64> {
     let file_size_bytes_option = copy_stmt_get_option(p_stmt, "file_size_bytes");
 
     if file_size_bytes_option.is_null() {
-        INVALID_FILE_SIZE_BYTES
+        None
     } else {
         let file_size_bytes = unsafe { defGetString(file_size_bytes_option.as_ptr()) };
 
@@ -252,49 +251,58 @@ pub(crate) fn copy_to_stmt_file_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
                 .expect("file_size_bytes option is not a valid CString")
         };
 
-        parse_file_size(file_size_bytes)
-            .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {e}")) as i64
+        Some(
+            parse_file_size(file_size_bytes)
+                .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {e}"))
+                as i64,
+        )
     }
 }
 
-pub(crate) fn copy_to_stmt_field_ids(p_stmt: &PgBox<PlannedStmt>) -> *const c_char {
+pub(crate) fn copy_to_stmt_field_ids(p_stmt: &PgBox<PlannedStmt>) -> Option<FieldIds> {
     let field_ids_option = copy_stmt_get_option(p_stmt, "field_ids");
 
     if field_ids_option.is_null() {
-        FieldIds::default().to_string().as_pg_cstr()
+        Some(FieldIds::default())
     } else {
-        unsafe { defGetString(field_ids_option.as_ptr()) }
+        let field_ids = unsafe { defGetString(field_ids_option.as_ptr()) };
+        let field_ids = unsafe {
+            CStr::from_ptr(field_ids)
+                .to_str()
+                .expect("field_ids option is not a valid CString")
+        };
+        Some(FieldIds::from_str(field_ids).unwrap_or_else(|e| panic!("{}", e)))
     }
 }
 
-pub(crate) fn copy_to_stmt_row_group_size(p_stmt: &PgBox<PlannedStmt>) -> i64 {
+pub(crate) fn copy_to_stmt_row_group_size(p_stmt: &PgBox<PlannedStmt>) -> Option<i64> {
     let row_group_size_option = copy_stmt_get_option(p_stmt, "row_group_size");
 
     if row_group_size_option.is_null() {
-        DEFAULT_ROW_GROUP_SIZE
+        None
     } else {
-        unsafe { defGetInt64(row_group_size_option.as_ptr()) }
+        Some(unsafe { defGetInt64(row_group_size_option.as_ptr()) })
     }
 }
 
-pub(crate) fn copy_to_stmt_row_group_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
+pub(crate) fn copy_to_stmt_row_group_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> Option<i64> {
     let row_group_size_bytes_option = copy_stmt_get_option(p_stmt, "row_group_size_bytes");
 
     if row_group_size_bytes_option.is_null() {
-        DEFAULT_ROW_GROUP_SIZE_BYTES
+        None
     } else {
-        unsafe { defGetInt64(row_group_size_bytes_option.as_ptr()) }
+        Some(unsafe { defGetInt64(row_group_size_bytes_option.as_ptr()) })
     }
 }
 
 pub(crate) fn copy_to_stmt_compression(
     p_stmt: &PgBox<PlannedStmt>,
     uri_info: &ParsedUriInfo,
-) -> PgParquetCompression {
+) -> Option<PgParquetCompression> {
     let compression_option = copy_stmt_get_option(p_stmt, "compression");
 
     if compression_option.is_null() {
-        PgParquetCompression::try_from(uri_info.uri.clone()).unwrap_or_default()
+        PgParquetCompression::try_from(uri_info.uri.clone()).ok()
     } else {
         let compression = unsafe { defGetString(compression_option.as_ptr()) };
 
@@ -304,30 +312,25 @@ pub(crate) fn copy_to_stmt_compression(
                 .expect("compression option is not a valid CString")
         };
 
-        PgParquetCompression::from_str(compression).unwrap_or_else(|e| panic!("{}", e))
+        Some(PgParquetCompression::from_str(compression).unwrap_or_else(|e| panic!("{}", e)))
     }
 }
 
-pub(crate) fn copy_to_stmt_compression_level(
-    p_stmt: &PgBox<PlannedStmt>,
-    uri_info: &ParsedUriInfo,
-) -> Option<i32> {
+pub(crate) fn copy_to_stmt_compression_level(p_stmt: &PgBox<PlannedStmt>) -> Option<i32> {
     let compression_level_option = copy_stmt_get_option(p_stmt, "compression_level");
 
     if compression_level_option.is_null() {
-        let compression = copy_to_stmt_compression(p_stmt, uri_info);
-
-        compression.default_compression_level()
+        None
     } else {
         Some(unsafe { defGetInt32(compression_level_option.as_ptr()) as _ })
     }
 }
 
-pub(crate) fn copy_to_stmt_parquet_version(p_stmt: &PgBox<PlannedStmt>) -> ParquetVersion {
+pub(crate) fn copy_to_stmt_parquet_version(p_stmt: &PgBox<PlannedStmt>) -> Option<ParquetVersion> {
     let parquet_version_option = copy_stmt_get_option(p_stmt, "parquet_version");
 
     if parquet_version_option.is_null() {
-        ParquetVersion::default()
+        None
     } else {
         let parquet_version = unsafe { defGetString(parquet_version_option.as_ptr()) };
         let parquet_version = unsafe {
@@ -336,7 +339,7 @@ pub(crate) fn copy_to_stmt_parquet_version(p_stmt: &PgBox<PlannedStmt>) -> Parqu
                 .expect("parquet_version option is not a valid CString")
         };
 
-        ParquetVersion::from_str(parquet_version).unwrap_or_else(|e| panic!("{}", e))
+        Some(ParquetVersion::from_str(parquet_version).unwrap_or_else(|e| panic!("{}", e)))
     }
 }
 
@@ -602,16 +605,18 @@ pub(crate) fn copy_stmt_attribute_list(p_stmt: &PgBox<PlannedStmt>) -> *mut List
 
 // create_filtered_tupledesc_for_relation creates a new tuple descriptor for the COPY operation by
 // removing dropped attributes and filtering the attributes based on the attribute name list.
-pub(crate) fn create_filtered_tupledesc_for_relation<'a>(
+pub(crate) fn create_filtered_tupledesc_for_relation(
     p_stmt: &PgBox<PlannedStmt>,
-    relation: &'a PgRelation,
-) -> PgTupleDesc<'a> {
+    relation: &PgRelation,
+) -> PgTupleDesc<'static> {
     let attribute_name_list = copy_stmt_attribute_names(p_stmt);
 
     let relation_tupledesc = relation.tuple_desc();
 
     if attribute_name_list.is_empty() {
-        return relation_tupledesc;
+        let relation_tupledesc_copy =
+            unsafe { PgTupleDesc::from_pg_copy(relation_tupledesc.as_ptr()) };
+        return relation_tupledesc_copy;
     }
 
     let filtered_tupledesc = unsafe { CreateTemplateTupleDesc(attribute_name_list.len() as i32) };
@@ -661,6 +666,70 @@ pub(crate) fn create_filtered_tupledesc_for_relation<'a>(
     }
 
     filtered_tupledesc
+}
+
+// create_filtered_tupledesc_for_target_list creates a new tuple descriptor for the COPY TO operation from
+// the target list of the COPY statement.
+pub(crate) fn create_filtered_tupledesc_for_target_list(
+    raw_stmt: &PgBox<RawStmt>,
+    query_string: &CStr,
+    query_env: &PgBox<QueryEnvironment>,
+) -> PgTupleDesc<'static> {
+    let rewritten_queries = pg_analyze_and_rewrite(
+        raw_stmt.clone().as_ptr(),
+        query_string.as_ptr(),
+        query_env.as_ptr(),
+    );
+
+    let query: *mut Query = unsafe {
+        PgList::from_pg(rewritten_queries)
+            .pop()
+            .expect("rewritten query is empty")
+    };
+
+    let target_list = unsafe { PgList::<TargetEntry>::from_pg((*query).targetList) };
+
+    let mut n_attributes = 0;
+
+    for target_entry in target_list.iter_ptr() {
+        let target_entry = unsafe { PgBox::<TargetEntry>::from_pg(target_entry) };
+
+        if !target_entry.resjunk {
+            n_attributes += 1;
+        }
+    }
+
+    let tupledesc = unsafe { CreateTemplateTupleDesc(n_attributes) };
+    let mut current_attribute_number = 1;
+
+    for target_entry in target_list.iter_ptr() {
+        let target_entry = unsafe { PgBox::<TargetEntry>::from_pg(target_entry) };
+
+        if target_entry.resjunk {
+            continue;
+        }
+
+        unsafe {
+            TupleDescInitEntry(
+                tupledesc,
+                current_attribute_number,
+                target_entry.resname,
+                exprType(target_entry.expr as _),
+                exprTypmod(target_entry.expr as _),
+                0,
+            );
+
+            TupleDescInitEntryCollation(
+                tupledesc,
+                current_attribute_number,
+                exprCollation(target_entry.expr as _),
+            );
+        }
+
+        current_attribute_number += 1;
+    }
+
+    unsafe { PgTupleDesc::from_pg(tupledesc) }
 }
 
 /// Parses a size string like "1MB", "512KB", or just "1000000" into a byte count.

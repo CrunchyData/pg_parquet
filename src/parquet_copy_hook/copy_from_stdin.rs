@@ -29,7 +29,7 @@ const MAX_READ_SIZE: usize = 65536;
  * CopyInputToFile copies data from the socket to the given file.
  * We request the client send a specific column count.
  */
-pub(crate) unsafe fn copy_stdin_to_file(uri_info: &ParsedUriInfo, natts: i16, is_binary: bool) {
+pub(crate) unsafe fn copy_stdin_to_file(uri_info: &ParsedUriInfo, natts: i16) {
     let mut cstate = CopyFromStdinState {
         fe_msgbuf: makeStringInfo(),
         raw_reached_eof: false,
@@ -47,6 +47,7 @@ pub(crate) unsafe fn copy_stdin_to_file(uri_info: &ParsedUriInfo, natts: i16, is
         .unwrap_or_else(|e| panic!("{}", e));
 
     /* tell the client we are ready for data */
+    let is_binary = true;
     send_copy_in_begin(natts, is_binary);
 
     /* allocate on the heap since it's quite big */

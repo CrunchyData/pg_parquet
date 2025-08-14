@@ -59,7 +59,7 @@ pub(crate) trait PgTypeToArrowArray<T: FromDatum + UnboxDatum> {
 }
 
 pub(crate) fn to_arrow_array(
-    tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
     if attribute_context.is_array() {
@@ -125,7 +125,7 @@ macro_rules! to_arrow_list_array {
 }
 
 fn to_arrow_primitive_array(
-    tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
     match attribute_context.typoid() {
@@ -218,7 +218,7 @@ fn to_arrow_primitive_array(
 }
 
 fn to_arrow_list_array(
-    tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+    tuples: &[Option<PgHeapTuple<AllocatedByRust>>],
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
     let element_context = attribute_context.element_context();
