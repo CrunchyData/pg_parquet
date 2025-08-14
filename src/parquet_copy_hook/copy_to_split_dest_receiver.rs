@@ -6,12 +6,7 @@ use std::{
 use pg_sys::{AsPgCStr, CommandDest, DestReceiver, TupleDesc, TupleTableSlot};
 use pgrx::prelude::*;
 
-use crate::arrow_parquet::{
-    compression::{PgParquetCompression, INVALID_COMPRESSION_LEVEL},
-    field_ids::FieldIds,
-    parquet_version::ParquetVersion,
-    parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
-};
+use crate::arrow_parquet::{compression::PgParquetCompression, parquet_version::ParquetVersion};
 
 use super::copy_to_dest_receiver::{
     create_copy_to_parquet_dest_receiver, CopyToParquetDestReceiver,
@@ -208,68 +203,8 @@ extern "C-unwind" fn copy_split_destroy(_dest: *mut DestReceiver) {}
 pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
     uri: *const c_char,
     is_to_stdout: bool,
-    file_size_bytes: *const i64,
-    field_ids: *const c_char,
-    row_group_size: *const i64,
-    row_group_size_bytes: *const i64,
-    compression: *const PgParquetCompression,
-    compression_level: *const i32,
-    parquet_version: *const ParquetVersion,
+    options: CopyToParquetOptions,
 ) -> *mut DestReceiver {
-    let file_size_bytes = if file_size_bytes.is_null() {
-        INVALID_FILE_SIZE_BYTES
-    } else {
-        unsafe { *file_size_bytes }
-    };
-
-    let field_ids = if field_ids.is_null() {
-        FieldIds::default().to_string().as_pg_cstr()
-    } else {
-        field_ids
-    };
-
-    let row_group_size = if row_group_size.is_null() {
-        DEFAULT_ROW_GROUP_SIZE
-    } else {
-        unsafe { *row_group_size }
-    };
-
-    let row_group_size_bytes = if row_group_size_bytes.is_null() {
-        DEFAULT_ROW_GROUP_SIZE_BYTES
-    } else {
-        unsafe { *row_group_size_bytes }
-    };
-
-    let compression = if compression.is_null() {
-        PgParquetCompression::default()
-    } else {
-        unsafe { *compression }
-    };
-
-    let compression_level = if compression_level.is_null() {
-        compression
-            .default_compression_level()
-            .unwrap_or(INVALID_COMPRESSION_LEVEL)
-    } else {
-        unsafe { *compression_level }
-    };
-
-    let parquet_version = if parquet_version.is_null() {
-        ParquetVersion::default()
-    } else {
-        unsafe { *parquet_version }
-    };
-
-    let options = CopyToParquetOptions {
-        file_size_bytes,
-        field_ids,
-        row_group_size,
-        row_group_size_bytes,
-        compression,
-        compression_level,
-        parquet_version,
-    };
-
     let mut split_dest =
         unsafe { PgBox::<CopyToParquetSplitDestReceiver, AllocatedByPostgres>::alloc0() };
 

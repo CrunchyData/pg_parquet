@@ -2528,6 +2528,7 @@ dependencies = [
  "parquet",
  "pgrx",
  "pgrx-tests",
+ "postgres",
  "rust-ini",
  "serde",
  "serde_json",
