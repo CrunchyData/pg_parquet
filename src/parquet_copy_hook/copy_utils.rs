@@ -46,6 +46,7 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
             "compression",
             "compression_level",
             "parquet_version",
+            "parallel_workers",
             "freeze",
         ],
     );
@@ -169,6 +170,16 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
 
         ParquetVersion::from_str(parquet_version).unwrap_or_else(|e| panic!("{}", e));
     }
+
+    let parallel_workers_option = copy_stmt_get_option(p_stmt, "parallel_workers");
+
+    if !parallel_workers_option.is_null() {
+        let parallel_workers = unsafe { defGetInt32(parallel_workers_option.as_ptr()) };
+
+        if parallel_workers <= 0 {
+            panic!("parallel_workers must be greater than 0");
+        }
+    }
 }
 
 pub(crate) fn validate_copy_from_options(p_stmt: &PgBox<PlannedStmt>) {
@@ -264,6 +275,16 @@ pub(crate) fn copy_to_stmt_field_ids(p_stmt: &PgBox<PlannedStmt>) -> *const c_ch
         FieldIds::default().to_string().as_pg_cstr()
     } else {
         unsafe { defGetString(field_ids_option.as_ptr()) }
+    }
+}
+
+pub(crate) fn copy_to_stmt_parallel_workers(p_stmt: &PgBox<PlannedStmt>) -> u64 {
+    let parallel_workers_option = copy_stmt_get_option(p_stmt, "parallel_workers");
+
+    if parallel_workers_option.is_null() {
+        1_u64
+    } else {
+        unsafe { defGetInt32(parallel_workers_option.as_ptr()) as _ }
     }
 }
 

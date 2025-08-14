@@ -7,9 +7,9 @@ use pgrx::{
         DestReceiver, GetActiveSnapshot, Node,
         NodeTag::{self, T_CopyStmt},
         ParamListInfoData, PlannedStmt, PortalDefineQuery, PortalDrop, PortalRun, PortalStart,
-        QueryCompletion, QueryEnvironment, RawStmt, ResTarget, SelectStmt, CURSOR_OPT_PARALLEL_OK,
-        RELKIND_FOREIGN_TABLE, RELKIND_MATVIEW, RELKIND_PARTITIONED_TABLE, RELKIND_RELATION,
-        RELKIND_SEQUENCE, RELKIND_VIEW,
+        Query, QueryCompletion, QueryEnvironment, RawStmt, ResTarget, SelectStmt,
+        CURSOR_OPT_PARALLEL_OK, RELKIND_FOREIGN_TABLE, RELKIND_MATVIEW, RELKIND_PARTITIONED_TABLE,
+        RELKIND_RELATION, RELKIND_SEQUENCE, RELKIND_VIEW,
     },
     AllocatedByRust, PgBox, PgList, PgLogLevel, PgRelation, PgSqlErrorCode,
 };
@@ -19,20 +19,18 @@ use crate::parquet_copy_hook::{
     pg_compat::pg_analyze_and_rewrite,
 };
 
-// execute_copy_to_with_dest_receiver executes a COPY TO statement with our custom DestReceiver
-// for writing to Parquet files.
+// extract_query_from_copy_to prepares SELECT query from given COPY TO command
+// with the following checks:
 // - converts the table relation to a SELECT statement if necessary
 // - analyzes and rewrites the raw query
 // - plans the rewritten query
 // - creates a portal for the planned query by using the custom DestReceiver
 // - executes the query with the portal
-pub(crate) fn execute_copy_to_with_dest_receiver(
+pub(crate) fn extract_query_from_copy_to(
     p_stmt: &PgBox<PlannedStmt>,
     query_string: &CStr,
-    params: &PgBox<ParamListInfoData>,
     query_env: &PgBox<QueryEnvironment>,
-    parquet_dest: &PgBox<DestReceiver>,
-) -> u64 {
+) -> PgBox<Query> {
     unsafe {
         debug_assert!(is_a(p_stmt.utilityStmt, T_CopyStmt));
 
@@ -61,9 +59,21 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
         let query = PgList::from_pg(rewritten_queries)
             .pop()
             .expect("rewritten query is empty");
+        PgBox::<Query>::from_pg(query)
+    }
+}
 
+// execute_query_into_dest_receiver executes given query with our custom DestReceiver
+// for writing to Parquet files.
+pub(crate) fn execute_query_into_dest_receiver(
+    query: &PgBox<Query>,
+    query_string: &CStr,
+    params: &PgBox<ParamListInfoData>,
+    parquet_dest: &PgBox<DestReceiver>,
+) -> u64 {
+    unsafe {
         let plan = pg_plan_query(
-            query,
+            query.as_ptr(),
             std::ptr::null(),
             CURSOR_OPT_PARALLEL_OK as _,
             params.as_ptr(),

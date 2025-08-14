@@ -1,4 +1,4 @@
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 use parquet::file::properties::WriterVersion;
 
@@ -29,6 +29,15 @@ impl From<ParquetVersion> for WriterVersion {
         match value {
             ParquetVersion::V1 => WriterVersion::PARQUET_1_0,
             ParquetVersion::V2 => WriterVersion::PARQUET_2_0,
+        }
+    }
+}
+
+impl Display for ParquetVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParquetVersion::V1 => write!(f, "v1"),
+            ParquetVersion::V2 => write!(f, "v2"),
         }
     }
 }
