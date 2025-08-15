@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND="noninteractive"
 ENV TZ="Europe/Istanbul"
 
-ARG PG_MAJOR=17
+ARG PG_MAJOR=18
 
 # install deps
 RUN apt-get update && apt-get -y install build-essential libreadline-dev zlib1g-dev      \

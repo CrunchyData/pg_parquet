@@ -13,6 +13,7 @@ path = "./src/bin/pgrx_embed.rs"
 
 [features]
 default = ["pg17"]
+pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
 pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]

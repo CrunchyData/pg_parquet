@@ -42,7 +42,7 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 
 # set cargo-pgrx (should be the same as pgrx dep in Cargo.toml) and pg versions
 > export CARGO_PGRX_VERSION=0.16.0
-> export PG_MAJOR=17
+> export PG_MAJOR=18
 
 # install cargo-pgrx
 > cargo install --force --locked cargo-pgrx@"${CARGO_PGRX_VERSION}"
@@ -385,3 +385,4 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 | 15                       |    ✅     |
 | 16                       |    ✅     |
 | 17                       |    ✅     |
+| 18                       |    ✅     |
