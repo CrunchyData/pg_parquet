@@ -2522,6 +2522,7 @@ dependencies = [
  "aws-credential-types",
  "azure_storage",
  "futures",
+ "glob",
  "home",
  "object_store",
  "once_cell",
