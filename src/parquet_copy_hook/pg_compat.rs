@@ -26,7 +26,7 @@ pub(crate) fn pg_analyze_and_rewrite(
         )
     }
 
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
     unsafe {
         pgrx::pg_sys::pg_analyze_and_rewrite_fixedparams(
             raw_stmt,
@@ -50,7 +50,7 @@ pub(crate) fn strVal(val: *mut Node) -> String {
             .to_string()
     }
 
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
     unsafe {
         let val = (*(val as *mut pgrx::pg_sys::String)).sval;
 
@@ -68,7 +68,7 @@ pub(crate) fn MarkGUCPrefixReserved(guc_prefix: &str) {
         pgrx::pg_sys::EmitWarningsOnPlaceholders(guc_prefix.as_pg_cstr())
     }
 
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
     unsafe {
         pgrx::pg_sys::MarkGUCPrefixReserved(guc_prefix.as_pg_cstr())
     }
@@ -76,7 +76,7 @@ pub(crate) fn MarkGUCPrefixReserved(guc_prefix: &str) {
 
 /// check_copy_table_permission checks if the user has permission to copy from/to the table.
 /// This is taken from the original PostgreSQL DoCopy function.
-#[cfg(any(feature = "pg16", feature = "pg17"))]
+#[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18"))]
 pub(crate) fn check_copy_table_permission(
     p_stmt: &PgBox<PlannedStmt>,
     p_state: &PgBox<ParseState>,
