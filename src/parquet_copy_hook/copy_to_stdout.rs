@@ -11,7 +11,7 @@ use crate::arrow_parquet::uri_utils::{uri_as_string, ParsedUriInfo};
  * copy_file_to_stdout copies the raw contents of a file to the
  * client as part of a COPY .. TO STDOUT.
  */
-pub(crate) unsafe fn copy_file_to_stdout(uri_info: ParsedUriInfo, natts: i16) {
+pub(crate) unsafe fn copy_file_to_stdout(uri_info: &ParsedUriInfo, natts: i16) {
     let path = uri_as_string(&uri_info.uri);
 
     let mut file = File::open(path).unwrap_or_else(|e| {
