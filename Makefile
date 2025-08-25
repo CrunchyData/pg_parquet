@@ -8,6 +8,8 @@ ENVFILE ?= .devcontainer/.env
 include $(ENVFILE)
 export
 
+IS_EL8 := $(shell grep -q 'PLATFORM_ID="platform:el8"' /etc/os-release 2>/dev/null && echo "true" || echo "false")
+
 PG_CONFIG ?= pg_config
 
 PG_MAJOR ?= $(shell $(PG_CONFIG) --version | cut -d '.' -f 1 | cut -d ' ' -f 2)
@@ -59,7 +61,9 @@ check-s3: build stop-minio start-minio
 	cargo pgrx test pg$(PG_MAJOR) test_s3 --no-default-features
 
 check-azure: build stop-azurite start-azurite
+ifeq ($(IS_EL8),false)
 	cargo pgrx test pg$(PG_MAJOR) test_azure --no-default-features
+endif
 
 check-gcs: build stop-fake-gcs start-fake-gcs
 	cargo pgrx test pg$(PG_MAJOR) test_gcs --no-default-features
@@ -98,6 +102,7 @@ stop-minio: stop-mitmdump
 	docker stop minio || true
 
 start-azurite:
+ifeq ($(IS_EL8),false)
 	docker run --rm -d \
 	  --name azurite \
 	  --env-file $(ENVFILE) \
@@ -111,9 +116,12 @@ start-azurite:
 
 	az storage container create -n ${AZURE_TEST_CONTAINER_NAME} --connection-string ${AZURE_STORAGE_CONNECTION_STRING}
 	az storage container create -n ${AZURE_TEST_CONTAINER_NAME}2 --connection-string ${AZURE_STORAGE_CONNECTION_STRING}
+endif
 
 stop-azurite:
+ifeq ($(IS_EL8),false)
 	docker stop azurite || true
+endif
 
 start-fake-gcs:
 	# tusvold/fake-gcs-server is not available for ARM64, so we build it from source
