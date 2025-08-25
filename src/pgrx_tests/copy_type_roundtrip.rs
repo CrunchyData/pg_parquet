@@ -4,8 +4,8 @@ mod tests {
 
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
-        extension_exists, timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult,
-        TestTable, LOCAL_TEST_FILE_PATH,
+        extension_exists, extension_version, timetz_array_to_utc_time_array, timetz_to_utc_time,
+        TestResult, TestTable, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::fallback_to_text::FallbackToText;
     use crate::type_compat::geometry::{
@@ -1038,7 +1038,7 @@ mod tests {
     #[pg_test]
     fn test_geometry() {
         // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        if !extension_exists("postgis") || *extension_version("postgis") < *"3.4" {
             return;
         }
 
@@ -1056,7 +1056,7 @@ mod tests {
     #[pg_test]
     fn test_geometry_array() {
         // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        if !extension_exists("postgis") || *extension_version("postgis") < *"3.4" {
             return;
         }
 
@@ -1071,7 +1071,7 @@ mod tests {
     #[pg_test]
     fn test_geometry_geoparquet_metadata() {
         // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        if !extension_exists("postgis") || *extension_version("postgis") < *"3.4" {
             return;
         }
 

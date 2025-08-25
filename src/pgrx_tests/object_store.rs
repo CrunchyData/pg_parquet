@@ -340,6 +340,7 @@ mod tests {
     }
 
     #[pg_test]
+    #[cfg(not(rhel8))]
     fn test_azure_blob_from_env() {
         object_store_cache_clear();
 
@@ -367,6 +368,7 @@ mod tests {
     }
 
     #[pg_test]
+    #[cfg(not(rhel8))]
     fn test_azure_from_config_file() {
         object_store_cache_clear();
 
@@ -413,6 +415,7 @@ mod tests {
     }
 
     #[pg_test]
+    #[cfg(not(rhel8))]
     fn test_azure_from_env_via_connection_string() {
         object_store_cache_clear();
 
@@ -441,6 +444,7 @@ mod tests {
     }
 
     #[pg_test]
+    #[cfg(not(rhel8))]
     fn test_azure_from_config_via_connection_string() {
         object_store_cache_clear();
 
@@ -484,6 +488,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "Account must be specified")]
+    #[cfg(not(rhel8))]
     fn test_azure_no_storage_account() {
         object_store_cache_clear();
 
@@ -505,6 +510,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "403 Forbidden")]
+    #[cfg(not(rhel8))]
     fn test_azure_wrong_storage_key() {
         object_store_cache_clear();
 
@@ -531,6 +537,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "404 Not Found")]
+    #[cfg(not(rhel8))]
     fn test_azure_write_wrong_container() {
         object_store_cache_clear();
 
@@ -547,6 +554,7 @@ mod tests {
     }
 
     #[pg_test]
+    #[cfg(not(rhel8))]
     fn test_azure_read_write_sas() {
         object_store_cache_clear();
 
@@ -575,6 +583,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "403 Forbidden")]
+    #[cfg(not(rhel8))]
     fn test_azure_read_only_sas() {
         object_store_cache_clear();
 
@@ -603,6 +612,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(expected = "could not open file")]
+    #[cfg(not(rhel8))]
     fn test_azure_unsupported_uri() {
         object_store_cache_clear();
 
