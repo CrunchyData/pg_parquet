@@ -4,8 +4,8 @@ mod tests {
 
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
-        extension_exists, timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult,
-        TestTable, LOCAL_TEST_FILE_PATH,
+        extension_exists, extension_version, timetz_array_to_utc_time_array, timetz_to_utc_time,
+        TestResult, TestTable, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::fallback_to_text::FallbackToText;
     use crate::type_compat::geometry::{
