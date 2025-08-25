@@ -1038,7 +1038,7 @@ mod tests {
     #[pg_test]
     fn test_geometry() {
         // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        if !extension_exists("postgis") || extension_version("postgis") < "3.4" {
             return;
         }
 
@@ -1056,7 +1056,7 @@ mod tests {
     #[pg_test]
     fn test_geometry_array() {
         // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        if !extension_exists("postgis") || extension_version("postgis") < "3.4" {
             return;
         }
 
@@ -1071,7 +1071,7 @@ mod tests {
     #[pg_test]
     fn test_geometry_geoparquet_metadata() {
         // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        if !extension_exists("postgis") || extension_version("postgis") < "3.4" {
             return;
         }
 
