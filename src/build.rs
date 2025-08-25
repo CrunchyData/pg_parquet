@@ -8,7 +8,7 @@ fn main() {
 
     let os_info = String::from_utf8(output.stdout).unwrap();
 
-    if os_info.contains("Red Hat Enterprise Linux 8") || os_info.contains("AlmaLinux 8") {
+    if os_info.contains("platform:el8") {
         println!("cargo:rustc-cfg=rhel8");
     }
 }
