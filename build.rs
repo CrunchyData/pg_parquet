@@ -9,6 +9,6 @@ fn main() {
     let os_info = String::from_utf8(output.stdout).unwrap();
 
     if os_info.contains("platform:el8") {
-        println!("cargo:rustc-cfg=rhel8");
+        println!("cargo:rustc-check-cfg=cfg(rhel8)");
     }
 }

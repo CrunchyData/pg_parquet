@@ -356,7 +356,7 @@ pub(crate) fn extension_version(extension_name: &str) -> str {
         "select default_version from pg_available_extensions where name = '{extension_name}'"
     );
 
-    Spi::get_one(&query).unwrap().unwrap()
+    (&Spi::get_one(&query)).unwrap()
 }
 
 pub(crate) fn write_record_batch_to_parquet(schema: SchemaRef, record_batch: RecordBatch) {
