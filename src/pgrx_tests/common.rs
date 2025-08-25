@@ -351,12 +351,12 @@ pub(crate) fn extension_exists(extension_name: &str) -> bool {
     Spi::get_one(&query).unwrap().unwrap()
 }
 
-pub(crate) fn extension_version(extension_name: &str) -> &str {
+pub(crate) fn extension_version(extension_name: &str) -> String {
     let query = format!(
         "select default_version from pg_available_extensions where name = '{extension_name}'"
     );
 
-    (&Spi::get_one(&query)).unwrap()
+    Spi::get_one(&query).unwrap().unwrap()
 }
 
 pub(crate) fn write_record_batch_to_parquet(schema: SchemaRef, record_batch: RecordBatch) {
