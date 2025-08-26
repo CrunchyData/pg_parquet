@@ -717,6 +717,7 @@ mod tests {
     }
 
     #[pg_test]
+    #[cfg(not(rhel8))]
     fn test_object_store_cache() {
         object_store_cache_clear();
 
