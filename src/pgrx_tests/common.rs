@@ -8,6 +8,7 @@ use crate::type_compat::map::Map;
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use parquet::arrow::ArrowWriter;
+use pgrx::spi;
 use pgrx::{
     datum::{Time, TimeWithTimeZone},
     FromDatum, IntoDatum, Spi,
@@ -345,7 +346,7 @@ pub(crate) fn timetz_array_to_utc_time_array(
 }
 
 pub(crate) fn extension_exists(extension_name: &str) -> bool {
-    let quoted_extension = Spi::quote_literal(extension_name);
+    let quoted_extension = spi::quote_literal(extension_name);
     let query =
         format!("select count(*) = 1 from pg_available_extensions where name = {quoted_extension}");
 
@@ -353,7 +354,7 @@ pub(crate) fn extension_exists(extension_name: &str) -> bool {
 }
 
 pub(crate) fn extension_version(extension_name: &str) -> String {
-    let quoted_extension = Spi::quote_literal(extension_name);
+    let quoted_extension = spi::quote_literal(extension_name);
     let query = format!(
         "select default_version from pg_available_extensions where name = {quoted_extension}"
     );
