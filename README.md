@@ -33,6 +33,10 @@ COPY table FROM 's3://mybucket/data.parquet' WITH (format 'parquet');
 After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build the extension.
 
 ```bash
+# clone repo
+> git clone https://github.com/CrunchyData/pg_parquet.git
+> cd pg_parquet
+
 # install rustup
 > curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
