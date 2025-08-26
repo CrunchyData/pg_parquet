@@ -345,15 +345,17 @@ pub(crate) fn timetz_array_to_utc_time_array(
 }
 
 pub(crate) fn extension_exists(extension_name: &str) -> bool {
+    let quoted_extension = Spi::quote_literal(extension_name);
     let query =
-        format!("select count(*) = 1 from pg_available_extensions where name = '{extension_name}'");
+        format!("select count(*) = 1 from pg_available_extensions where name = {quoted_extension}");
 
     Spi::get_one(&query).unwrap().unwrap()
 }
 
 pub(crate) fn extension_version(extension_name: &str) -> String {
+    let quoted_extension = Spi::quote_literal(extension_name);
     let query = format!(
-        "select default_version from pg_available_extensions where name = '{extension_name}'"
+        "select default_version from pg_available_extensions where name = {quoted_extension}"
     );
 
     Spi::get_one(&query).unwrap().unwrap()
