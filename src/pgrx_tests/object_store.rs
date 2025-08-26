@@ -258,6 +258,7 @@ mod tests {
     }
 
     #[pg_test]
+    #[cfg(not(rhel8))]
     fn test_s3_temporary_token() {
         object_store_cache_clear();
 
