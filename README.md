@@ -262,8 +262,9 @@ Alternatively, you can use the following environment variables when starting pos
 - `AZURE_STORAGE_KEY`: the storage key of the Azure Blob
 - `AZURE_STORAGE_CONNECTION_STRING`: the connection string for the Azure Blob (overrides any other config)
 - `AZURE_STORAGE_SAS_TOKEN`: the storage SAS token for the Azure Blob
-- `AZURE_TENANT_ID`: the tenant id for client secret auth **(only via environment variables)**
-- `AZURE_CLIENT_ID`: the client id for client secret auth **(only via environment variables)**
+- `AZURE_TENANT_ID`: the tenant id for client secret or workload identity auth **(only via environment variables)**
+- `AZURE_CLIENT_ID`: the client id for client secret or workload identity auth **(only via environment variables)**
+- `AZURE_FEDERATED_TOKEN_FILE`: the file system path to the federated token file to use for workload identity auth **(only via environment variables)**
 - `AZURE_CLIENT_SECRET`: the client secret for client secret auth **(only via environment variables)**
 - `AZURE_STORAGE_ENDPOINT`: the endpoint **(only via environment variables)**
 - `AZURE_CONFIG_FILE`: an alternative location for the config file **(only via environment variables)**

@@ -67,6 +67,11 @@ pub(crate) fn create_azure_object_store(uri: &Url) -> ObjectStoreWithExpiration 
         azure_builder = azure_builder.with_client_secret(client_secret);
     }
 
+    // federated token file
+    if let Some(federated_token_file) = azure_blob_config.federated_token_file {
+        azure_builder = azure_builder.with_federated_token_file(federated_token_file);
+    }
+
     let object_store = azure_builder.build().unwrap_or_else(|e| panic!("{}", e));
 
     // object store handles refreshing bearer token, so we do not need to handle expiry here
@@ -112,6 +117,7 @@ struct AzureStorageConfig {
     tenant_id: Option<String>,
     client_id: Option<String>,
     client_secret: Option<String>,
+    federated_token_file: Option<String>,
     endpoint: Option<String>,
     allow_http: bool,
 }
@@ -196,6 +202,8 @@ impl AzureStorageConfig {
         // client secret, object_store specific
         let client_secret = std::env::var("AZURE_CLIENT_SECRET").ok();
 
+        let federated_token_file = std::env::var("AZURE_FEDERATED_TOKEN_FILE").ok();
+
         AzureStorageConfig {
             account_name,
             account_key,
@@ -203,6 +211,7 @@ impl AzureStorageConfig {
             tenant_id,
             client_id,
             client_secret,
+            federated_token_file,
             endpoint,
             allow_http,
         }
@@ -237,6 +246,7 @@ impl From<ConnectionString<'_>> for AzureStorageConfig {
             tenant_id: None,
             client_id: None,
             client_secret: None,
+            federated_token_file: None,
             endpoint,
             allow_http,
         }
