@@ -2,7 +2,6 @@ use std::str::FromStr;
 
 use parquet::file::properties::WriterVersion;
 
-#[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) enum ParquetVersion {
     #[default]

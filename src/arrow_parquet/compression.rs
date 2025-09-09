@@ -3,7 +3,6 @@ use std::{fmt::Display, str::FromStr};
 use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use url::Url;
 
-#[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq, Default)]
 pub enum PgParquetCompression {
     Uncompressed,

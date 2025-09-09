@@ -1,31 +1,25 @@
 use std::ffi::{c_char, CStr};
 
 use pg_sys::{
-    standard_ProcessUtility, AsPgCStr, CommandTag, DestReceiver, ParamListInfoData, PlannedStmt,
+    standard_ProcessUtility, CommandTag, DestReceiver, ParamListInfoData, PlannedStmt,
     ProcessUtility_hook, ProcessUtility_hook_type, QueryCompletion, QueryEnvironment,
 };
 use pgrx::{prelude::*, GucSetting};
 
 use crate::{
-    arrow_parquet::{
-        compression::INVALID_COMPRESSION_LEVEL,
-        uri_utils::{ensure_access_privilege_to_uri, uri_as_string},
-    },
-    create_copy_to_parquet_split_dest_receiver,
-    parquet_copy_hook::copy_utils::{
-        copy_stmt_uri, copy_to_stmt_compression_level, copy_to_stmt_row_group_size,
-        copy_to_stmt_row_group_size_bytes, is_copy_from_parquet_stmt, is_copy_to_parquet_stmt,
+    arrow_parquet::uri_utils::ensure_access_privilege_to_uri,
+    parquet_copy_hook::{
+        copy_to::{execute_copy_to_parquet, pop_parquet_writer_context},
+        copy_utils::{
+            copy_stmt_uri, is_copy_from_parquet_stmt, is_copy_to_parquet_stmt,
+            validate_copy_to_options,
+        },
     },
 };
 
 use super::{
     copy_from::{execute_copy_from, pop_parquet_reader_context},
-    copy_to::execute_copy_to_with_dest_receiver,
-    copy_to_split_dest_receiver::free_copy_to_parquet_split_dest_receiver,
-    copy_utils::{
-        copy_to_stmt_compression, copy_to_stmt_field_ids, copy_to_stmt_file_size_bytes,
-        copy_to_stmt_parquet_version, validate_copy_from_options, validate_copy_to_options,
-    },
+    copy_utils::validate_copy_from_options,
 };
 
 pub(crate) static ENABLE_PARQUET_COPY_HOOK: GucSetting<bool> = GucSetting::<bool>::new(true);
@@ -48,52 +42,26 @@ pub(crate) extern "C-unwind" fn init_parquet_copy_hook() {
 fn process_copy_to_parquet(
     p_stmt: &PgBox<PlannedStmt>,
     query_string: &CStr,
-    params: &PgBox<ParamListInfoData>,
+    _params: &PgBox<ParamListInfoData>,
     query_env: &PgBox<QueryEnvironment>,
 ) -> u64 {
     let uri_info = copy_stmt_uri(p_stmt).unwrap_or_else(|e| panic!("{}", e));
 
-    let copy_from = false;
+    let copy_from = true;
     ensure_access_privilege_to_uri(&uri_info, copy_from);
 
     validate_copy_to_options(p_stmt, &uri_info);
 
-    let file_size_bytes = copy_to_stmt_file_size_bytes(p_stmt);
-    let field_ids = copy_to_stmt_field_ids(p_stmt);
-    let row_group_size = copy_to_stmt_row_group_size(p_stmt);
-    let row_group_size_bytes = copy_to_stmt_row_group_size_bytes(p_stmt);
-    let compression = copy_to_stmt_compression(p_stmt, &uri_info);
-    let compression_level = copy_to_stmt_compression_level(p_stmt, &uri_info);
-    let parquet_version = copy_to_stmt_parquet_version(p_stmt);
+    PgTryBuilder::new(|| execute_copy_to_parquet(p_stmt, query_string, query_env, uri_info))
+        .catch_others(|cause| {
+            // make sure to pop the parquet writer context
+            // In case we did not push the context, we should not throw an error while popping
+            let throw_error = false;
+            pop_parquet_writer_context(throw_error);
 
-    let parquet_split_dest = create_copy_to_parquet_split_dest_receiver(
-        uri_as_string(&uri_info.uri).as_pg_cstr(),
-        uri_info.stdio_tmp_fd.is_some(),
-        &file_size_bytes,
-        field_ids,
-        &row_group_size,
-        &row_group_size_bytes,
-        &compression,
-        &compression_level.unwrap_or(INVALID_COMPRESSION_LEVEL),
-        &parquet_version,
-    );
-
-    let parquet_split_dest = unsafe { PgBox::from_pg(parquet_split_dest) };
-
-    PgTryBuilder::new(|| {
-        execute_copy_to_with_dest_receiver(
-            p_stmt,
-            query_string,
-            params,
-            query_env,
-            &parquet_split_dest,
-        )
-    })
-    .catch_others(|cause| cause.rethrow())
-    .finally(|| {
-        free_copy_to_parquet_split_dest_receiver(parquet_split_dest.as_ptr());
-    })
-    .execute()
+            cause.rethrow()
+        })
+        .execute()
 }
 
 fn process_copy_from_parquet(
