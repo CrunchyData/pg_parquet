@@ -129,7 +129,6 @@ impl AwsS3Config {
         // Check GUC values first
         let mut access_key_id = AWS_ACCESS_KEY_ID.get().map(|s| {
             let key = s.to_string_lossy().to_string();
-            eprintln!("DEBUG: GUC access_key_id: '{}'", key);
             key
         });
         let mut secret_access_key = AWS_SECRET_ACCESS_KEY
@@ -142,6 +141,7 @@ impl AwsS3Config {
             .get()
             .map(|s| s.to_string_lossy().to_string());
         let mut region = AWS_REGION.get().map(|s| s.to_string_lossy().to_string());
+        //ToDo: Add credential expiry handling when using session variables.
         let mut expire_at = None;
 
         // If GUCs are not set, fall back to environment variables and config files
@@ -156,7 +156,6 @@ impl AwsS3Config {
                 if let Ok(credentials) = cred_res {
                     if access_key_id.is_none() {
                         let key = credentials.access_key_id().to_string();
-                        eprintln!("DEBUG: AWS SDK access_key_id: '{}'", key);
                         access_key_id = Some(key);
                     }
                     if secret_access_key.is_none() {
