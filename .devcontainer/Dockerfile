@@ -10,7 +10,7 @@ RUN apt-get update && apt-get -y install build-essential libreadline-dev zlib1g-
                                          flex bison libxml2-dev libxslt-dev libssl-dev   \
                                          libxml2-utils xsltproc ccache pkg-config wget   \
                                          curl lsb-release ca-certificates gnupg sudo git \
-                                         nano net-tools awscli
+                                         nano net-tools awscli libkrb5-dev
 
 # install azure-cli
 RUN curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | tee /etc/apt/keyrings/microsoft.gpg > /dev/null
@@ -18,7 +18,8 @@ RUN echo "deb [arch=`dpkg --print-architecture` signed-by=/etc/apt/keyrings/micr
 RUN apt-get update && apt-get install -y azure-cli
 
 # install Postgres
-RUN sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+RUN sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list' && \
+    sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg 18" >> /etc/apt/sources.list.d/pgdg.list'
 RUN wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
 RUN apt-get update && apt-get -y install postgresql-${PG_MAJOR}-postgis-3  \
                                          postgresql-server-dev-${PG_MAJOR} \
@@ -27,11 +28,17 @@ RUN apt-get update && apt-get -y install postgresql-${PG_MAJOR}-postgis-3  \
 
 # set up permissions so that rust user can create extensions
 RUN chmod a+rwx `pg_config --pkglibdir`          \
+                `pg_config --pkglibdir`/bitcode  \
                 `pg_config --sharedir`/extension \
                 /var/run/postgresql/
 
-# install pgaudit
-RUN apt-get update && apt-get -y install postgresql-${PG_MAJOR}-pgaudit
+# install pgaudit extension
+RUN if [ ${PG_MAJOR} != "18" ]; then \
+      apt-get -y install postgresql-${PG_MAJOR}-pgaudit; \
+    else \
+      git clone --branch integration https://github.com/pgaudit/pgaudit.git /tmp/pgaudit && \
+      cd /tmp/pgaudit && make install USE_PGXS=1 PG_CONFIG=pg_config; \
+    fi
 
 # initdb requires non-root user. This will also be the user that runs the container.
 ARG USERNAME=rust

@@ -12,7 +12,7 @@ name = "pgrx_embed_pg_parquet"
 path = "./src/bin/pgrx_embed.rs"
 
 [features]
-default = ["pg17"]
+default = ["pg18"]
 pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
 pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]

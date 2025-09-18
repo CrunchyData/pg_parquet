@@ -19,7 +19,7 @@ jobs:
   build-and-test:
     strategy:
       matrix:
-        postgres: [ 14, 15, 16, 17 ]
+        postgres: [ 14, 15, 16, 17, 18 ]
         runs_on: [ 'ubuntu-22.04', 'ubuntu-22.04-arm' ]
         include:
           - runs_on: ubuntu-22.04
@@ -91,23 +91,20 @@ jobs:
           curl https://raw.githubusercontent.com/pypa/pipenv/master/get-pipenv.py | python
           pipenv install --dev
 
-      - name: Install PostgreSQL
+      - name: Install PostgreSQL and postgis
         run: |
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg 18" >> /etc/apt/sources.list.d/pgdg.list'
           wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
           sudo apt-get update
           sudo apt-get -y install build-essential libreadline-dev zlib1g-dev flex bison libxml2-dev \
                                   libxslt-dev libssl-dev libxml2-utils xsltproc ccache pkg-config   \
-                                  gnupg ca-certificates
-          sudo apt-get -y install postgresql-${{ env.PG_MAJOR }}-postgis-3 \
+                                  gnupg ca-certificates libkrb5-dev
+          sudo apt-get -y install postgresql-${{ env.PG_MAJOR }}-postgis-3  \
                                   postgresql-server-dev-${{ env.PG_MAJOR }} \
-                                  postgresql-client-${{ env.PG_MAJOR }} \
+                                  postgresql-client-${{ env.PG_MAJOR }}     \
                                   libpq-dev
           echo "export PG_MAJOR=${{ env.PG_MAJOR }}" >> $GITHUB_ENV
-
-      - name: Install pgaudit extension
-        run: |
-          sudo apt-get install -y postgresql-${{ env.PG_MAJOR }}-pgaudit
 
       - name: Install azure-cli
         run: |
@@ -124,9 +121,27 @@ jobs:
 
       - name: Set up permissions for PostgreSQL
         run: |
-          sudo chmod a+rwx $(/usr/lib/postgresql/${{ env.PG_MAJOR }}/bin/pg_config --pkglibdir)          \
-                           $(/usr/lib/postgresql/${{ env.PG_MAJOR }}/bin/pg_config --sharedir)/extension \
+          sudo chmod a+rwx $(${{ env.PG_CONFIG }} --pkglibdir)          \
+                           $(${{ env.PG_CONFIG }} --pkglibdir)/bitcode  \
+                           $(${{ env.PG_CONFIG }} --sharedir)/extension \
                            /var/run/postgresql/
+
+      - uses: actions/checkout@v4
+        if: ${{ env.PG_MAJOR == '18' }}
+        with:
+          repository: 'pgaudit/pgaudit'
+          ref: 'integration'
+          path: pgaudit
+
+      - name: Install pgaudit extension for pg18
+        if: ${{ env.PG_MAJOR == '18' }}
+        run: |
+          cd pgaudit && make install USE_PGXS=1 PG_CONFIG=${{ env.PG_CONFIG }}
+
+      - name: Install pgaudit extension for < pg18
+        if: ${{ env.PG_MAJOR != '18' }}
+        run: |
+          sudo apt-get -y install postgresql-${{ env.PG_MAJOR }}-pgaudit
 
       - name: Check format and lint
         run: |
@@ -134,17 +149,17 @@ jobs:
           make check-lint
 
       - name: Run tests without coverage
-        if: ${{ env.PG_MAJOR != '17' || matrix.arch != 'x86_64' }}
+        if: ${{ env.PG_MAJOR != '18' || matrix.arch != 'x86_64' }}
         run: |
           make check
 
       - name: Run tests with coverage
-        if: ${{ env.PG_MAJOR == '17' && matrix.arch == 'x86_64' }}
+        if: ${{ env.PG_MAJOR == '18' && matrix.arch == 'x86_64' }}
         run: |
           make check-with-coverage
 
       - name: Upload coverage report to Codecov
-        if: ${{ env.PG_MAJOR == '17' && matrix.arch == 'x86_64' }}
+        if: ${{ env.PG_MAJOR == '18' && matrix.arch == 'x86_64' }}
         uses: codecov/codecov-action@v4
         with:
           fail_ci_if_error: true
