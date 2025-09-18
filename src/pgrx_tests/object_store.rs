@@ -718,6 +718,257 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_s3_from_guc_credentials() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        // Get credentials from environment variables
+        let access_key_id =
+            std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not found");
+        let secret_access_key =
+            std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not found");
+        let region = std::env::var("AWS_REGION").expect("AWS_REGION not found");
+        let endpoint_url = std::env::var("AWS_ENDPOINT_URL").expect("AWS_ENDPOINT_URL not found");
+
+        // Remove environment variables to ensure GUCs are used
+        std::env::remove_var("AWS_ACCESS_KEY_ID");
+        std::env::remove_var("AWS_SECRET_ACCESS_KEY");
+        std::env::remove_var("AWS_REGION");
+        std::env::remove_var("AWS_ENDPOINT_URL");
+
+        // Set credentials via GUCs
+        Spi::run(&format!(
+            "SET pg_parquet.aws_access_key_id = '{access_key_id}';"
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "SET pg_parquet.aws_secret_access_key = '{secret_access_key}';"
+        ))
+        .unwrap();
+        Spi::run(&format!("SET pg_parquet.aws_region = '{region}';")).unwrap();
+        Spi::run(&format!(
+            "SET pg_parquet.aws_endpoint_url = '{endpoint_url}';"
+        ))
+        .unwrap();
+
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+
+        // Restore environment variables
+        std::env::set_var("AWS_ACCESS_KEY_ID", access_key_id);
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", secret_access_key);
+        std::env::set_var("AWS_REGION", region);
+        std::env::set_var("AWS_ENDPOINT_URL", endpoint_url);
+    }
+
+    #[pg_test]
+    fn test_s3_guc_priority_over_env() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        // Get real credentials
+        let real_access_key_id =
+            std::env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID not found");
+        let real_secret_access_key =
+            std::env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_SECRET_ACCESS_KEY not found");
+        let real_region = std::env::var("AWS_REGION").expect("AWS_REGION not found");
+        let real_endpoint_url =
+            std::env::var("AWS_ENDPOINT_URL").expect("AWS_ENDPOINT_URL not found");
+
+        // Set wrong credentials in environment variables
+        std::env::set_var("AWS_ACCESS_KEY_ID", "wrong_access_key");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "wrong_secret_key");
+        std::env::set_var("AWS_REGION", "wrong-region");
+        std::env::set_var("AWS_ENDPOINT_URL", "http://wrong-endpoint");
+
+        // Set correct credentials via GUCs (should take priority)
+        Spi::run(&format!(
+            "SET pg_parquet.aws_access_key_id = '{real_access_key_id}';"
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "SET pg_parquet.aws_secret_access_key = '{real_secret_access_key}';"
+        ))
+        .unwrap();
+        Spi::run(&format!("SET pg_parquet.aws_region = '{real_region}';")).unwrap();
+        Spi::run(&format!(
+            "SET pg_parquet.aws_endpoint_url = '{real_endpoint_url}';"
+        ))
+        .unwrap();
+
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+
+        // Restore original environment variables
+        std::env::set_var("AWS_ACCESS_KEY_ID", real_access_key_id);
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", real_secret_access_key);
+        std::env::set_var("AWS_REGION", real_region);
+        std::env::set_var("AWS_ENDPOINT_URL", real_endpoint_url);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "403 Forbidden")]
+    fn test_s3_guc_wrong_credentials() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        // Remove environment variables
+        std::env::remove_var("AWS_ACCESS_KEY_ID");
+        std::env::remove_var("AWS_SECRET_ACCESS_KEY");
+        std::env::remove_var("AWS_REGION");
+        std::env::remove_var("AWS_ENDPOINT_URL");
+
+        // Set wrong credentials via GUCs
+        Spi::run("SET pg_parquet.aws_access_key_id = 'wrong_access_key';").unwrap();
+        Spi::run("SET pg_parquet.aws_secret_access_key = 'wrong_secret_key';").unwrap();
+        Spi::run("SET pg_parquet.aws_region = 'us-east-1';").unwrap();
+        Spi::run("SET pg_parquet.aws_endpoint_url = 'https://s3.amazonaws.com';").unwrap();
+
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
+
+        let copy_to_command =
+            format!("COPY (SELECT i FROM generate_series(1,10) i) TO '{s3_uri}';");
+        Spi::run(copy_to_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    fn test_gcs_from_guc_service_account_key() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("GOOGLE_TEST_BUCKET").expect("GOOGLE_TEST_BUCKET not found");
+
+        // Get service account key from environment variable
+        let service_account_key = std::env::var("GOOGLE_SERVICE_ACCOUNT_KEY")
+            .expect("GOOGLE_SERVICE_ACCOUNT_KEY not found");
+
+        // Remove environment variable to ensure GUC is used
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_KEY");
+
+        // Set service account key via GUC
+        Spi::run(&format!(
+            "SET pg_parquet.google_service_account_key = '{service_account_key}';"
+        ))
+        .unwrap();
+
+        let gcs_uri = format!("gs://{test_bucket_name}/pg_parquet_test.parquet");
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(gcs_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+
+        // Restore environment variable
+        std::env::set_var("GOOGLE_SERVICE_ACCOUNT_KEY", service_account_key);
+    }
+
+    #[pg_test]
+    fn test_gcs_guc_priority_over_env() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("GOOGLE_TEST_BUCKET").expect("GOOGLE_TEST_BUCKET not found");
+
+        // Get real service account key
+        let real_service_account_key = std::env::var("GOOGLE_SERVICE_ACCOUNT_KEY")
+            .expect("GOOGLE_SERVICE_ACCOUNT_KEY not found");
+
+        // Set wrong service account key in environment variable
+        std::env::set_var("GOOGLE_SERVICE_ACCOUNT_KEY", "wrong_service_account_key");
+
+        // Set correct service account key via GUC (should take priority)
+        Spi::run(&format!(
+            "SET pg_parquet.google_service_account_key = '{real_service_account_key}';"
+        ))
+        .unwrap();
+
+        let gcs_uri = format!("gs://{test_bucket_name}/pg_parquet_test.parquet");
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(gcs_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+
+        // Restore original environment variable
+        std::env::set_var("GOOGLE_SERVICE_ACCOUNT_KEY", real_service_account_key);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "404 Not Found")]
+    fn test_gcs_guc_wrong_credentials() {
+        object_store_cache_clear();
+
+        // Remove environment variables
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_KEY");
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_PATH");
+
+        // Set wrong service account key via GUC
+        Spi::run("SET pg_parquet.google_service_account_key = '{\"type\": \"service_account\", \"project_id\": \"wrong-project\"}';").unwrap();
+
+        let gcs_uri = "gs://randombucketwhichdoesnotexist/pg_parquet_test.parquet";
+
+        let copy_to_command =
+            format!("COPY (SELECT i FROM generate_series(1,10) i) TO '{gcs_uri}';");
+        Spi::run(copy_to_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    fn test_gcs_guc_debug() {
+        // Test that GUCs are being read correctly
+        let test_key = "{\"type\": \"service_account\", \"project_id\": \"test-project\"}";
+        let test_path = "/tmp/test-service-account.json";
+
+        // Set GUCs
+        Spi::run(&format!(
+            "SET pg_parquet.google_service_account_key = '{test_key}';"
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "SET pg_parquet.google_service_account_path = '{test_path}';"
+        ))
+        .unwrap();
+
+        // Remove environment variables to ensure GUCs are used
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_KEY");
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_PATH");
+
+        // Test that we can read the GUCs
+        let result = Spi::get_one::<String>(
+            "SELECT current_setting('pg_parquet.google_service_account_key');",
+        )
+        .unwrap();
+        assert_eq!(result, Some(test_key.to_string()));
+
+        let result = Spi::get_one::<String>(
+            "SELECT current_setting('pg_parquet.google_service_account_path');",
+        )
+        .unwrap();
+        assert_eq!(result, Some(test_path.to_string()));
+
+        // Restore environment variables
+        if let Ok(key) = std::env::var("GOOGLE_SERVICE_ACCOUNT_KEY") {
+            std::env::set_var("GOOGLE_SERVICE_ACCOUNT_KEY", key);
+        }
+        if let Ok(path) = std::env::var("GOOGLE_SERVICE_ACCOUNT_PATH") {
+            std::env::set_var("GOOGLE_SERVICE_ACCOUNT_PATH", path);
+        }
+    }
+
+    #[pg_test]
     #[cfg(not(rhel8))]
     fn test_object_store_cache() {
         object_store_cache_clear();
