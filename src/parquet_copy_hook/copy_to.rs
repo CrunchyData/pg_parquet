@@ -96,7 +96,7 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
             portal.as_ptr(),
             i64::MAX,
             false,
-            #[cfg(any(feature = "pg14", feature = "pg15", feature = "pg16", feature = "pg17"))]
+            #[cfg(pre_pg18)]
             true, // run_once
             parquet_dest.as_ptr(),
             parquet_dest.as_ptr(),
@@ -215,7 +215,7 @@ fn copy_to_stmt_ensure_table_kind(relation: &PgRelation) {
             "Try the COPY (SELECT ...) TO variant.",
         );
     } else if relation_kind == RELKIND_MATVIEW as c_char {
-        #[cfg(feature = "pg18")]
+        #[cfg(not(pre_pg18))]
         if !(unsafe { *relation.rd_rel }).relispopulated {
             ereport!(
                 PgLogLevel::ERROR,
@@ -228,7 +228,7 @@ fn copy_to_stmt_ensure_table_kind(relation: &PgRelation) {
             );
         }
 
-        #[cfg(any(feature = "pg14", feature = "pg15", feature = "pg16", feature = "pg17"))]
+        #[cfg(pre_pg18)]
         ereport!(
             PgLogLevel::ERROR,
             PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE,

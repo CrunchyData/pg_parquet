@@ -2525,6 +2525,7 @@ dependencies = [
  "aws-config",
  "aws-credential-types",
  "azure_storage",
+ "cfg_aliases",
  "futures",
  "home",
  "object_store",

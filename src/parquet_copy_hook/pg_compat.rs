@@ -15,7 +15,7 @@ pub(crate) fn pg_analyze_and_rewrite(
     query_string: *const c_char,
     query_env: *mut QueryEnvironment,
 ) -> *mut List {
-    #[cfg(feature = "pg14")]
+    #[cfg(pre_pg15)]
     unsafe {
         pgrx::pg_sys::pg_analyze_and_rewrite(
             raw_stmt,
@@ -26,7 +26,7 @@ pub(crate) fn pg_analyze_and_rewrite(
         )
     }
 
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
+    #[cfg(not(pre_pg15))]
     unsafe {
         pgrx::pg_sys::pg_analyze_and_rewrite_fixedparams(
             raw_stmt,
@@ -40,7 +40,7 @@ pub(crate) fn pg_analyze_and_rewrite(
 
 #[allow(non_snake_case)]
 pub(crate) fn strVal(val: *mut Node) -> String {
-    #[cfg(feature = "pg14")]
+    #[cfg(pre_pg15)]
     unsafe {
         let val = (*(val as *mut pgrx::pg_sys::Value)).val.str_;
 
@@ -50,7 +50,7 @@ pub(crate) fn strVal(val: *mut Node) -> String {
             .to_string()
     }
 
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
+    #[cfg(not(pre_pg15))]
     unsafe {
         let val = (*(val as *mut pgrx::pg_sys::String)).sval;
 
@@ -63,12 +63,12 @@ pub(crate) fn strVal(val: *mut Node) -> String {
 
 #[allow(non_snake_case)]
 pub(crate) fn MarkGUCPrefixReserved(guc_prefix: &str) {
-    #[cfg(feature = "pg14")]
+    #[cfg(pre_pg15)]
     unsafe {
         pgrx::pg_sys::EmitWarningsOnPlaceholders(guc_prefix.as_pg_cstr())
     }
 
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
+    #[cfg(not(pre_pg15))]
     unsafe {
         pgrx::pg_sys::MarkGUCPrefixReserved(guc_prefix.as_pg_cstr())
     }
@@ -76,7 +76,7 @@ pub(crate) fn MarkGUCPrefixReserved(guc_prefix: &str) {
 
 /// check_copy_table_permission checks if the user has permission to copy from/to the table.
 /// This is taken from the original PostgreSQL DoCopy function.
-#[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18"))]
+#[cfg(not(pre_pg16))]
 pub(crate) fn check_copy_table_permission(
     p_stmt: &PgBox<PlannedStmt>,
     p_state: &PgBox<ParseState>,
@@ -134,28 +134,7 @@ pub(crate) fn check_copy_table_permission(
     unsafe { reset_pgaudit(guc_level) };
 }
 
-unsafe fn disable_pgaudit() -> i32 {
-    let guc_level = NewGUCNestLevel();
-
-    set_config_option(
-        "pgaudit.log".as_pg_cstr(),
-        "none".as_pg_cstr(),
-        PGC_SUSET,
-        PGC_S_SESSION,
-        GUC_ACTION_SAVE,
-        true,
-        0,
-        false,
-    );
-
-    guc_level
-}
-
-unsafe fn reset_pgaudit(guc_level: i32) {
-    AtEOXact_GUC(true, guc_level);
-}
-
-#[cfg(any(feature = "pg14", feature = "pg15"))]
+#[cfg(pre_pg16)]
 pub(crate) fn check_copy_table_permission(
     p_stmt: &PgBox<PlannedStmt>,
     p_state: &PgBox<ParseState>,
@@ -197,4 +176,25 @@ pub(crate) fn check_copy_table_permission(
     unsafe { pgrx::pg_sys::ExecCheckRTPerms(p_state.p_rtable, true) };
 
     unsafe { reset_pgaudit(guc_level) };
+}
+
+unsafe fn disable_pgaudit() -> i32 {
+    let guc_level = NewGUCNestLevel();
+
+    set_config_option(
+        "pgaudit.log".as_pg_cstr(),
+        "none".as_pg_cstr(),
+        PGC_SUSET,
+        PGC_S_SESSION,
+        GUC_ACTION_SAVE,
+        true,
+        0,
+        false,
+    );
+
+    guc_level
+}
+
+unsafe fn reset_pgaudit(guc_level: i32) {
+    AtEOXact_GUC(true, guc_level);
 }

@@ -52,6 +52,9 @@ url = "2"
 [dev-dependencies]
 pgrx-tests = "=0.16.0"
 
+[build-dependencies]
+cfg_aliases = "0.2"
+
 [profile.dev]
 panic = "unwind"
 
