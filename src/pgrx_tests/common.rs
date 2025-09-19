@@ -69,6 +69,7 @@ impl Drop for FileCleanup {
 
 pub(crate) struct TestTable<T: IntoDatum + FromDatum> {
     uri: String,
+    uri_pattern: Option<String>,
     order_by_col: String,
     copy_to_options: HashMap<String, CopyOptionValue>,
     copy_from_options: HashMap<String, CopyOptionValue>,
@@ -103,6 +104,7 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
 
         Self {
             uri,
+            uri_pattern: None,
             order_by_col,
             copy_to_options,
             copy_from_options,
@@ -133,6 +135,11 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
 
     pub(crate) fn with_uri(mut self, uri: String) -> Self {
         self.uri = uri;
+        self
+    }
+
+    pub(crate) fn with_uri_pattern(mut self, uri_pattern: String) -> Self {
+        self.uri_pattern = Some(uri_pattern);
         self
     }
 
@@ -177,7 +184,13 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
     }
 
     pub(crate) fn copy_from_parquet(&self, table_name: &str) {
-        let mut copy_from_query = format!("COPY {} FROM '{}'", table_name, self.uri);
+        let uri = if let Some(uri_pattern) = &self.uri_pattern {
+            uri_pattern
+        } else {
+            &self.uri
+        };
+
+        let mut copy_from_query = format!("COPY {} FROM '{}'", table_name, uri);
 
         if !self.copy_from_options.is_empty() {
             copy_from_query.push_str(" WITH (");

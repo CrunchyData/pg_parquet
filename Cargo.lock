@@ -2527,6 +2527,7 @@ dependencies = [
  "azure_storage",
  "cfg_aliases",
  "futures",
+ "glob",
  "home",
  "libc",
  "object_store",

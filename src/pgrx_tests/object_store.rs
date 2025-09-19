@@ -1,10 +1,10 @@
 #[pgrx::pg_schema]
 mod tests {
-    use std::io::Write;
+    use std::{collections::HashMap, io::Write};
 
     use pgrx::{pg_sys::Timestamp, pg_test, Spi};
 
-    use crate::pgrx_tests::common::TestTable;
+    use crate::pgrx_tests::common::{CopyOptionValue, TestTable};
 
     fn object_store_cache_clear() {
         Spi::run("SELECT parquet_test.object_store_cache_clear();").unwrap();
@@ -59,6 +59,36 @@ mod tests {
             test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
             test_table.assert_expected_and_result_rows();
         }
+    }
+
+    #[pg_test]
+    fn test_s3_from_env_glob_pattern() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!(
+            "s3://{test_bucket_name}/test_s3_from_env_glob_pattern/some/pg_parquet_test.parquet"
+        );
+        let s3_uri_pattern =
+            format!("s3://{test_bucket_name}/test_s3_from_env_glob_pattern/**/*.parquet");
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "file_size_bytes".to_string(),
+            CopyOptionValue::StringOption("1MB".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into())
+            .with_uri(s3_uri)
+            .with_uri_pattern(s3_uri_pattern)
+            .with_order_by_col("a".into())
+            .with_copy_to_options(copy_options);
+
+        test_table
+            .insert("INSERT INTO test_expected (a) select i from generate_series(1, 1000000) i;");
+        test_table.assert_expected_and_result_rows();
     }
 
     #[pg_test]
@@ -341,6 +371,66 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "no files found that match the pattern")]
+    fn test_s3_empty_pattern() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let create_table = "create table test_table(id int);";
+        Spi::run(create_table).unwrap();
+
+        let s3_uri_pattern = format!("s3://{test_bucket_name}/dummy*.parquet");
+        let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri_pattern);
+        Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "column count mismatch")]
+    fn test_s3_pattern_schema_mismatch() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let copy_to_schema1 = format!("copy (select 1 as a) to 's3://{test_bucket_name}/dummy1.parquet' with (format parquet);");
+        Spi::run(copy_to_schema1.as_str()).unwrap();
+
+        let copy_to_schema2 = format!("copy (select 1 as a, 'asd' as b) to 's3://{test_bucket_name}/dummy2.parquet' with (format parquet);");
+        Spi::run(copy_to_schema2.as_str()).unwrap();
+
+        let create_table = "create table test_table(id int);";
+        Spi::run(create_table).unwrap();
+
+        let s3_uri_pattern = format!("s3://{test_bucket_name}/dummy*.parquet");
+        let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri_pattern);
+        Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "type mismatch")]
+    fn test_s3_pattern_column_type_mismatch() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let copy_to_schema1 = format!("copy (select '{{}}'::jsonb as a) to 's3://{test_bucket_name}/dummy2.parquet' with (format parquet);");
+        Spi::run(copy_to_schema1.as_str()).unwrap();
+
+        let copy_to_schema2 = format!("copy (select 1 as a) to 's3://{test_bucket_name}/dummy1.parquet' with (format parquet);");
+        Spi::run(copy_to_schema2.as_str()).unwrap();
+
+        let create_table = "create table test_table(a jsonb);";
+        Spi::run(create_table).unwrap();
+
+        let s3_uri_pattern = format!("s3://{test_bucket_name}/dummy*.parquet");
+        let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri_pattern);
+        Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
     #[cfg(not(rhel8))]
     fn test_azure_blob_from_env() {
         object_store_cache_clear();
@@ -366,6 +456,39 @@ mod tests {
             test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
             test_table.assert_expected_and_result_rows();
         }
+    }
+
+    #[pg_test]
+    #[cfg(not(rhel8))]
+    fn test_azure_blob_from_env_glob_pattern() {
+        object_store_cache_clear();
+
+        // unset AZURE_STORAGE_CONNECTION_STRING to make sure the account name and key are used
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
+
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let azure_blob_uri = format!("az://{test_container_name}/test_azure_blob_from_env_glob_pattern/some/pg_parquet_test.parquet");
+
+        let azure_blob_uri_pattern = format!(
+            "az://{test_container_name}/test_azure_blob_from_env_glob_pattern/**/*.parquet"
+        );
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "file_size_bytes".to_string(),
+            CopyOptionValue::StringOption("1MB".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into())
+            .with_uri(azure_blob_uri)
+            .with_uri_pattern(azure_blob_uri_pattern)
+            .with_order_by_col("a".into())
+            .with_copy_to_options(copy_options);
+
+        test_table.insert("INSERT INTO test_expected select i from generate_series(1, 1000000) i;");
+        test_table.assert_expected_and_result_rows();
     }
 
     #[pg_test]
@@ -644,6 +767,35 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "list operation on http(s) object stores is not supported")]
+    fn test_http_uri_glob_pattern() {
+        object_store_cache_clear();
+
+        let http_endpoint: String =
+            std::env::var("HTTP_ENDPOINT").expect("HTTP_ENDPOINT not found");
+
+        let http_uri =
+            format!("{http_endpoint}/test_http_uri_glob_pattern/some/pg_parquet_test.parquet");
+
+        let http_uri_pattern = format!("{http_endpoint}/test_http_uri_glob_pattern/**/*.parquet");
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "file_size_bytes".to_string(),
+            CopyOptionValue::StringOption("1MB".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into())
+            .with_uri(http_uri)
+            .with_uri_pattern(http_uri_pattern)
+            .with_order_by_col("a".into())
+            .with_copy_to_options(copy_options);
+
+        test_table.insert("INSERT INTO test_expected select i from generate_series(1, 1000000) i;");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
     fn test_gcs_from_env() {
         object_store_cache_clear();
 
@@ -655,6 +807,35 @@ mod tests {
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(gcs_uri);
 
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_gcs_from_env_glob_pattern() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("GOOGLE_TEST_BUCKET").expect("GOOGLE_TEST_BUCKET not found");
+
+        let gcs_uri = format!(
+            "gs://{test_bucket_name}/test_gcs_from_env_glob_pattern/some/pg_parquet_test.parquet"
+        );
+
+        let gcs_uri_pattern = format!("gs://{test_bucket_name}/test_gcs_from_env_glob_pattern/**");
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "file_size_bytes".to_string(),
+            CopyOptionValue::StringOption("1MB".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into())
+            .with_uri(gcs_uri)
+            .with_uri_pattern(gcs_uri_pattern)
+            .with_order_by_col("a".into())
+            .with_copy_to_options(copy_options);
+
+        test_table.insert("INSERT INTO test_expected select i from generate_series(1, 1000000) i;");
         test_table.assert_expected_and_result_rows();
     }
 
