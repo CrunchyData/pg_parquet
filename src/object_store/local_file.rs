@@ -12,9 +12,9 @@ pub(crate) fn create_local_file_object_store(
     uri: &Url,
     copy_from: bool,
 ) -> ObjectStoreWithExpiration {
-    let path = uri_as_string(uri);
-
     if !copy_from {
+        let path = uri_as_string(uri);
+
         // create parent folder if it doesn't exist
         let parent = std::path::Path::new(&path)
             .parent()

@@ -43,10 +43,10 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
         panic!("{}", e);
     });
 
-    // prefix is the part of the location that doesn't contain any wildcards
+    // prefix is the part of the location that doesn't contain any patterns
     let prefix = location
         .parts()
-        .take_while(|part| !part.as_ref().contains("*") && !part.as_ref().contains("**"))
+        .take_while(|part| !part.as_ref().contains('*'))
         .collect();
 
     // Collect all paths from the list stream

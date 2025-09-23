@@ -63,13 +63,13 @@ impl DerefMut for SingleParquetReader {
 }
 
 impl SingleParquetReader {
-    fn new(
+    fn try_new(
         uri_info: &ParsedUriInfo,
         match_by: MatchBy,
         tupledesc_schema: SchemaRef,
         attributes: &[FormData_pg_attribute],
-    ) -> Self {
-        let reader = parquet_reader_from_uri(uri_info);
+    ) -> Result<Self, String> {
+        let reader = parquet_reader_from_uri(uri_info)?;
 
         // Ensure that the file schema matches the tupledesc schema.
         // Gets cast_to_types for each attribute if a cast is needed for the attribute's columnar array
@@ -87,11 +87,11 @@ impl SingleParquetReader {
             Some(cast_to_types),
         );
 
-        SingleParquetReader {
+        Ok(SingleParquetReader {
             reader,
             attribute_contexts,
             match_by,
-        }
+        })
     }
 
     fn create_readers_from_pattern_uri(
@@ -100,7 +100,7 @@ impl SingleParquetReader {
         tupledesc_schema: SchemaRef,
         attributes: &[FormData_pg_attribute],
     ) -> Vec<Self> {
-        debug_assert!(uri_info.is_pattern());
+        debug_assert!(uri_info.path.as_ref().contains('*'));
 
         list_uri(uri_info)
             .into_iter()
@@ -108,12 +108,18 @@ impl SingleParquetReader {
                 let file_uri_info = ParsedUriInfo::try_from(file_uri.as_str())
                     .unwrap_or_else(|e| panic!("failed to parse file uri {}: {}", file_uri, e));
 
-                SingleParquetReader::new(
+                SingleParquetReader::try_new(
                     &file_uri_info,
                     match_by,
                     tupledesc_schema.clone(),
                     attributes,
                 )
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "failed to create parquet reader for uri {}: {}",
+                        file_uri, e
+                    )
+                })
             })
             .collect()
     }
@@ -197,21 +203,23 @@ impl ParquetReaderContext {
 
         let tupledesc_schema = Arc::new(tupledesc_schema);
 
-        let parquet_readers = if uri_info.is_pattern() {
-            SingleParquetReader::create_readers_from_pattern_uri(
-                uri_info,
-                match_by,
-                tupledesc_schema,
-                &attributes,
-            )
-        } else {
-            vec![SingleParquetReader::new(
-                uri_info,
-                match_by,
-                tupledesc_schema.clone(),
-                &attributes,
-            )]
-        };
+        let parquet_readers =
+            SingleParquetReader::try_new(uri_info, match_by, tupledesc_schema.clone(), &attributes)
+                .map(|reader| vec![reader])
+                .unwrap_or_else(|e| {
+                    // if uri contains any pattern, try to create readers from the pattern uri
+                    // otherwise, panic with the original error
+                    if !uri_info.path.as_ref().contains('*') {
+                        panic!("{e}");
+                    }
+
+                    SingleParquetReader::create_readers_from_pattern_uri(
+                        uri_info,
+                        match_by,
+                        tupledesc_schema.clone(),
+                        &attributes,
+                    )
+                });
 
         if parquet_readers.is_empty() {
             panic!("no files found that match the pattern {}", uri_info.path);
