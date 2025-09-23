@@ -7,6 +7,7 @@ use arrow::array::RecordBatch;
 use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
+use glob::Pattern;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream};
 use pgrx::{
     check_for_interrupts,
@@ -207,9 +208,10 @@ impl ParquetReaderContext {
             SingleParquetReader::try_new(uri_info, match_by, tupledesc_schema.clone(), &attributes)
                 .map(|reader| vec![reader])
                 .unwrap_or_else(|e| {
-                    // if uri contains any pattern, try to create readers from the pattern uri
+                    // if uri contains a valid pattern, try to create readers from the pattern uri
                     // otherwise, panic with the original error
-                    if !uri_info.path.as_ref().contains('*') {
+                    if !uri_info.path.as_ref().contains('*') || Pattern::try_from(uri_info).is_err()
+                    {
                         panic!("{e}");
                     }
 

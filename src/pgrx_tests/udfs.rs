@@ -1082,4 +1082,16 @@ mod tests {
             vec![]
         );
     }
+
+    #[pg_test]
+    #[should_panic(expected = "list operation on http(s) object stores is not supported")]
+    fn test_http_list_not_allowed() {
+        let http_endpoint: String =
+            std::env::var("HTTP_ENDPOINT").expect("HTTP_ENDPOINT not found");
+
+        let http_uri_pattern = format!("{http_endpoint}/**");
+
+        let parquet_list_command = format!("select * from parquet.list('{http_uri_pattern}');");
+        Spi::run(&parquet_list_command).unwrap();
+    }
 }

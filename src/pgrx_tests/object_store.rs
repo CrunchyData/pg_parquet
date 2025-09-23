@@ -92,6 +92,49 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_s3_uri_with_special_chars() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{test_bucket_name}/so\\mek*ey/**testme.parquet");
+
+        let copy_to_command = format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{s3_uri}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to_command).unwrap();
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command = format!("COPY test_table FROM '{s3_uri}' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
+
+        let count_query = "select count(*) from test_table;";
+        let result = Spi::get_one::<i64>(count_query).unwrap().unwrap();
+        assert_eq!(result, 10);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "no files found that match the pattern")]
+    fn test_s3_with_nonexistent_pattern_uri() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri_pattern = format!("s3://{test_bucket_name}/notexists/**");
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command =
+            format!("COPY test_table FROM '{s3_uri_pattern}' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
+    }
+
+    #[pg_test]
     fn test_s3_from_config_file() {
         object_store_cache_clear();
 
@@ -371,22 +414,6 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "no files found that match the pattern")]
-    fn test_s3_empty_pattern() {
-        object_store_cache_clear();
-
-        let test_bucket_name: String =
-            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
-
-        let create_table = "create table test_table(id int);";
-        Spi::run(create_table).unwrap();
-
-        let s3_uri_pattern = format!("s3://{test_bucket_name}/dummy*.parquet");
-        let copy_from_command = format!("COPY test_table FROM '{}';", s3_uri_pattern);
-        Spi::run(copy_from_command.as_str()).unwrap();
-    }
-
-    #[pg_test]
     #[should_panic(expected = "column count mismatch")]
     fn test_s3_pattern_schema_mismatch() {
         object_store_cache_clear();
@@ -489,6 +516,52 @@ mod tests {
 
         test_table.insert("INSERT INTO test_expected select i from generate_series(1, 1000000) i;");
         test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    #[cfg(not(rhel8))]
+    fn test_azure_uri_with_special_chars() {
+        object_store_cache_clear();
+
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let azure_uri = format!("az://{test_container_name}/so\\mek*ey/**testme.parquet");
+
+        let copy_to_command = format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{azure_uri}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to_command).unwrap();
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command =
+            format!("COPY test_table FROM '{azure_uri}' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
+
+        let count_query = "select count(*) from test_table;";
+        let result = Spi::get_one::<i64>(count_query).unwrap().unwrap();
+        assert_eq!(result, 10);
+    }
+
+    #[pg_test]
+    #[cfg(not(rhel8))]
+    #[should_panic(expected = "no files found that match the pattern")]
+    fn test_azure_with_nonexistent_pattern_uri() {
+        object_store_cache_clear();
+
+        let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let azure_uri_pattern = format!("az://{test_container_name}/notexists/**");
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command =
+            format!("COPY test_table FROM '{azure_uri_pattern}' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
     }
 
     #[pg_test]
@@ -767,32 +840,46 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "list operation on http(s) object stores is not supported")]
-    fn test_http_uri_glob_pattern() {
+    fn test_http_uri_with_special_chars() {
         object_store_cache_clear();
 
         let http_endpoint: String =
             std::env::var("HTTP_ENDPOINT").expect("HTTP_ENDPOINT not found");
 
-        let http_uri =
-            format!("{http_endpoint}/test_http_uri_glob_pattern/some/pg_parquet_test.parquet");
+        let http_uri = format!("{http_endpoint}/so\\mek*ey/**testme.parquet");
 
-        let http_uri_pattern = format!("{http_endpoint}/test_http_uri_glob_pattern/**/*.parquet");
-
-        let mut copy_options = HashMap::new();
-        copy_options.insert(
-            "file_size_bytes".to_string(),
-            CopyOptionValue::StringOption("1MB".to_string()),
+        let copy_to_command = format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{http_uri}' WITH (format parquet);"
         );
+        Spi::run(&copy_to_command).unwrap();
 
-        let test_table = TestTable::<i32>::new("int4".into())
-            .with_uri(http_uri)
-            .with_uri_pattern(http_uri_pattern)
-            .with_order_by_col("a".into())
-            .with_copy_to_options(copy_options);
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
 
-        test_table.insert("INSERT INTO test_expected select i from generate_series(1, 1000000) i;");
-        test_table.assert_expected_and_result_rows();
+        let copy_from_command = format!("COPY test_table FROM '{http_uri}' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
+
+        let count_query = "select count(*) from test_table;";
+        let result = Spi::get_one::<i64>(count_query).unwrap().unwrap();
+        assert_eq!(result, 10);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "failed to get object store metadata for uri")]
+    fn test_http_with_nonexistent_pattern_uri() {
+        object_store_cache_clear();
+
+        let http_endpoint: String =
+            std::env::var("HTTP_ENDPOINT").expect("HTTP_ENDPOINT not found");
+
+        let http_uri_pattern = format!("{http_endpoint}/notexists/**");
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command =
+            format!("COPY test_table FROM '{http_uri_pattern}' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
     }
 
     #[pg_test]
@@ -837,6 +924,49 @@ mod tests {
 
         test_table.insert("INSERT INTO test_expected select i from generate_series(1, 1000000) i;");
         test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_gcs_uri_with_special_chars() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("GOOGLE_TEST_BUCKET").expect("GOOGLE_TEST_BUCKET not found");
+
+        let gcs_uri = format!("gs://{test_bucket_name}/so\\mek*ey/**testme.parquet");
+
+        let copy_to_command = format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{gcs_uri}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to_command).unwrap();
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command = format!("COPY test_table FROM '{gcs_uri}' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
+
+        let count_query = "select count(*) from test_table;";
+        let result = Spi::get_one::<i64>(count_query).unwrap().unwrap();
+        assert_eq!(result, 10);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "no files found that match the pattern")]
+    fn test_gcs_with_nonexistent_pattern_uri() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("GOOGLE_TEST_BUCKET").expect("GOOGLE_TEST_BUCKET not found");
+
+        let gcs_uri_pattern = format!("gs://{test_bucket_name}/notexists/**");
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command =
+            format!("COPY test_table FROM '{gcs_uri_pattern}' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
     }
 
     #[pg_test]

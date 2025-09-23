@@ -22,26 +22,18 @@ mod parquet {
     }
 }
 
-fn error_if_list_http_store(uri_info: &ParsedUriInfo) {
-    if uri_info.uri.scheme() == "http" || uri_info.uri.scheme() == "https" {
-        panic!("list operation on http(s) object stores is not supported");
-    }
-}
-
 pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
     ensure_access_privilege_to_uri(uri_info, true);
 
-    error_if_list_http_store(uri_info);
-
     let base_uri = object_store_base_uri(&uri_info.uri);
+
+    // build the pattern before we start the stream to bail out early
+    let pattern = Pattern::try_from(uri_info).unwrap_or_else(|e| {
+        panic!("{}", e);
+    });
 
     let copy_from = true;
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
-
-    // build the pattern before we start the stream to bail out early
-    let pattern = Pattern::new(location.as_ref()).unwrap_or_else(|e| {
-        panic!("{}", e);
-    });
 
     // prefix is the part of the location that doesn't contain any patterns
     let prefix = location
@@ -89,4 +81,16 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
             )
         })
         .collect::<Vec<_>>()
+}
+
+impl TryFrom<&ParsedUriInfo> for Pattern {
+    type Error = String;
+
+    fn try_from(uri_info: &ParsedUriInfo) -> Result<Self, Self::Error> {
+        if uri_info.uri.scheme() == "http" || uri_info.uri.scheme() == "https" {
+            return Err("list operation on http(s) object stores is not supported".into());
+        }
+
+        Self::new(uri_info.path.as_ref()).map_err(|e| e.to_string())
+    }
 }
