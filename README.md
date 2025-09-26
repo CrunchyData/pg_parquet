@@ -274,7 +274,19 @@ $ cat ~/.aws/config
 region = eu-central-1
 ```
 
-Alternatively, you can use the following environment variables when starting postgres to configure the S3 client:
+Alternatively, you can configure AWS credentials using session variables (GUCs) or environment variables:
+
+#### Session Variables (GUCs) - Highest Priority
+You can set these within a PostgreSQL session:
+```sql
+SET pg_parquet.aws_access_key_id = 'AKIA...';
+SET pg_parquet.aws_secret_access_key = '...';
+SET pg_parquet.aws_session_token = '...';  -- Optional, for temporary credentials
+SET pg_parquet.aws_region = 'us-east-1';
+SET pg_parquet.aws_endpoint_url = 'https://s3.amazonaws.com';
+```
+
+#### Environment Variables - Second Priority
 - `AWS_ACCESS_KEY_ID`: the access key ID of the AWS account
 - `AWS_SECRET_ACCESS_KEY`: the secret access key of the AWS account
 - `AWS_SESSION_TOKEN`: the session token for the AWS account
@@ -286,8 +298,9 @@ Alternatively, you can use the following environment variables when starting pos
 - `AWS_ALLOW_HTTP`: allows http endpoints **(only via environment variables)**
 
 Config source priority order is shown below:
-1. Environment variables,
-2. Config file.
+1. Session variables (GUCs),
+2. Environment variables,
+3. Config file.
 
 Supported S3 uri formats are shown below:
 - s3:// \<bucket\> / \<path\>
@@ -356,9 +369,35 @@ $ cat ~/.config/gcloud/application_default_credentials.json
 }
 ```
 
-Alternatively, you can use the following environment variables when starting postgres to configure the Google Cloud Storage client:
+Alternatively, you can configure Google Cloud Storage credentials using session variables (GUCs) or environment variables:
+
+#### Session Variables (GUCs) - Highest Priority
+You can set these within a PostgreSQL session:
+
+**For service account key (JSON string):**
+```sql
+-- Simple JSON (escape single quotes by doubling them)
+SET pg_parquet.google_service_account_key = '{"type": "service_account", "project_id": "my-project"}';
+
+-- Complex JSON with private key (escape single quotes)
+SET pg_parquet.google_service_account_key = '{"type": "service_account", "project_id": "my-project", "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n", "client_email": "service@my-project.iam.gserviceaccount.com"}';
+```
+
+**For service account path:**
+```sql
+SET pg_parquet.google_service_account_path = '/path/to/service-account-key.json';
+```
+
+**Note:** When setting JSON service account keys via GUC, make sure to escape any single quotes (`'`) by doubling them (`''`).
+
+#### Environment Variables - Second Priority
 - `GOOGLE_SERVICE_ACCOUNT_KEY`: json serialized service account key **(only via environment variables)**
 - `GOOGLE_SERVICE_ACCOUNT_PATH`: an alternative location for the config file **(only via environment variables)**
+
+Config source priority order is shown below:
+1. Session variables (GUCs),
+2. Environment variables,
+3. Default credentials file (`~/.config/gcloud/application_default_credentials.json`).
 
 Supported Google Cloud Storage uri formats are shown below:
 - gs:// \<bucket\> / \<path\>

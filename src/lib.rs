@@ -1,11 +1,29 @@
+use pgrx::pg_sys::AsPgCStr;
 use std::ffi::CStr;
+use std::ffi::CString;
 use std::sync::LazyLock;
 
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
 use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
-use pgrx::pg_sys::AsPgCStr;
-use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry};
+use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry, GucSetting};
 use tokio::runtime::Runtime;
+
+// AWS Configuration GUCs
+pub(crate) static AWS_ACCESS_KEY_ID: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
+pub(crate) static AWS_SECRET_ACCESS_KEY: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
+pub(crate) static AWS_SESSION_TOKEN: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
+pub(crate) static AWS_ENDPOINT_URL: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
+pub(crate) static AWS_REGION: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
+
+pub(crate) static GOOGLE_SERVICE_ACCOUNT_KEY: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
+pub(crate) static GOOGLE_SERVICE_ACCOUNT_PATH: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
 
 mod arrow_parquet;
 mod object_store;
@@ -49,7 +67,79 @@ pub extern "C-unwind" fn _PG_init() {
             &ENABLE_PARQUET_COPY_HOOK,
             GucContext::Userset,
             GucFlags::default(),
-        )
+        );
+
+        // AWS Configuration GUCs
+        GucRegistry::define_string_guc(
+            CStr::from_ptr("pg_parquet.aws_access_key_id".as_pg_cstr()),
+            CStr::from_ptr("AWS Access Key ID for S3 authentication".as_pg_cstr()),
+            CStr::from_ptr(
+                "AWS Access Key ID used for authenticating with S3-compatible storage".as_pg_cstr(),
+            ),
+            &AWS_ACCESS_KEY_ID,
+            GucContext::Userset,
+            GucFlags::default(),
+        );
+
+        GucRegistry::define_string_guc(
+            CStr::from_ptr("pg_parquet.aws_secret_access_key".as_pg_cstr()),
+            CStr::from_ptr("AWS Secret Access Key for S3 authentication".as_pg_cstr()),
+            CStr::from_ptr(
+                "AWS Secret Access Key used for authenticating with S3-compatible storage"
+                    .as_pg_cstr(),
+            ),
+            &AWS_SECRET_ACCESS_KEY,
+            GucContext::Userset,
+            GucFlags::default(),
+        );
+
+        GucRegistry::define_string_guc(
+            CStr::from_ptr("pg_parquet.aws_session_token".as_pg_cstr()),
+            CStr::from_ptr("AWS Session Token for S3 authentication".as_pg_cstr()),
+            CStr::from_ptr(
+                "AWS Session Token used for temporary credentials with S3-compatible storage"
+                    .as_pg_cstr(),
+            ),
+            &AWS_SESSION_TOKEN,
+            GucContext::Userset,
+            GucFlags::default(),
+        );
+
+        GucRegistry::define_string_guc(
+            CStr::from_ptr("pg_parquet.aws_endpoint_url".as_pg_cstr()),
+            CStr::from_ptr("AWS S3 Endpoint URL".as_pg_cstr()),
+            CStr::from_ptr("Custom endpoint URL for S3-compatible storage services".as_pg_cstr()),
+            &AWS_ENDPOINT_URL,
+            GucContext::Userset,
+            GucFlags::default(),
+        );
+
+        GucRegistry::define_string_guc(
+            CStr::from_ptr("pg_parquet.aws_region".as_pg_cstr()),
+            CStr::from_ptr("AWS Region for S3 operations".as_pg_cstr()),
+            CStr::from_ptr("AWS region for S3 bucket operations".as_pg_cstr()),
+            &AWS_REGION,
+            GucContext::Userset,
+            GucFlags::default(),
+        );
+
+        GucRegistry::define_string_guc(
+            CStr::from_ptr("pg_parquet.google_service_account_key".as_pg_cstr()),
+            CStr::from_ptr("Google Service Account Key JSON".as_pg_cstr()),
+            CStr::from_ptr("Google Cloud service account key used for authentication".as_pg_cstr()),
+            &GOOGLE_SERVICE_ACCOUNT_KEY,
+            GucContext::Userset,
+            GucFlags::default(),
+        );
+
+        GucRegistry::define_string_guc(
+            CStr::from_ptr("pg_parquet.google_service_account_path".as_pg_cstr()),
+            CStr::from_ptr("Google Service Account Key Path".as_pg_cstr()),
+            CStr::from_ptr("Path to Google Cloud service account key file".as_pg_cstr()),
+            &GOOGLE_SERVICE_ACCOUNT_PATH,
+            GucContext::Userset,
+            GucFlags::default(),
+        );
     };
 
     MarkGUCPrefixReserved("pg_parquet");

@@ -5,7 +5,10 @@ use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::AmazonS3Builder;
 use url::Url;
 
-use crate::PG_BACKEND_TOKIO_RUNTIME;
+use crate::{
+    AWS_ACCESS_KEY_ID, AWS_ENDPOINT_URL, AWS_REGION, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+    PG_BACKEND_TOKIO_RUNTIME,
+};
 
 use super::object_store_cache::ObjectStoreWithExpiration;
 
@@ -115,7 +118,7 @@ struct AwsS3Config {
 }
 
 impl AwsS3Config {
-    // load reads the s3 config from the environment variables first and config files as fallback.
+    // load reads the s3 config from GUCs first, then environment variables, then config files as fallback.
     fn load() -> Self {
         let allow_http = if let Ok(allow_http) = std::env::var("AWS_ALLOW_HTTP") {
             allow_http.parse().unwrap_or(false)
@@ -123,35 +126,65 @@ impl AwsS3Config {
             false
         };
 
-        // first tries environment variables and then the config files
-        let sdk_config = PG_BACKEND_TOKIO_RUNTIME
-            .block_on(async { aws_config::defaults(BehaviorVersion::latest()).load().await });
-
-        let mut access_key_id = None;
-        let mut secret_access_key = None;
-        let mut session_token = None;
+        // Check GUC values first
+        let mut access_key_id = AWS_ACCESS_KEY_ID.get().map(|s| {
+            let key = s.to_string_lossy().to_string();
+            key
+        });
+        let mut secret_access_key = AWS_SECRET_ACCESS_KEY
+            .get()
+            .map(|s| s.to_string_lossy().to_string());
+        let mut session_token = AWS_SESSION_TOKEN
+            .get()
+            .map(|s| s.to_string_lossy().to_string());
+        let mut endpoint_url = AWS_ENDPOINT_URL
+            .get()
+            .map(|s| s.to_string_lossy().to_string());
+        let mut region = AWS_REGION.get().map(|s| s.to_string_lossy().to_string());
+        //ToDo: Add credential expiry handling when using session variables.
         let mut expire_at = None;
 
-        if let Some(credential_provider) = sdk_config.credentials_provider() {
-            let cred_res = PG_BACKEND_TOKIO_RUNTIME
-                .block_on(async { credential_provider.provide_credentials().await });
+        // If GUCs are not set, fall back to environment variables and config files
+        if access_key_id.is_none() || secret_access_key.is_none() {
+            let sdk_config = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { aws_config::defaults(BehaviorVersion::latest()).load().await });
 
-            if let Ok(credentials) = cred_res {
-                access_key_id = Some(credentials.access_key_id().to_string());
-                secret_access_key = Some(credentials.secret_access_key().to_string());
-                session_token = credentials.session_token().map(|t| t.to_string());
-                expire_at = credentials.expiry();
-            } else {
-                pgrx::error!(
-                    "failed to load aws credentials: {:?}",
-                    cred_res.unwrap_err()
-                );
+            if let Some(credential_provider) = sdk_config.credentials_provider() {
+                let cred_res = PG_BACKEND_TOKIO_RUNTIME
+                    .block_on(async { credential_provider.provide_credentials().await });
+
+                if let Ok(credentials) = cred_res {
+                    if access_key_id.is_none() {
+                        let key = credentials.access_key_id().to_string();
+                        access_key_id = Some(key);
+                    }
+                    if secret_access_key.is_none() {
+                        secret_access_key = Some(credentials.secret_access_key().to_string());
+                    }
+                    if session_token.is_none() {
+                        session_token = credentials.session_token().map(|t| t.to_string());
+                    }
+                    expire_at = credentials.expiry();
+                } else {
+                    pgrx::error!(
+                        "failed to load aws credentials: {:?}",
+                        cred_res.unwrap_err()
+                    );
+                }
             }
         }
 
-        let endpoint_url = sdk_config.endpoint_url().map(|u| u.to_string());
+        if region.is_none() {
+            let sdk_config = PG_BACKEND_TOKIO_RUNTIME
+                .block_on(async { aws_config::defaults(BehaviorVersion::latest()).load().await });
+            region = sdk_config.region().map(|r| r.to_string());
+        }
 
-        let region = sdk_config.region().map(|r| r.as_ref().to_string());
+        if endpoint_url.is_none() {
+            if let Ok(env_endpoint) = std::env::var("AWS_ENDPOINT_URL") {
+                endpoint_url = Some(env_endpoint);
+            }
+        }
 
         Self {
             region,

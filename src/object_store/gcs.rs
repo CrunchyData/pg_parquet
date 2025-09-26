@@ -3,6 +3,8 @@ use std::sync::Arc;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use url::Url;
 
+use crate::GOOGLE_SERVICE_ACCOUNT_KEY;
+
 use super::object_store_cache::ObjectStoreWithExpiration;
 
 // create_gcs_object_store a GoogleCloudStorage object store from given uri.
@@ -61,8 +63,15 @@ struct GoogleStorageConfig {
 impl GoogleStorageConfig {
     // load loads the Google Storage configuration from the environment.
     fn load() -> Self {
+        let mut key = GOOGLE_SERVICE_ACCOUNT_KEY
+            .get()
+            .map(|s| s.to_string_lossy().to_string());
+
+        if key.is_none() {
+            key = std::env::var("GOOGLE_SERVICE_ACCOUNT_KEY").ok();
+        }
         Self {
-            service_account_key: std::env::var("GOOGLE_SERVICE_ACCOUNT_KEY").ok(),
+            service_account_key: key,
             service_account_path: std::env::var("GOOGLE_SERVICE_ACCOUNT_PATH").ok(),
         }
     }
