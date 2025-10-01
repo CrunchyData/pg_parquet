@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
 use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
+use pgrx::memcxt::PgMemoryContexts;
 use pgrx::pg_sys::AsPgCStr;
 use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry};
 use tokio::runtime::Runtime;
@@ -42,14 +43,16 @@ pub extern "C-unwind" fn _PG_init() {
     }
 
     unsafe {
-        GucRegistry::define_bool_guc(
-            CStr::from_ptr("pg_parquet.enable_copy_hooks".as_pg_cstr()),
-            CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
-            CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
-            &ENABLE_PARQUET_COPY_HOOK,
-            GucContext::Userset,
-            GucFlags::default(),
-        )
+        PgMemoryContexts::TopMemoryContext.switch_to(|_| {
+            GucRegistry::define_bool_guc(
+                CStr::from_ptr("pg_parquet.enable_copy_hooks".as_pg_cstr()),
+                CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
+                CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
+                &ENABLE_PARQUET_COPY_HOOK,
+                GucContext::Userset,
+                GucFlags::default(),
+            )
+        });
     };
 
     MarkGUCPrefixReserved("pg_parquet");
