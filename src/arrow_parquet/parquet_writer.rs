@@ -4,8 +4,10 @@ use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use parquet::{
     arrow::{async_writer::ParquetObjectWriter, AsyncArrowWriter},
-    file::properties::{EnabledStatistics, WriterProperties},
-    format::KeyValue,
+    file::{
+        metadata::KeyValue,
+        properties::{EnabledStatistics, WriterProperties},
+    },
 };
 use pgrx::{heap_tuple::PgHeapTuple, AllocatedByRust, PgTupleDesc};
 

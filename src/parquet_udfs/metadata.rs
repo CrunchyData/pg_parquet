@@ -85,7 +85,6 @@ mod parquet {
 
                 let encodings = column
                     .encodings()
-                    .iter()
                     .map(|e| e.to_string())
                     .collect::<Vec<_>>()
                     .join(",");

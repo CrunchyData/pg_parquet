@@ -1,11 +1,11 @@
+use std::sync::Arc;
+
 use crate::arrow_parquet::uri_utils::{
     ensure_access_privilege_to_uri, parquet_schema_from_uri, uri_as_string, ParsedUriInfo,
 };
 
-use ::parquet::{
-    format::{ConvertedType, FieldRepetitionType, LogicalType, Type},
-    schema::types::to_thrift,
-};
+use ::parquet::basic::{ConvertedType, LogicalType, Repetition};
+use ::parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type, TypePtr};
 use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
 
 #[pg_schema]
@@ -39,49 +39,28 @@ mod parquet {
         ensure_access_privilege_to_uri(&uri_info, true);
         let parquet_schema = parquet_schema_from_uri(&uri_info);
 
-        let root_type = parquet_schema.root_schema();
-        let thrift_schema_elements = to_thrift(root_type).unwrap_or_else(|e| {
-            panic!("Failed to convert schema to thrift: {e}");
-        });
-
         let mut rows = vec![];
 
-        for schema_elem in thrift_schema_elements {
-            let name = schema_elem.name;
+        let root_type = parquet_schema.root_schema_ptr();
 
-            let type_name = schema_elem.type_.map(thrift_type_to_str);
+        let mut column_descriptors = vec![];
 
-            let type_length = schema_elem.type_length.map(|t| t.to_string());
+        let max_rep_level = 0;
+        let max_def_level = 0;
+        let mut path_so_far = vec![];
 
-            let repetition_type = schema_elem
-                .repetition_type
-                .map(thrift_repetition_type_to_str);
+        collect_all_column_descriptors(
+            &root_type,
+            max_rep_level,
+            max_def_level,
+            &mut column_descriptors,
+            &mut path_so_far,
+        );
 
-            let num_children = schema_elem.num_children;
+        for column_descriptor in column_descriptors {
+            let column_type = column_descriptor.self_type();
 
-            let converted_type = schema_elem.converted_type.map(thrift_converted_type_to_str);
-
-            let scale = schema_elem.scale;
-
-            let precision = schema_elem.precision;
-
-            let field_id = schema_elem.field_id;
-
-            let logical_type = schema_elem.logical_type.map(thrift_logical_type_to_str);
-
-            let row = (
-                uri_as_string(&uri_info.uri),
-                name,
-                type_name,
-                type_length,
-                repetition_type,
-                num_children,
-                converted_type,
-                scale,
-                precision,
-                field_id,
-                logical_type,
-            );
+            let row = get_column_info(&uri_info, Some(&column_descriptor), column_type);
 
             rows.push(row);
         }
@@ -90,76 +69,177 @@ mod parquet {
     }
 }
 
-fn thrift_type_to_str(thrift_type: Type) -> String {
-    match thrift_type {
-        Type::BOOLEAN => "BOOLEAN",
-        Type::INT32 => "INT32",
-        Type::INT64 => "INT64",
-        Type::INT96 => "INT96",
-        Type::FLOAT => "FLOAT",
-        Type::DOUBLE => "DOUBLE",
-        Type::BYTE_ARRAY => "BYTE_ARRAY",
-        Type::FIXED_LEN_BYTE_ARRAY => "FIXED_LEN_BYTE_ARRAY",
-        _ => "UNKNOWN",
-    }
-    .into()
+#[allow(clippy::type_complexity)]
+fn get_column_info(
+    uri_info: &ParsedUriInfo,
+    column_descriptor: Option<&Arc<ColumnDescriptor>>,
+    column_type: &Type,
+) -> (
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i32>,
+    Option<String>,
+    Option<i32>,
+    Option<i32>,
+    Option<i32>,
+    Option<String>,
+) {
+    let type_length = column_descriptor.and_then(|cd| {
+        if !column_type.is_primitive() {
+            return None;
+        }
+
+        let type_length = cd.type_length();
+
+        if type_length == -1 {
+            None
+        } else {
+            Some(type_length.to_string())
+        }
+    });
+
+    let name = column_type.name().to_string();
+
+    let type_name = if column_type.is_primitive() {
+        Some(column_type.get_physical_type().to_string())
+    } else {
+        None
+    };
+
+    let scale = if column_type.is_primitive() {
+        let scale = column_type.get_scale();
+
+        if scale == -1 {
+            None
+        } else {
+            Some(scale)
+        }
+    } else {
+        None
+    };
+
+    let precision = if column_type.is_primitive() {
+        let precision = column_type.get_precision();
+
+        if precision == -1 {
+            None
+        } else {
+            Some(precision)
+        }
+    } else {
+        None
+    };
+
+    let column_info = column_type.get_basic_info();
+
+    let field_id = if column_info.has_id() {
+        Some(column_info.id())
+    } else {
+        None
+    };
+
+    let repetition_type = if column_info.has_repetition() {
+        Some(column_info.repetition().to_string())
+    } else {
+        None
+    };
+
+    let converted_type = if column_info.converted_type() == ConvertedType::NONE {
+        None
+    } else {
+        Some(column_info.converted_type().to_string())
+    };
+
+    let logical_type = column_info.logical_type().as_ref().map(logical_type_to_str);
+
+    let num_children = if !column_type.is_primitive() {
+        Some(column_type.get_fields().len() as i32)
+    } else {
+        None
+    };
+
+    (
+        uri_as_string(&uri_info.uri),
+        name,
+        type_name,
+        type_length,
+        repetition_type,
+        num_children,
+        converted_type,
+        scale,
+        precision,
+        field_id,
+        logical_type,
+    )
 }
 
-fn thrift_repetition_type_to_str(repetition_type: FieldRepetitionType) -> String {
-    match repetition_type {
-        FieldRepetitionType::REQUIRED => "REQUIRED",
-        FieldRepetitionType::OPTIONAL => "OPTIONAL",
-        FieldRepetitionType::REPEATED => "REPEATED",
-        _ => "UNKNOWN",
+// collect_all_column_descriptors recursively collects all column descriptors from the given type.
+fn collect_all_column_descriptors<'a>(
+    tp: &'a TypePtr,
+    mut max_rep_level: i16,
+    mut max_def_level: i16,
+    all_columns: &mut Vec<ColumnDescPtr>,
+    path_so_far: &mut Vec<&'a str>,
+) {
+    path_so_far.push(tp.name());
+
+    if tp.get_basic_info().has_repetition() {
+        match tp.get_basic_info().repetition() {
+            Repetition::OPTIONAL => {
+                max_def_level += 1;
+            }
+            Repetition::REPEATED => {
+                max_def_level += 1;
+                max_rep_level += 1;
+            }
+            _ => {}
+        }
     }
-    .into()
+
+    let mut path: Vec<String> = vec![];
+    path.extend(path_so_far.iter().copied().map(String::from));
+    all_columns.push(Arc::new(ColumnDescriptor::new(
+        tp.clone(),
+        max_def_level,
+        max_rep_level,
+        ColumnPath::new(path),
+    )));
+
+    if let Type::GroupType { fields, .. } = tp.as_ref() {
+        for f in fields {
+            collect_all_column_descriptors(
+                f,
+                max_rep_level,
+                max_def_level,
+                all_columns,
+                path_so_far,
+            );
+            path_so_far.pop();
+        }
+    }
 }
 
-fn thrift_logical_type_to_str(logical_type: LogicalType) -> String {
+fn logical_type_to_str(logical_type: &LogicalType) -> String {
     match logical_type {
-        LogicalType::STRING(_) => "STRING",
-        LogicalType::MAP(_) => "MAP",
-        LogicalType::LIST(_) => "LIST",
-        LogicalType::ENUM(_) => "ENUM",
-        LogicalType::DECIMAL(_) => "DECIMAL",
-        LogicalType::DATE(_) => "DATE",
-        LogicalType::TIME(_) => "TIME",
-        LogicalType::TIMESTAMP(_) => "TIMESTAMP",
-        LogicalType::INTEGER(_) => "INTEGER",
-        LogicalType::UNKNOWN(_) => "UNKNOWN",
-        LogicalType::JSON(_) => "JSON",
-        LogicalType::BSON(_) => "BSON",
-        LogicalType::UUID(_) => "UUID",
-        LogicalType::FLOAT16(_) => "FLOAT16",
-        _ => "UNKNOWN",
-    }
-    .into()
-}
-
-fn thrift_converted_type_to_str(converted_type: ConvertedType) -> String {
-    match converted_type {
-        ConvertedType::UTF8 => "UTF8",
-        ConvertedType::MAP => "MAP",
-        ConvertedType::MAP_KEY_VALUE => "MAP_KEY_VALUE",
-        ConvertedType::LIST => "LIST",
-        ConvertedType::ENUM => "ENUM",
-        ConvertedType::DECIMAL => "DECIMAL",
-        ConvertedType::DATE => "DATE",
-        ConvertedType::TIME_MILLIS => "TIME_MILLIS",
-        ConvertedType::TIME_MICROS => "TIME_MICROS",
-        ConvertedType::TIMESTAMP_MILLIS => "TIMESTAMP_MILLIS",
-        ConvertedType::TIMESTAMP_MICROS => "TIMESTAMP_MICROS",
-        ConvertedType::UINT_8 => "UINT_8",
-        ConvertedType::UINT_16 => "UINT_16",
-        ConvertedType::UINT_32 => "UINT_32",
-        ConvertedType::UINT_64 => "UINT_64",
-        ConvertedType::INT_8 => "INT_8",
-        ConvertedType::INT_16 => "INT_16",
-        ConvertedType::INT_32 => "INT_32",
-        ConvertedType::INT_64 => "INT_64",
-        ConvertedType::JSON => "JSON",
-        ConvertedType::BSON => "BSON",
-        ConvertedType::INTERVAL => "INTERVAL",
+        LogicalType::String => "STRING",
+        LogicalType::Map => "MAP",
+        LogicalType::List => "LIST",
+        LogicalType::Enum => "ENUM",
+        LogicalType::Decimal { .. } => "DECIMAL",
+        LogicalType::Date => "DATE",
+        LogicalType::Time { .. } => "TIME",
+        LogicalType::Timestamp { .. } => "TIMESTAMP",
+        LogicalType::Integer { .. } => "INTEGER",
+        LogicalType::Json => "JSON",
+        LogicalType::Bson => "BSON",
+        LogicalType::Uuid => "UUID",
+        LogicalType::Float16 => "FLOAT16",
+        LogicalType::Variant { .. } => "VARIANT",
+        LogicalType::Geometry { .. } => "GEOMETRY",
+        LogicalType::Geography { .. } => "GEOGRAPHY",
         _ => "UNKNOWN",
     }
     .into()
