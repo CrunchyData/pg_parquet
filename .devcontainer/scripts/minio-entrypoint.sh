@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 trap "echo 'Caught termination signal. Exiting...'; exit 0" SIGINT SIGTERM
 

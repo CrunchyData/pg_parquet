@@ -1,9 +1,10 @@
 {
     "name": "pg_parquet Dev Environment",
     "dockerComposeFile": "docker-compose.yml",
-    "service": "app",
+    "service": "pg_parquet",
     "workspaceFolder": "/workspace",
-    "postAttachCommand": "sudo chown -R rust /workspace",
+    "remoteUser": "rust",
+    "containerUser": "rust",
     "customizations": {
         "vscode": {
             "extensions": [

@@ -10,157 +10,75 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  RUST_BACKTRACE: 1
-  CARGO_INCREMENTAL: 0
-  RUSTC_WRAPPER: sccache
-  SCCACHE_DIR: /home/runner/.cache/sccache
+  ORG_NAME: crunchydata
+  REGISTRY: ghcr.io
 
 jobs:
-  build-and-test:
+  build-image:
     strategy:
       matrix:
-        postgres: [ 14, 15, 16, 17, 18 ]
+        base_image_os: [ 'almalinux', 'debian' ]
         runs_on: [ 'ubuntu-22.04', 'ubuntu-22.04-arm' ]
         include:
           - runs_on: ubuntu-22.04
             arch: x86_64
           - runs_on: ubuntu-22.04-arm
             arch: aarch64
+          - base_image_os: almalinux
+            base_image_os_version: 9
+          - base_image_os: debian
+            base_image_os_version: bookworm
 
     runs-on: ${{ matrix.runs_on }}
 
-    env:
-      PG_MAJOR: ${{ matrix.postgres }}
-      PG_CONFIG: /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_config
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build and push image for ${{ matrix.base_image_os }}:${{ matrix.base_image_os_version }} on ${{ matrix.arch }}
+        id: build-and-push
+        uses: ./.github/actions/build-and-push-image
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          org_name: ${{ env.ORG_NAME }}
+          base_image_os: ${{ matrix.base_image_os }}
+          base_image_os_version: ${{ matrix.base_image_os_version }}
+          arch: ${{ matrix.arch }}
+
+
+  build-and-test:
+    needs: build-image
+    strategy:
+      matrix:
+        postgres: [ 14, 15, 16, 17, 18 ]
+        base_image_os: [ 'almalinux', 'debian' ]
+        runs_on: [ 'ubuntu-22.04', 'ubuntu-22.04-arm' ]
+        include:
+          - runs_on: ubuntu-22.04
+            arch: x86_64
+          - runs_on: ubuntu-22.04-arm
+            arch: aarch64
+          - base_image_os: almalinux
+            base_image_os_version: 9
+          - base_image_os: debian
+            base_image_os_version: bookworm
+
+    runs-on: ${{ matrix.runs_on }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up sccache
-        run: |
-          wget https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VERSION/sccache-v$SCCACHE_VERSION-${{ matrix.arch }}-unknown-linux-musl.tar.gz
-          tar -xzf sccache-v$SCCACHE_VERSION-${{ matrix.arch }}-unknown-linux-musl.tar.gz
-          sudo mv sccache-v$SCCACHE_VERSION-${{ matrix.arch }}-unknown-linux-musl/sccache /usr/local/bin
-          chmod +x /usr/local/bin/sccache
-          if [ "${{ matrix.arch }}" == "x86_64" ]; then
-            SCCACHE_SHA256=$SCCACHE_x86_64_SHA256
-          else
-            SCCACHE_SHA256=$SCCACHE_AARCH64_SHA256
-          fi
-          echo "$SCCACHE_SHA256  /usr/local/bin/sccache" | sha256sum --check
-        env:
-          SCCACHE_VERSION: 0.8.1
-          SCCACHE_x86_64_SHA256: "7203a4dcb3a67f3a0272366d50ede22e5faa3e2a798deaa4d1ea377b51c0ab0c"
-          SCCACHE_AARCH64_SHA256: "36b2fd1c6c3a104ec1d526edb0533a3827c266054bf4552fb97f524beff6a612"
-
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Build and test on Postgres ${{ matrix.postgres }} with ${{ matrix.base_image_os }}:${{ matrix.base_image_os_version }} on ${{ matrix.arch }}
+        uses: ./.github/actions/build-and-test
         with:
-          toolchain: 1.90.0
-          target: ${{ matrix.arch }}-unknown-linux-gnu
-          components: rustfmt, clippy, llvm-tools-preview
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        continue-on-error: false
-        with:
-          path: |
-            ~/.cargo/.crates.toml
-            ~/.cargo/.crates2.json
-            ~/.cargo/bin
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: pg_parquet-rust-cache-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.github/workflows/ci.yml') }}
-
-      - name: Cache sccache directory
-        uses: actions/cache@v4
-        continue-on-error: false
-        with:
-          path: ${{ env.SCCACHE_DIR }}
-          key: pg_parquet-sccache-cache-${{ runner.arch }}-${{ runner.os }}-${{ hashFiles('Cargo.lock', '.github/workflows/ci.yml') }}
-
-      - name: Install python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-          cache: 'pipenv' # caching pip dependencies
-
-      - name: Install pipenv
-        run: |
-          curl https://raw.githubusercontent.com/pypa/pipenv/master/get-pipenv.py | python
-          pipenv install --dev
-
-      - name: Install PostgreSQL and postgis
-        run: |
-          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
-          sudo apt-get update
-          sudo apt-get -y install build-essential libreadline-dev zlib1g-dev flex bison libxml2-dev \
-                                  libxslt-dev libssl-dev libxml2-utils xsltproc ccache pkg-config   \
-                                  gnupg ca-certificates libkrb5-dev
-          sudo apt-get -y install postgresql-${{ env.PG_MAJOR }}-postgis-3  \
-                                  postgresql-server-dev-${{ env.PG_MAJOR }} \
-                                  postgresql-client-${{ env.PG_MAJOR }}     \
-                                  libpq-dev
-          echo "export PG_MAJOR=${{ env.PG_MAJOR }}" >> $GITHUB_ENV
-
-      - name: Install azure-cli
-        run: |
-          curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | sudo tee /etc/apt/keyrings/microsoft.gpg > /dev/null
-          echo "deb [arch=`dpkg --print-architecture` signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ `lsb_release -cs` main" | sudo tee /etc/apt/sources.list.d/azure-cli.list
-          sudo apt-get update && sudo apt-get install -y azure-cli
-
-      - name: Install pgrx
-        run: |
-          cargo install --locked cargo-pgrx@0.16.1
-
-      - name: Install cargo-llvm-cov for coverage report
-        run: cargo install --locked cargo-llvm-cov@0.6.12
-
-      - name: Set up permissions for PostgreSQL
-        run: |
-          sudo chmod a+rwx $(${{ env.PG_CONFIG }} --pkglibdir)          \
-                           $(${{ env.PG_CONFIG }} --pkglibdir)/bitcode  \
-                           $(${{ env.PG_CONFIG }} --sharedir)/extension \
-                           /var/run/postgresql/
-
-      - uses: actions/checkout@v4
-        if: ${{ env.PG_MAJOR == '18' }}
-        with:
-          repository: 'pgaudit/pgaudit'
-          ref: 'integration'
-          path: pgaudit
-
-      - name: Install pgaudit extension for pg18
-        if: ${{ env.PG_MAJOR == '18' }}
-        run: |
-          cd pgaudit && make install USE_PGXS=1 PG_CONFIG=${{ env.PG_CONFIG }}
-
-      - name: Install pgaudit extension for < pg18
-        if: ${{ env.PG_MAJOR != '18' }}
-        run: |
-          sudo apt-get -y install postgresql-${{ env.PG_MAJOR }}-pgaudit
-
-      - name: Check format and lint
-        run: |
-          make check-format
-          make check-lint
-
-      - name: Run tests without coverage
-        if: ${{ env.PG_MAJOR != '18' || matrix.arch != 'x86_64' }}
-        run: |
-          make check
-
-      - name: Run tests with coverage
-        if: ${{ env.PG_MAJOR == '18' && matrix.arch == 'x86_64' }}
-        run: |
-          make check-with-coverage
-
-      - name: Upload coverage report to Codecov
-        if: ${{ env.PG_MAJOR == '18' && matrix.arch == 'x86_64' }}
-        uses: codecov/codecov-action@v4
-        with:
-          fail_ci_if_error: true
-          files: ./lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          image: "${{ env.REGISTRY }}/${{ env.ORG_NAME }}/pg_parquet:${{ matrix.base_image_os }}-${{ matrix.base_image_os_version }}-${{ matrix.arch }}-${{ hashFiles('.devcontainer/Dockerfile') }}"
+          postgres: ${{ matrix.postgres }}
+          arch: ${{ matrix.arch }}
+          base_image_os: ${{ matrix.base_image_os }}
+          base_image_os_version: ${{ matrix.base_image_os_version }}
+          codecov_token: ${{ secrets.CODECOV_TOKEN }}
