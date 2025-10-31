@@ -13,55 +13,33 @@ SHELL ["/bin/bash", "-c"]
 
 # install deps
 RUN if [ "${BASE_IMAGE_OS}" = "debian" ]; then \
-      apt-get update && apt-get -y install build-essential libreadline-dev zlib1g-dev \
-                                    flex bison libxml2-dev libxslt-dev libssl-dev     \
-                                    libxml2-utils xsltproc ccache pkg-config wget     \
-                                    curl lsb-release ca-certificates gnupg sudo git   \
-                                    nano net-tools awscli libkrb5-dev python3.11 pip; \
+      apt-get update && \
+      apt-get -y install build-essential libreadline-dev zlib1g-dev flex bison         \
+                         libxml2-dev libxslt-dev libssl-dev git libxml2-utils xsltproc \
+                         pkg-config wget curl sudo lsb-release ca-certificates gnupg   \
+                         nano net-tools libkrb5-dev python3 python3-pip python3-venv   \
+                         python3-dev &&                                                \
+      apt install --only-upgrade python3-pip && \
+      pip3 install pipx --break-system-packages; \
     fi
 RUN if [ "${BASE_IMAGE_OS}" = "almalinux" ]; then \
       dnf -y update && \
       dnf -y install epel-release && \
-      dnf config-manager --enable crb && \
-      dnf -y install gcc gcc-c++ make readline-devel zlib-devel which     \
-                     flex bison libxml2-devel libxslt-devel openssl-devel \
-                     ccache pkgconfig wget lsb_release ca-certificates    \
-                     gnupg sudo git nano net-tools awscli krb5-devel      \
-                     python3.11 pip;                                      \
-    fi
-
-# Upgrade pip and uv
-RUN if [ "$BASE_IMAGE_OS" = "almalinux" ]; then \
-        python3.11 -m ensurepip --upgrade && \
-        python3.11 -m pip install --upgrade pip && \
-        python3.11 -m pip install uv; \
-    fi
-RUN if [ "$BASE_IMAGE_OS" = "debian" ]; then \
-        python3.11 -m pip install --upgrade pip --break-system-packages && \
-        python3.11 -m pip install uv --break-system-packages; \
-    fi
-
-ENV PATH="~/.local/bin:$PATH"
-
-# Install uv (we run mitmproxy with it)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# install azure-cli
-RUN if [ "${BASE_IMAGE_OS}" = "debian" ]; then \
-      curl -sL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | tee /etc/apt/keyrings/microsoft.gpg > /dev/null && \
-      echo "deb [arch=`dpkg --print-architecture` signed-by=/etc/apt/keyrings/microsoft.gpg] https://packages.microsoft.com/repos/azure-cli/ `lsb_release -cs` main" | tee /etc/apt/sources.list.d/azure-cli.list && \
-      apt-get update && apt-get install -y azure-cli; \
-    fi
-RUN if [ "${BASE_IMAGE_OS}" = "almalinux" ]; then \
-      rpm --import https://packages.microsoft.com/keys/microsoft.asc && \
-      dnf install -y https://packages.microsoft.com/config/rhel/${BASE_IMAGE_OS_VERSION}/packages-microsoft-prod.rpm && \
-      dnf install -y azure-cli; \
+      (dnf config-manager --set-enabled powertools || true) && \
+      (dnf config-manager --set-enabled crb || true) && \
+      dnf -y install gcc gcc-c++ make readline-devel zlib-devel flex bison libxml2-devel    \
+                     libxslt-devel openssl-devel pkgconfig wget ca-certificates sudo git    \
+                     which gnupg nano net-tools krb5-devel python3 python3-pip              \
+                     platform-python-devel &&                                               \
+      pip3 install --upgrade pip && \
+      pip3 install pipx; \
     fi
 
 # install Postgres
 RUN if [ "${BASE_IMAGE_OS}" = "debian" ]; then \
-      sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list' && \
-      wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add - && \
+      wget -O- https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor > postgresql-keyring.gpg && \
+      cat postgresql-keyring.gpg | sudo tee -a /usr/share/keyrings/postgresql-keyring.gpg > /dev/null && \
+      sh -c 'echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list' && \
       apt-get update && apt-get -y install postgresql-{14,15,16,17,18}-postgis-3  \
                                            postgresql-{14,15,16,17,18}-pgaudit    \
                                            postgresql-server-dev-{14,15,16,17,18} \
@@ -71,10 +49,11 @@ RUN if [ "${BASE_IMAGE_OS}" = "debian" ]; then \
 RUN if [ "${BASE_IMAGE_OS}" = "almalinux" ]; then \
       ARCH=$(uname -m) && \
       dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-$(rpm -E %{rhel})-${ARCH}/pgdg-redhat-repo-latest.noarch.rpm && \
-      dnf -qy module disable postgresql && \
+      (dnf -qy module disable postgresql || true) && \
       dnf install -y --nogpgcheck \
                      postgis36_{14,15,16,17,18}        \
                      pgaudit{16_14,17_15,_16,_17,_18}  \
+                     postgresql{14,15,16,17,18}-server \
                      postgresql{14,15,16,17,18}-libs   \
                      postgresql{14,15,16,17,18}-devel; \
     fi
@@ -141,6 +120,10 @@ RUN useradd --uid $USER_UID --gid $USER_GID -s /bin/bash -m $USERNAME
 RUN echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/$USERNAME
 
 USER $USERNAME
+
+# Install awscli, azure-cli and mitmdump with rust user
+RUN pipx install mitmproxy && pipx install awscli && pipx install azure-cli
+ENV PATH="~/.local/bin:${PATH}"
 
 # install Rust environment
 ARG RUSTC_VERSION=1.90.0

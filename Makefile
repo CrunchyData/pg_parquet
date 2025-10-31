@@ -1,6 +1,6 @@
 .PHONY: build clean install uninstall package set-pg_config-path \
 	check check-with-coverage check-minio check-azure check-gcs check-http check-format check-lint \
-	start-containers stop-containers
+	start-containers stop-containers build-containers
 
 ENVFILE ?= .devcontainer/.env
 
@@ -98,7 +98,7 @@ ifeq ($(FAKE_GCS_IMAGE),docker.io/tustvold/fake-gcs-server)
 endif
 endif
 
-	# start containers in detached mode
+	# start containers in detached mode without building pg_parquet image (might pull missing images)
 	docker compose -f .devcontainer/docker-compose.yml up -d --no-build
 
 	is_healthy() { \
@@ -121,3 +121,6 @@ endif
 
 stop-containers:
 	docker compose -f .devcontainer/docker-compose.yml stop
+
+build-containers:
+	docker compose -f .devcontainer/docker-compose.yml build

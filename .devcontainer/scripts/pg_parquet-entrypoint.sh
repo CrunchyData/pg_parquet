@@ -9,8 +9,7 @@ az storage container create -n ${AZURE_TEST_CONTAINER_NAME}2 --connection-string
 # fix volume permissions
 sudo chown -R rust:rust /workspace
 
-uvx --from mitmproxy mitmdump \
-	-s patch_arn_xml.py \
+mitmdump -s patch_arn_xml.py \
 	--mode reverse:${AWS_ENDPOINT_URL} \
 	--set keep_host_header=true \
 	--listen-port ${AWS_ENDPOINT_PROXY_PORT}

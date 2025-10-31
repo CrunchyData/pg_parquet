@@ -17,17 +17,13 @@ jobs:
   build-image:
     strategy:
       matrix:
-        base_image_os: [ 'almalinux', 'debian' ]
+        base_image_os: [ '{"name": "almalinux", "version": "8"}', '{"name": "almalinux", "version": "9"}', '{"name": "almalinux", "version": "10"}', '{"name": "debian", "version": "bookworm"}', '{"name": "debian", "version": "trixie"}', '{"name": "debian", "version": "forky"}' ]
         runs_on: [ 'ubuntu-22.04', 'ubuntu-22.04-arm' ]
         include:
           - runs_on: ubuntu-22.04
             arch: x86_64
           - runs_on: ubuntu-22.04-arm
             arch: aarch64
-          - base_image_os: almalinux
-            base_image_os_version: 9
-          - base_image_os: debian
-            base_image_os_version: bookworm
 
     runs-on: ${{ matrix.runs_on }}
 
@@ -35,7 +31,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build and push image for ${{ matrix.base_image_os }}:${{ matrix.base_image_os_version }} on ${{ matrix.arch }}
+      - name: Parse base image os and version
+        id: parse-base-image
+        run: |
+          echo "base_image_os=$(echo '${{ matrix.base_image_os }}' | jq -r '.name')" >> $GITHUB_OUTPUT
+          echo "base_image_os_version=$(echo '${{ matrix.base_image_os }}' | jq -r '.version')" >> $GITHUB_OUTPUT
+
+      - name: Build and push image for ${{ steps.parse-base-image.outputs.base_image_os }}:${{ steps.parse-base-image.outputs.base_image_os_version }} on ${{ matrix.arch }}
         id: build-and-push
         uses: ./.github/actions/build-and-push-image
         with:
@@ -43,8 +45,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
           org_name: ${{ env.ORG_NAME }}
-          base_image_os: ${{ matrix.base_image_os }}
-          base_image_os_version: ${{ matrix.base_image_os_version }}
+          base_image_os: ${{ steps.parse-base-image.outputs.base_image_os }}
+          base_image_os_version: ${{ steps.parse-base-image.outputs.base_image_os_version }}
           arch: ${{ matrix.arch }}
 
 
@@ -53,32 +55,34 @@ jobs:
     strategy:
       matrix:
         postgres: [ 14, 15, 16, 17, 18 ]
-        base_image_os: [ 'almalinux', 'debian' ]
+        base_image_os: [ '{"name": "almalinux", "version": "8"}', '{"name": "almalinux", "version": "9"}', '{"name": "almalinux", "version": "10"}', '{"name": "debian", "version": "bookworm"}', '{"name": "debian", "version": "trixie"}', '{"name": "debian", "version": "forky"}' ]
         runs_on: [ 'ubuntu-22.04', 'ubuntu-22.04-arm' ]
         include:
           - runs_on: ubuntu-22.04
             arch: x86_64
           - runs_on: ubuntu-22.04-arm
             arch: aarch64
-          - base_image_os: almalinux
-            base_image_os_version: 9
-          - base_image_os: debian
-            base_image_os_version: bookworm
 
     runs-on: ${{ matrix.runs_on }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and test on Postgres ${{ matrix.postgres }} with ${{ matrix.base_image_os }}:${{ matrix.base_image_os_version }} on ${{ matrix.arch }}
+      - name: Parse base image os and version
+        id: parse-base-image
+        run: |
+          echo "base_image_os=$(echo '${{ matrix.base_image_os }}' | jq -r '.name')" >> $GITHUB_OUTPUT
+          echo "base_image_os_version=$(echo '${{ matrix.base_image_os }}' | jq -r '.version')" >> $GITHUB_OUTPUT
+
+      - name: Build and test on Postgres ${{ matrix.postgres }} with ${{ steps.parse-base-image.outputs.base_image_os }}:${{ steps.parse-base-image.outputs.base_image_os_version }} on ${{ matrix.arch }}
         uses: ./.github/actions/build-and-test
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-          image: "${{ env.REGISTRY }}/${{ env.ORG_NAME }}/pg_parquet:${{ matrix.base_image_os }}-${{ matrix.base_image_os_version }}-${{ matrix.arch }}-${{ hashFiles('.devcontainer/Dockerfile') }}"
+          image: "${{ env.REGISTRY }}/${{ env.ORG_NAME }}/pg_parquet:${{ steps.parse-base-image.outputs.base_image_os }}-${{ steps.parse-base-image.outputs.base_image_os_version }}-${{ matrix.arch }}-${{ hashFiles('.devcontainer/Dockerfile') }}"
           postgres: ${{ matrix.postgres }}
           arch: ${{ matrix.arch }}
-          base_image_os: ${{ matrix.base_image_os }}
-          base_image_os_version: ${{ matrix.base_image_os_version }}
+          base_image_os: ${{ steps.parse-base-image.outputs.base_image_os }}
+          base_image_os_version: ${{ steps.parse-base-image.outputs.base_image_os_version }}
           codecov_token: ${{ secrets.CODECOV_TOKEN }}
