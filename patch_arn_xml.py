@@ -3,7 +3,7 @@ Fill empty <Arn/> or <RoleARN></RoleARN> elements in XML *responses*.
 
 Run (reverse‑proxy example):
     mitmdump -s patch_arn_xml.py \
-             --mode reverse:http://localhost:9000 \
+             --mode reverse:http://minio:9000 \
              --listen-port 9999 \
              --set keep_host_header=true          # keep SigV4 intact
 """
@@ -72,7 +72,7 @@ def response(flow: http.HTTPFlow) -> None:
     if not changed:
         return                                 # nothing to patch
 
-    new_xml = ET.tostring(tree, encoding="utf-8", xml_declaration=True)
+    new_xml = ET.tostring(tree, encoding="utf-8")
     new_raw = _compress(new_xml, enc) if enc else new_xml
 
     flow.response.raw_content = new_raw

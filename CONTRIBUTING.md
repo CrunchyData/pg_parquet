@@ -74,7 +74,7 @@ See [README.md](README.md#installation-from-source).
 
 ## Devcontainer
 
-If you want to work on a totally ready-to-work container environment, you can try our
+If you want to work on a totally ready-to-work [container environment](.devcontainer/README.md), you can try our
 [devcontainer](.devcontainer/devcontainer.json). If you have chance to work on
 [vscode editor](https://code.visualstudio.com), you can start pg_parquet project
 inside the devcontainer. Please see [how you start the devcontainer](https://code.visualstudio.com/docs/devcontainers/containers).
@@ -91,29 +91,22 @@ testing via `cargo pgrx test pg16`.
 
 # Testing
 
+We heavily rely on `docker` and `docker-compose` to set up the development (test) environment.
+There should be no other prerequisites except having `docker` and `docker-compose` installed
+on your machine.  Then you can use our [Makefile](Makefile) to run tests easily.
+
 Object storage tests are integration tests which require below containers running locally:
+- pg_parquet container with postgres and pg_parquet extension
 - minio container for s3
 - azurite container for azure blob storage
 - fake_gcs container for google cloud storage
 - webdav container for http(s) stores
 
-Our [Makefile](Makefile) automates setting up all containers and running tests for pg_parquet.
-
-#### Build Dependencies
-- rustup
-- pgrx
-- postgresql development deps
-
-#### Test Dependencies
-- docker
-- azure cli
-- pgaudit extension
-- python3.11 and pipenv
+We test pg_parquet against multiple Postgres versions and multiple OS base images (debian:bookworm and almalinux:9) on multiple architectures (x86_64 and aarch64).
 
 # Format and Lint
 
-We use `cargo-fmt` as formatter and `cargo-clippy` as linter. You can check
-how we run them from [ci.yml](.github/workflows/ci.yml).
+We use `cargo-fmt` as formatter and `cargo-clippy` as linter.
 
 # Release
 

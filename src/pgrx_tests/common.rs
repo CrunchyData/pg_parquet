@@ -366,15 +366,6 @@ pub(crate) fn extension_exists(extension_name: &str) -> bool {
     Spi::get_one(&query).unwrap().unwrap()
 }
 
-pub(crate) fn extension_version(extension_name: &str) -> String {
-    let quoted_extension = spi::quote_literal(extension_name);
-    let query = format!(
-        "select default_version from pg_available_extensions where name = {quoted_extension}"
-    );
-
-    Spi::get_one(&query).unwrap().unwrap()
-}
-
 pub(crate) fn write_record_batch_to_parquet(schema: SchemaRef, record_batch: RecordBatch) {
     let file = File::create(LOCAL_TEST_FILE_PATH).unwrap();
     let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();

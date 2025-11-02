@@ -1,0 +1,80 @@
+name: build-and-push image action
+description: A reusable set of build and push image steps for pg_parquet
+inputs:
+  registry:
+    description: 'Container registry'
+    required: true
+  username:
+    description: 'Container registry username'
+    required: true
+  password:
+    description: 'Container registry password'
+    required: true
+  org_name:
+    description: 'Organization name'
+    required: true
+  base_image_os:
+    description: 'Base image os'
+    required: true
+  base_image_os_version:
+    description: 'Base image os version'
+    required: true
+  arch:
+    description: 'Target architecture'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Compute Dockerfile hash
+      id: hash
+      shell: bash
+      run: |
+        echo "image-name=${{ inputs.registry }}/${{ inputs.org_name }}/pg_parquet" >> "$GITHUB_OUTPUT"
+        echo "image-tag=${{ inputs.base_image_os }}-${{ inputs.base_image_os_version }}-${{ inputs.arch }}-${{ hashFiles('.devcontainer/Dockerfile') }}" >> "$GITHUB_OUTPUT"
+
+    - name: Check if image already exists
+      id: check
+      shell: bash
+      run: |
+        GHCR_TOKEN=$(echo ${{ inputs.password }} | base64)
+
+        TAG_EXISTING=$(curl -H "Authorization: Bearer ${GHCR_TOKEN}" https://${{ inputs.registry }}/v2/${{ inputs.org_name }}/pg_parquet/tags/list | grep "\"${{ steps.hash.outputs.image-tag }}\"" || true)
+
+        if [ -n "${TAG_EXISTING}" ]; then
+          echo "Tag already exists."
+          echo "tag_existing=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Tag does not exist."
+          echo "tag_existing=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Login to GitHub Container Registry
+      if: steps.check.outputs.tag_existing == 'false'
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.username }}
+        password: ${{ inputs.password }}
+
+    - name: Set up Docker Buildx
+      if: steps.check.outputs.tag_existing == 'false'
+      uses: docker/setup-buildx-action@v3
+
+    - name: Docker meta
+      id: meta
+      if: steps.check.outputs.tag_existing == 'false'
+      uses: docker/metadata-action@v5
+
+    - name: Build and push
+      if: steps.check.outputs.tag_existing == 'false'
+      uses: docker/build-push-action@v6
+      with:
+        push: true
+        context: .devcontainer
+        build-args: |
+          BASE_IMAGE_OS=${{ inputs.base_image_os }}
+          BASE_IMAGE_OS_VERSION=${{ inputs.base_image_os_version }}
+        tags: |
+          ${{ steps.hash.outputs.image-name }}:${{ steps.hash.outputs.image-tag }}
+        annotations: ${{ steps.meta.outputs.annotations }}

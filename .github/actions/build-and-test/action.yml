@@ -1,0 +1,89 @@
+name: build-and-test image action
+description: A reusable set of build and test steps for pg_parquet
+inputs:
+  registry:
+    description: 'Container registry'
+    required: true
+  username:
+    description: 'Container registry username'
+    required: true
+  password:
+    description: 'Container registry password'
+    required: true
+  image:
+    description: 'Image to pull'
+    required: true
+  postgres:
+    description: 'PostgreSQL major version'
+    required: true
+  base_image_os:
+    description: 'Base image os'
+    required: true
+  base_image_os_version:
+    description: 'Base image os version'
+    required: true
+  arch:
+    description: 'System architecture'
+    required: true
+  codecov_token:
+    description: 'Codecov token'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ inputs.username }}
+        password: ${{ inputs.password }}
+
+    - name: Pull built image
+      shell: bash
+      run: |
+        docker pull ${{ inputs.image }}
+        # tag it for compose to use the built image
+        docker tag ${{ inputs.image }} devcontainer-pg_parquet:latest
+
+    - name: Set default pg_config for almalinux
+      if: ${{ inputs.base_image_os == 'almalinux' }}
+      shell: bash
+      run: |
+        make set-pg_config-path PG_CONFIG_DIR="/usr/pgsql-${{ inputs.postgres }}/bin"
+
+    - name: Set default pg_config for debian
+      if: ${{ inputs.base_image_os == 'debian' }}
+      shell: bash
+      run: |
+        make set-pg_config-path PG_CONFIG_DIR="/usr/lib/postgresql/${{ inputs.postgres }}/bin"
+
+    - name: Check format and lint
+      shell: bash
+      run: |
+        make check-format
+        make check-lint
+
+    - name: Run tests without coverage
+      shell: bash
+      if: ${{ inputs.postgres != '18' || inputs.arch != 'x86_64' || inputs.base_image_os != 'debian' }}
+      run: |
+        make check
+
+    - name: Run tests with coverage
+      shell: bash
+      if: ${{ inputs.postgres == '18' && inputs.arch == 'x86_64' && inputs.base_image_os == 'debian' }}
+      run: |
+        make check-with-coverage
+
+    - name: Upload coverage report to Codecov
+      if: ${{ inputs.postgres == '18' && inputs.arch == 'x86_64' && inputs.base_image_os == 'debian' }}
+      uses: codecov/codecov-action@v4
+      with:
+        fail_ci_if_error: true
+        files: ./lcov.info
+        token: ${{ inputs.codecov_token }}
+
+    - name: Stop containers
+      shell: bash
+      run: make stop-containers

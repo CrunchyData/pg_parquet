@@ -1,19 +1,29 @@
 services:
-  app:
+  pg_parquet:
     build:
       context: .
       dockerfile: Dockerfile
-    entrypoint: "./entrypoint.sh"
-    network_mode: host
+      args:
+        BASE_IMAGE_OS: ${BASE_IMAGE_OS}
+        BASE_IMAGE_OS_VERSION: ${BASE_IMAGE_OS_VERSION}
+        RUSTC_VERSION: ${RUSTC_VERSION}
+        DEFAULT_PG_MAJOR: ${DEFAULT_PG_MAJOR}
+    container_name: pg_parquet
+    entrypoint: ["/workspace/.devcontainer/scripts/pg_parquet-entrypoint.sh"]
+    working_dir: /workspace
+    healthcheck:
+      test: ["CMD", "curl","pg_parquet:9999"]
+      interval: 60s
+      timeout: 10s
+      retries: 6
     volumes:
       - ..:/workspace
-      - ${USERPROFILE}${HOME}/.ssh:/home/rust/.ssh:ro
-      - ${USERPROFILE}${HOME}/.ssh/known_hosts:/home/rust/.ssh/known_hosts:rw
-      - ${USERPROFILE}${HOME}/.gitconfig:/home/rust/.gitconfig:ro
-      - ${USERPROFILE}${HOME}/.aws:/home/rust/.aws:rw
-      - ${USERPROFILE}${HOME}/.azure:/home/rust/.azure:rw
-      - ${USERPROFILE}${HOME}/.config/gcloud:/home/rust/.config/gcloud:rw
-      - ./entrypoint.sh:/entrypoint.sh
+      # - ${USERPROFILE}${HOME}/.ssh:/home/rust/.ssh:ro
+      # - ${USERPROFILE}${HOME}/.ssh/known_hosts:/home/rust/.ssh/known_hosts:rw
+      # - ${USERPROFILE}${HOME}/.gitconfig:/home/rust/.gitconfig:ro
+      # - ${USERPROFILE}${HOME}/.aws:/home/rust/.aws:rw
+      # - ${USERPROFILE}${HOME}/.azure:/home/rust/.azure:rw
+      # - ${USERPROFILE}${HOME}/.config/gcloud:/home/rust/.config/gcloud:rw
     env_file:
       - .env
     cap_add:
@@ -25,54 +35,61 @@ services:
       - fake-gcs-server
 
   minio:
-    image: minio/minio
-    env_file:
-      - .env
-    network_mode: host
-    entrypoint: "./entrypoint.sh"
+    image: ${MINIO_IMAGE}
+    entrypoint: ["/entrypoint.sh"]
+    container_name: minio
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "http://localhost:9000"]
+      test: ["CMD", "curl", "http://minio:9000"]
       interval: 6s
       timeout: 2s
       retries: 3
     volumes:
-        - ./minio-entrypoint.sh:/entrypoint.sh
-
-  azurite:
-    image: mcr.microsoft.com/azure-storage/azurite
+        - ./scripts/minio-entrypoint.sh:/entrypoint.sh
     env_file:
       - .env
-    network_mode: host
+
+  azurite:
+    image: ${AZURITE_IMAGE}
+    container_name: azurite
+    entrypoint: ["/entrypoint.sh"]
+    volumes:
+      - ./scripts/azurite-entrypoint.sh:/entrypoint.sh
+    env_file:
+      - .env
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "10000"]
+      test: ["CMD", "nc", "-z", "azurite", "10000"]
       interval: 6s
       timeout: 2s
       retries: 3
 
   webdav:
-    image: rclone/rclone
-    command: ["serve", "webdav", "/data", "--addr", ":8080"]
+    image: ${WEBDAV_IMAGE}
+    container_name: webdav
+    entrypoint: ["/entrypoint.sh"]
+    volumes:
+      - ./scripts/webdav-entrypoint.sh:/entrypoint.sh
     env_file:
       - .env
-    network_mode: host
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "nc", "-z", "localhost", "8080"]
+      test: ["CMD", "nc", "-z", "webdav", "8080"]
       interval: 6s
       timeout: 2s
       retries: 3
 
   fake-gcs-server:
-     image: tustvold/fake-gcs-server
-     env_file:
-       - .env
-     network_mode: host
-     command: -scheme http -public-host localhost:4443
-     restart: unless-stopped
-     healthcheck:
-       test: ["CMD", "nc", "-z", "localhost", "4443"]
-       interval: 6s
-       timeout: 2s
-       retries: 3
+    image: ${FAKE_GCS_IMAGE}
+    container_name: fake-gcs-server
+    entrypoint: ["/entrypoint.sh"]
+    volumes:
+      - ./scripts/fake-gcs-entrypoint.sh:/entrypoint.sh
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "fake-gcs-server", "4443"]
+      interval: 6s
+      timeout: 2s
+      retries: 3
