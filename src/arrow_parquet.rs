@@ -7,5 +7,5 @@ pub(crate) mod parquet_reader;
 pub(crate) mod parquet_version;
 pub(crate) mod parquet_writer;
 pub(crate) mod pg_to_arrow;
-pub(crate) mod schema_parser;
+pub(crate) mod schema;
 pub(crate) mod uri_utils;

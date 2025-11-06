@@ -1,8 +1,9 @@
 use std::ffi::{c_char, CStr};
 
 use pg_sys::{
-    standard_ProcessUtility, AsPgCStr, CommandTag, DestReceiver, ParamListInfoData, PlannedStmt,
-    ProcessUtility_hook, ProcessUtility_hook_type, QueryCompletion, QueryEnvironment,
+    nodeToString, standard_ProcessUtility, AsPgCStr, CommandTag, CreateStmt, DestReceiver,
+    ParamListInfoData, PlannedStmt, ProcessUtility_hook, ProcessUtility_hook_type, QueryCompletion,
+    QueryEnvironment,
 };
 use pgrx::{prelude::*, GucSetting};
 
@@ -25,7 +26,13 @@ use super::{
     copy_to_split_dest_receiver::free_copy_to_parquet_split_dest_receiver,
     copy_utils::{
         copy_to_stmt_compression, copy_to_stmt_field_ids, copy_to_stmt_file_size_bytes,
-        copy_to_stmt_parquet_version, validate_copy_from_options, validate_copy_to_options,
+        copy_to_stmt_parquet_version, has_option, validate_copy_from_options,
+        validate_copy_to_options,
+    },
+    create_table::{
+        create_copy_from_parquet_stmt_for_table, create_stmt_get_uri,
+        create_stmt_remove_parquet_options, infer_column_definitions,
+        is_create_table_from_parquet_stmt, validate_create_table_from_parquet_stmt,
     },
 };
 
@@ -130,6 +137,60 @@ fn process_copy_from_parquet(
         .execute()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn process_create_table_from_parquet(
+    p_stmt: &mut PgBox<PlannedStmt>,
+    query_string: &CStr,
+    read_only_tree: bool,
+    context: u32,
+    params: *mut ParamListInfoData,
+    query_env: *mut QueryEnvironment,
+    dest: *mut DestReceiver,
+    completion_tag: *mut QueryCompletion,
+) {
+    let mut create_stmt = unsafe { PgBox::<CreateStmt>::from_pg(p_stmt.utilityStmt as _) };
+
+    validate_create_table_from_parquet_stmt(&create_stmt);
+
+    let uri_info = create_stmt_get_uri(&create_stmt);
+
+    let load_from = has_option(create_stmt.options, "load_from");
+
+    let column_defs = infer_column_definitions(&create_stmt);
+    create_stmt.tableElts = column_defs.into_pg();
+
+    // remove pg_parquet specific options to make PG happy
+    create_stmt_remove_parquet_options(&mut create_stmt);
+
+    unsafe {
+        ProcessUtility_hook.expect("ProcessUtility_hook is None")(
+            p_stmt.as_ptr(),
+            query_string.as_ptr(),
+            read_only_tree,
+            context,
+            params,
+            query_env,
+            dest,
+            completion_tag,
+        );
+    }
+
+    if load_from {
+        let copy_from_stmt =
+            create_copy_from_parquet_stmt_for_table(create_stmt.relation, &uri_info);
+
+        let mut planned_stmt = p_stmt.clone();
+        planned_stmt.utilityStmt = copy_from_stmt.into_pg() as _;
+
+        let query_string = unsafe { nodeToString(planned_stmt.utilityStmt as _) };
+        let query_string = unsafe { CStr::from_ptr(query_string) };
+
+        process_copy_from_parquet(&planned_stmt, query_string, unsafe {
+            &PgBox::from_pg(query_env)
+        });
+    }
+}
+
 #[pg_guard]
 #[allow(clippy::too_many_arguments)]
 extern "C-unwind" fn parquet_copy_hook(
@@ -142,7 +203,7 @@ extern "C-unwind" fn parquet_copy_hook(
     dest: *mut DestReceiver,
     completion_tag: *mut QueryCompletion,
 ) {
-    let p_stmt = unsafe { PgBox::from_pg(p_stmt) };
+    let mut p_stmt = unsafe { PgBox::from_pg(p_stmt) };
     let query_string = unsafe { CStr::from_ptr(query_string) };
     let params = unsafe { PgBox::from_pg(params) };
     let query_env = unsafe { PgBox::from_pg(query_env) };
@@ -163,6 +224,18 @@ extern "C-unwind" fn parquet_copy_hook(
             completion_tag.nprocessed = nprocessed;
             completion_tag.commandTag = CommandTag::CMDTAG_COPY;
         }
+        return;
+    } else if ENABLE_PARQUET_COPY_HOOK.get() && is_create_table_from_parquet_stmt(&p_stmt) {
+        process_create_table_from_parquet(
+            &mut p_stmt,
+            query_string,
+            read_only_tree,
+            context,
+            params.as_ptr(),
+            query_env.as_ptr(),
+            dest,
+            completion_tag.as_ptr(),
+        );
         return;
     }
 

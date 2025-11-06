@@ -6,6 +6,7 @@ mod copy_pg_rules;
 mod copy_program;
 mod copy_stdin_out;
 mod copy_type_roundtrip;
+mod create_table_from;
 mod gucs;
 mod object_store;
 mod udfs;

@@ -1,12 +1,13 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, ffi::CStr};
 
 use pgrx::{
     pg_sys::{
-        getBaseType, getBaseTypeAndTypmod, get_element_type, get_extension_oid,
-        lookup_rowtype_tupdesc, type_is_array, type_is_rowtype, AsPgCStr, FormData_pg_attribute,
-        InvalidOid, Oid,
+        format_type_be, getBaseType, getBaseTypeAndTypmod, get_array_type, get_element_type,
+        get_extension_oid, lookup_rowtype_tupdesc, makeString, makeTypeNameFromNameList,
+        type_is_array, type_is_rowtype, typenameTypeIdAndMod, AsPgCStr, FormData_pg_attribute,
+        InvalidOid, LookupTypeNameOid, Oid,
     },
-    PgTupleDesc,
+    PgList, PgTupleDesc,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -92,6 +93,10 @@ pub(crate) fn array_element_typoid(array_typoid: Oid) -> Oid {
     unsafe { get_element_type(array_typoid) }
 }
 
+pub(crate) fn array_typoid(element_typoid: Oid) -> Oid {
+    unsafe { get_array_type(element_typoid) }
+}
+
 pub(crate) fn domain_array_base_elem_type(domain_typoid: Oid) -> (Oid, i32) {
     debug_assert!(is_domain_of_array_type(domain_typoid));
 
@@ -106,4 +111,33 @@ pub(crate) fn extension_exists(extension_name: &str) -> bool {
     let extension_name = extension_name.as_pg_cstr();
     let extension_oid = unsafe { get_extension_oid(extension_name, true) };
     extension_oid != InvalidOid
+}
+
+pub(crate) fn get_type_name(typoid: Oid) -> String {
+    let typename = unsafe { format_type_be(typoid) };
+    unsafe {
+        CStr::from_ptr(typename)
+            .to_str()
+            .expect("invalid CString for type name")
+            .to_string()
+    }
+}
+
+pub(crate) fn type_info_from_name(schema_name: &str, type_name: &str) -> (Oid, i32) {
+    let mut typoid = InvalidOid;
+    let mut typmod = -1;
+
+    let mut name_list = PgList::new();
+    name_list.push(unsafe { makeString(schema_name.as_pg_cstr()) });
+    name_list.push(unsafe { makeString(type_name.as_pg_cstr()) });
+
+    let typename = unsafe { makeTypeNameFromNameList(name_list.into_pg()) };
+
+    let missing_ok = true;
+
+    if unsafe { LookupTypeNameOid(std::ptr::null_mut(), typename, missing_ok) } != InvalidOid {
+        unsafe { typenameTypeIdAndMod(std::ptr::null_mut(), typename, &mut typoid, &mut typmod) };
+    }
+
+    (typoid, typmod)
 }

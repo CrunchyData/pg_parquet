@@ -104,3 +104,6 @@ CREATE FUNCTION parquet."column_stats"("uri" TEXT) RETURNS TABLE (
 ) STRICT
 LANGUAGE c
 AS 'MODULE_PATHNAME', 'column_stats_wrapper';
+
+-- error if the schema already exists
+CREATE SCHEMA parquet_structs;
