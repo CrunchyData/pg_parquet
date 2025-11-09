@@ -4,13 +4,13 @@ use arrow::array::{ArrayRef, BinaryArray, ListArray};
 
 use crate::{
     arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray},
-    type_compat::geometry::{Geometry, GeometryColumn},
+    type_compat::geometry::{Geography, GeometryColumn},
 };
 
 use super::PgToArrowAttributeContext;
 
-// Geometry
-impl PgTypeToArrowArray<Geometry> for Vec<Option<Geometry>> {
+// Geography
+impl PgTypeToArrowArray<Geography> for Vec<Option<Geography>> {
     fn to_arrow_array(self, context: &PgToArrowAttributeContext) -> ArrayRef {
         // update GeoParquet metadata
         let geometry_column: GeometryColumn = self
@@ -27,15 +27,15 @@ impl PgTypeToArrowArray<Geometry> for Vec<Option<Geometry>> {
         // prepare WKB array
         let wkbs = self
             .iter()
-            .map(|geometry| geometry.as_deref())
+            .map(|geography| geography.as_deref())
             .collect::<Vec<_>>();
         let wkb_array = BinaryArray::from(wkbs);
         Arc::new(wkb_array)
     }
 }
 
-// Geometry[]
-impl PgTypeToArrowArray<Geometry> for Vec<Option<Vec<Option<Geometry>>>> {
+// Geography[]
+impl PgTypeToArrowArray<Geography> for Vec<Option<Vec<Option<Geography>>>> {
     fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
@@ -57,7 +57,7 @@ impl PgTypeToArrowArray<Geometry> for Vec<Option<Vec<Option<Geometry>>>> {
         // prepare WKB array
         let wkbs = pg_array
             .iter()
-            .map(|geometry| geometry.as_deref())
+            .map(|geography| geography.as_deref())
             .collect::<Vec<_>>();
 
         let wkb_array = BinaryArray::from(wkbs);

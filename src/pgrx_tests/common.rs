@@ -358,7 +358,7 @@ pub(crate) fn timetz_array_to_utc_time_array(
     )
 }
 
-pub(crate) fn extension_exists(extension_name: &str) -> bool {
+pub(crate) fn is_extension_available(extension_name: &str) -> bool {
     let quoted_extension = spi::quote_literal(extension_name);
     let query =
         format!("select count(*) = 1 from pg_available_extensions where name = {quoted_extension}");
@@ -375,7 +375,7 @@ pub(crate) fn write_record_batch_to_parquet(schema: SchemaRef, record_batch: Rec
 }
 
 pub(crate) fn create_crunchy_map_type(key_type: &str, val_type: &str) -> String {
-    assert!(extension_exists("crunchy_map"));
+    assert!(is_extension_available("crunchy_map"));
 
     let command = format!("SELECT crunchy_map.create('{key_type}','{val_type}')::text;",);
     Spi::get_one(&command).unwrap().unwrap()

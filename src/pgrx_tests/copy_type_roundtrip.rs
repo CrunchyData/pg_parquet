@@ -1,15 +1,17 @@
 #[pgrx::pg_schema]
 mod tests {
+    use std::collections::HashSet;
     use std::vec;
 
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
-        extension_exists, timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult,
+        is_extension_available, timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult,
         TestTable, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::fallback_to_text::FallbackToText;
     use crate::type_compat::geometry::{
-        Geometry, GeometryColumnsMetadata, GeometryEncoding, GeometryType,
+        Geography, Geometry, GeometryEdgeType, GeometryEncoding, GeometryOrientation, GeometryType,
+        GeoparquetMetadata, EPSG_4326_PROJJSON,
     };
     use crate::type_compat::map::Map;
     use crate::type_compat::pg_arrow_type_conversions::{
@@ -372,7 +374,7 @@ mod tests {
     #[pg_test]
     fn test_map() {
         // Skip the test if crunchy_map extension is not available
-        if !extension_exists("crunchy_map") {
+        if !is_extension_available("crunchy_map") {
             return;
         }
 
@@ -393,7 +395,7 @@ mod tests {
     #[pg_test]
     fn test_map_array() {
         // Skip the test if crunchy_map extension is not available
-        if !extension_exists("crunchy_map") {
+        if !is_extension_available("crunchy_map") {
             return;
         }
 
@@ -425,7 +427,7 @@ mod tests {
     #[pg_test]
     fn test_table_with_multiple_maps() {
         // Skip the test if crunchy_map extension is not available
-        if !extension_exists("crunchy_map") {
+        if !is_extension_available("crunchy_map") {
             return;
         }
 
@@ -498,7 +500,7 @@ mod tests {
     #[should_panic(expected = "MapArray entries cannot contain nulls")]
     fn test_map_null_entries() {
         // Skip the test if crunchy_map extension is not available
-        if !extension_exists("crunchy_map") {
+        if !is_extension_available("crunchy_map") {
             // let the test pass
             panic!("MapArray entries cannot contain nulls");
         }
@@ -524,7 +526,7 @@ mod tests {
     )]
     fn test_map_null_entry_key() {
         // Skip the test if crunchy_map extension is not available
-        if !extension_exists("crunchy_map") {
+        if !is_extension_available("crunchy_map") {
             // let the test pass
             panic!("Found unmasked nulls for non-nullable StructArray field \\\"key\\\"");
         }
@@ -1037,13 +1039,17 @@ mod tests {
 
     #[pg_test]
     fn test_geometry() {
-        // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        // Skip the test if postgis or postgis_sfcgal extension is not available
+        if !is_extension_available("postgis") || !is_extension_available("postgis_sfcgal") {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        let create_postgis = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(create_postgis).unwrap();
+
+        let create_postgis_sfcgal =
+            "DROP EXTENSION IF EXISTS postgis_sfcgal; CREATE EXTENSION postgis_sfcgal;";
+        Spi::run(create_postgis_sfcgal).unwrap();
 
         let test_table = TestTable::<Geometry>::new("geometry".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (ST_GeomFromText('POINT(1 1)')),
@@ -1055,13 +1061,17 @@ mod tests {
 
     #[pg_test]
     fn test_geometry_array() {
-        // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        // Skip the test if postgis or postgis_sfcgal extension is not available
+        if !is_extension_available("postgis") || !is_extension_available("postgis_sfcgal") {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        let create_postgis = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(create_postgis).unwrap();
+
+        let create_postgis_sfcgal =
+            "DROP EXTENSION IF EXISTS postgis_sfcgal; CREATE EXTENSION postgis_sfcgal;";
+        Spi::run(create_postgis_sfcgal).unwrap();
 
         let test_table = TestTable::<Vec<Option<Geometry>>>::new("geometry[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array[ST_GeomFromText('POINT(1 1)'), ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null), (array[]::geometry[]);");
@@ -1070,13 +1080,17 @@ mod tests {
 
     #[pg_test]
     fn test_geometry_geoparquet_metadata() {
-        // Skip the test if postgis extension is not available
-        if !extension_exists("postgis") {
+        // Skip the test if postgis or postgis_sfcgal extension is not available
+        if !is_extension_available("postgis") || !is_extension_available("postgis_sfcgal") {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        let create_postgis = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(create_postgis).unwrap();
+
+        let create_postgis_sfcgal =
+            "DROP EXTENSION IF EXISTS postgis_sfcgal; CREATE EXTENSION postgis_sfcgal;";
+        Spi::run(create_postgis_sfcgal).unwrap();
 
         let copy_to_query = format!(
             "COPY (SELECT ST_GeomFromText('POINT(1 1)')::geometry(point) as a,
@@ -1101,7 +1115,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        let geoparquet_metadata: GeometryColumnsMetadata =
+        let geoparquet_metadata: GeoparquetMetadata =
             serde_json::from_value(geoparquet_metadata_json.0).unwrap();
 
         // assert common metadata
@@ -1115,7 +1129,7 @@ mod tests {
         );
         assert_eq!(
             geoparquet_metadata.columns.get("a").unwrap().geometry_types,
-            vec![GeometryType::Point]
+            HashSet::from([GeometryType::Point])
         );
 
         // linestring
@@ -1125,7 +1139,7 @@ mod tests {
         );
         assert_eq!(
             geoparquet_metadata.columns.get("b").unwrap().geometry_types,
-            vec![GeometryType::LineString]
+            HashSet::from([GeometryType::LineString])
         );
 
         // polygon
@@ -1135,7 +1149,7 @@ mod tests {
         );
         assert_eq!(
             geoparquet_metadata.columns.get("c").unwrap().geometry_types,
-            vec![GeometryType::Polygon]
+            HashSet::from([GeometryType::Polygon])
         );
 
         // multipoint
@@ -1145,7 +1159,7 @@ mod tests {
         );
         assert_eq!(
             geoparquet_metadata.columns.get("d").unwrap().geometry_types,
-            vec![GeometryType::MultiPoint]
+            HashSet::from([GeometryType::MultiPoint])
         );
 
         // multilinestring
@@ -1155,7 +1169,7 @@ mod tests {
         );
         assert_eq!(
             geoparquet_metadata.columns.get("e").unwrap().geometry_types,
-            vec![GeometryType::MultiLineString]
+            HashSet::from([GeometryType::MultiLineString])
         );
 
         // multipolygon
@@ -1165,7 +1179,7 @@ mod tests {
         );
         assert_eq!(
             geoparquet_metadata.columns.get("f").unwrap().geometry_types,
-            vec![GeometryType::MultiPolygon]
+            HashSet::from([GeometryType::MultiPolygon])
         );
 
         // geometrycollection
@@ -1175,7 +1189,236 @@ mod tests {
         );
         assert_eq!(
             geoparquet_metadata.columns.get("g").unwrap().geometry_types,
-            vec![GeometryType::GeometryCollection]
+            HashSet::from([GeometryType::GeometryCollection])
+        );
+    }
+
+    #[pg_test]
+    fn test_geography() {
+        // Skip the test if postgis or postgis_sfcgal extension is not available
+        if !is_extension_available("postgis") || !is_extension_available("postgis_sfcgal") {
+            return;
+        }
+
+        let create_postgis = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(create_postgis).unwrap();
+
+        let create_postgis_sfcgal =
+            "DROP EXTENSION IF EXISTS postgis_sfcgal; CREATE EXTENSION postgis_sfcgal;";
+        Spi::run(create_postgis_sfcgal).unwrap();
+
+        let test_table = TestTable::<Geography>::new("geography".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (ST_GeogFromText('POINT(1 1)')),
+                                                       (ST_GeogFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')),
+                                                       (ST_GeogFromText('LINESTRING(0 0, 1 1)')),
+                                                       (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_geography_array() {
+        // Skip the test if postgis or postgis_sfcgal extension is not available
+        if !is_extension_available("postgis") || !is_extension_available("postgis_sfcgal") {
+            return;
+        }
+
+        let create_postgis = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(create_postgis).unwrap();
+
+        let create_postgis_sfcgal =
+            "DROP EXTENSION IF EXISTS postgis_sfcgal; CREATE EXTENSION postgis_sfcgal;";
+        Spi::run(create_postgis_sfcgal).unwrap();
+
+        let test_table = TestTable::<Vec<Option<Geography>>>::new("geography[]".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array[ST_GeogFromText('POINT(1 1)'), ST_GeogFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null), (array[]::geography[]);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_geography_geoparquet_metadata() {
+        // Skip the test if postgis or postgis_sfcgal extension is not available
+        if !is_extension_available("postgis") || !is_extension_available("postgis_sfcgal") {
+            return;
+        }
+
+        let create_postgis = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(create_postgis).unwrap();
+
+        let create_postgis_sfcgal =
+            "DROP EXTENSION IF EXISTS postgis_sfcgal; CREATE EXTENSION postgis_sfcgal;";
+        Spi::run(create_postgis_sfcgal).unwrap();
+
+        let copy_to_query = format!(
+            "COPY (SELECT g FROM (VALUES (ST_GeogFromText('POINT(1 1)')::geography(point)),
+                                         (ST_GeogFromText('LINESTRING(0 0, 1 1)')::geography(linestring)),
+                                         (ST_GeogFromText('POLYGON((0 0, 1 1, 2 2, 0 0))')::geography(polygon)),
+                                         (ST_GeogFromText('MULTIPOINT((0 0), (1 1))')::geography(multipoint)),
+                                         (ST_GeogFromText('MULTILINESTRING((0 0, 1 1), (2 2, 3 3))')::geography(multilinestring)),
+                                         (ST_GeogFromText('MULTIPOLYGON(((0 0, 1 1, 2 2, 0 0)), ((3 3, 4 4, 5 5, 3 3)))')::geography(multipolygon)),
+                                         (ST_GeogFromText('GEOMETRYCOLLECTION(POINT(1 1), LINESTRING(0 0, 1 1))')::geography(geometrycollection))
+                                 ) g(g))
+            TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);",
+        );
+        Spi::run(copy_to_query.as_str()).unwrap();
+
+        // Check geoparquet metadata
+        let geoparquet_metadata_query = format!(
+            "select encode(value, 'escape')::jsonb
+            from parquet.kv_metadata('{LOCAL_TEST_FILE_PATH}')
+            where encode(key, 'escape') = 'geo';",
+        );
+        let geoparquet_metadata_json = Spi::get_one::<JsonB>(geoparquet_metadata_query.as_str())
+            .unwrap()
+            .unwrap();
+
+        let geoparquet_metadata: GeoparquetMetadata =
+            serde_json::from_value(geoparquet_metadata_json.0).unwrap();
+
+        // assert metadata
+        assert_eq!(geoparquet_metadata.version, "1.1.0");
+        assert_eq!(geoparquet_metadata.primary_column, "g");
+
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().encoding,
+            GeometryEncoding::WKB
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().geometry_types,
+            HashSet::from([
+                GeometryType::Point,
+                GeometryType::LineString,
+                GeometryType::Polygon,
+                GeometryType::MultiPoint,
+                GeometryType::MultiLineString,
+                GeometryType::MultiPolygon,
+                GeometryType::GeometryCollection,
+            ])
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().bbox,
+            Some(vec![0.0, 0.0, 5.0, 5.0])
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().crs,
+            Some(serde_json::from_str(EPSG_4326_PROJJSON).unwrap())
+        );
+        assert_eq!(geoparquet_metadata.columns.get("g").unwrap().edges, None);
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().orientation,
+            None
+        );
+    }
+
+    #[pg_test]
+    fn test_geography_polygon_geoparquet_metadata() {
+        // Skip the test if postgis or postgis_sfcgal extension is not available
+        if !is_extension_available("postgis") || !is_extension_available("postgis_sfcgal") {
+            return;
+        }
+
+        let create_postgis = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(create_postgis).unwrap();
+
+        let create_postgis_sfcgal =
+            "DROP EXTENSION IF EXISTS postgis_sfcgal; CREATE EXTENSION postgis_sfcgal;";
+        Spi::run(create_postgis_sfcgal).unwrap();
+
+        // planar polygon
+        let copy_to_query = format!(
+            "COPY (SELECT ST_GeogFromText('POLYGON((0 0, 1 1, -1 1, 0 0))')::geography(polygon) g)
+            TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);",
+        );
+        Spi::run(copy_to_query.as_str()).unwrap();
+
+        // Check geoparquet metadata
+        let geoparquet_metadata_query = format!(
+            "select encode(value, 'escape')::jsonb
+            from parquet.kv_metadata('{LOCAL_TEST_FILE_PATH}')
+            where encode(key, 'escape') = 'geo';",
+        );
+        let geoparquet_metadata_json = Spi::get_one::<JsonB>(geoparquet_metadata_query.as_str())
+            .unwrap()
+            .unwrap();
+
+        let geoparquet_metadata: GeoparquetMetadata =
+            serde_json::from_value(geoparquet_metadata_json.0).unwrap();
+
+        // assert metadata
+        assert_eq!(geoparquet_metadata.version, "1.1.0");
+        assert_eq!(geoparquet_metadata.primary_column, "g");
+
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().encoding,
+            GeometryEncoding::WKB
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().geometry_types,
+            HashSet::from([GeometryType::Polygon])
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().bbox,
+            Some(vec![-1.0, 0.0, 1.0, 1.0])
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().crs,
+            Some(serde_json::from_str(EPSG_4326_PROJJSON).unwrap())
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().edges,
+            Some(GeometryEdgeType::Planar)
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().orientation,
+            Some(GeometryOrientation::CounterClockwise)
+        );
+
+        // spherical polygon
+        let copy_to_query = format!(
+            "COPY (SELECT ST_GeogFromText('POLYGON((1 1 0, 1 2 0, 2 2 0, 2 1 0, 1 1 1))') g)
+            TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);",
+        );
+        Spi::run(copy_to_query.as_str()).unwrap();
+
+        // Check geoparquet metadata
+        let geoparquet_metadata_query = format!(
+            "select encode(value, 'escape')::jsonb
+            from parquet.kv_metadata('{LOCAL_TEST_FILE_PATH}')
+            where encode(key, 'escape') = 'geo';",
+        );
+        let geoparquet_metadata_json = Spi::get_one::<JsonB>(geoparquet_metadata_query.as_str())
+            .unwrap()
+            .unwrap();
+
+        let geoparquet_metadata: GeoparquetMetadata =
+            serde_json::from_value(geoparquet_metadata_json.0).unwrap();
+
+        // assert metadata
+        assert_eq!(geoparquet_metadata.version, "1.1.0");
+        assert_eq!(geoparquet_metadata.primary_column, "g");
+
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().encoding,
+            GeometryEncoding::WKB
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().geometry_types,
+            HashSet::from([GeometryType::Polygon])
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().bbox,
+            Some(vec![1.0, 1.0, 0.0, 2.0, 2.0, 1.0])
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().crs,
+            Some(serde_json::from_str(EPSG_4326_PROJJSON).unwrap())
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().edges,
+            Some(GeometryEdgeType::Spherical)
+        );
+        assert_eq!(
+            geoparquet_metadata.columns.get("g").unwrap().orientation,
+            None
         );
     }
 
