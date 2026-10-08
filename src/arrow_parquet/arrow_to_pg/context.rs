@@ -131,16 +131,12 @@ impl ArrowToPgAttributeTypeContext {
     }
 
     fn new_primitive(typoid: Oid, typmod: i32, data_type: &DataType) -> Self {
-        let precision;
-        let scale;
-        if typoid == NUMERICOID {
+        let (precision, scale) = if typoid == NUMERICOID {
             let (p, s) = extract_precision_and_scale_from_numeric_typmod(typmod);
-            precision = Some(p);
-            scale = Some(s);
+            (Some(p), Some(s))
         } else {
-            precision = None;
-            scale = None;
-        }
+            (None, None)
+        };
 
         let is_geometry = is_postgis_geometry_type(typoid);
 

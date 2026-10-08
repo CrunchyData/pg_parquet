@@ -153,7 +153,7 @@ mod tests {
             results
         });
 
-        for (expected, actual) in expected.into_iter().zip(result.into_iter()) {
+        for (expected, actual) in expected.into_iter().zip(result) {
             assert_eq!(expected.0, actual.0);
             assert_eq!(expected.1, actual.1);
         }

@@ -14,7 +14,9 @@ PG_CONFIG ?= pg_config
 
 PG_MAJOR ?= $(shell $(PG_CONFIG) --version | cut -d '.' -f 1 | cut -d ' ' -f 2)
 
-MINIO_IMAGE ?= minio/minio
+# MinIO gated its community images: minio/minio and quay.io/minio/minio no longer
+# allow anonymous pulls, and dl.min.io returns 410. This is an archived MinIO build.
+MINIO_IMAGE ?= bitnamilegacy/minio:2025.7.23-debian-12-r5
 AZURITE_IMAGE ?= mcr.microsoft.com/azure-storage/azurite
 FAKE_GCS_IMAGE ?= tustvold/fake-gcs-server
 WEBDAV_IMAGE ?= rclone/rclone
@@ -89,7 +91,7 @@ start-minio: start-mitmdump
 	  --name minio \
 	  --env-file $(ENVFILE) \
 	  -p 9000:9000 \
-	  --entrypoint "./entrypoint.sh" \
+	  --entrypoint /entrypoint.sh \
 	  --volume ./.devcontainer/minio-entrypoint.sh:/entrypoint.sh \
 	  $(MINIO_IMAGE)
 

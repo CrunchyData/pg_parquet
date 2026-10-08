@@ -71,7 +71,7 @@ mod tests {
     #[pg_test]
     fn test_compression_from_uri() {
         let parquet_uris = vec![
-            format!("{LOCAL_TEST_FILE_PATH}"),
+            LOCAL_TEST_FILE_PATH.to_string(),
             format!("{LOCAL_TEST_FILE_PATH}.snappy"),
             format!("{LOCAL_TEST_FILE_PATH}.gz"),
             format!("{LOCAL_TEST_FILE_PATH}.br"),

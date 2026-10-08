@@ -2,7 +2,11 @@
 
 trap "echo 'Caught termination signal. Exiting...'; exit 0" SIGINT SIGTERM
 
-minio server /data &
+# not every image runs as root or ships a writable /data
+data_dir="${MINIO_DATA_DIR:-/tmp/minio-data}"
+mkdir -p "$data_dir"
+
+minio server "$data_dir" &
 
 minio_pid=$!
 

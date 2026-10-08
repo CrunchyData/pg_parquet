@@ -43,6 +43,14 @@ pub(crate) fn comma_separated_copy_options(options: &HashMap<String, CopyOptionV
 
 pub(crate) const LOCAL_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test.parquet";
 
+// pgrx starts the test instance on an ephemeral port, so tests that shell out to psql have
+// to ask the backend which port it ended up on.
+pub(crate) fn test_pg_port() -> String {
+    Spi::get_one::<String>("SELECT current_setting('port')")
+        .expect("failed to read the test instance port")
+        .expect("port setting is unset")
+}
+
 pub(crate) struct FileCleanup {
     path: String,
 }
@@ -80,10 +88,10 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
     pub(crate) fn new(typename: String) -> Self {
         Spi::run("DROP TABLE IF EXISTS test_expected, test_result;").unwrap();
 
-        let create_table_command = format!("CREATE TABLE test_expected (a {});", &typename);
+        let create_table_command = format!("CREATE TABLE test_expected (a {});", typename);
         Spi::run(create_table_command.as_str()).unwrap();
 
-        let create_table_command = format!("CREATE TABLE test_result (a {});", &typename);
+        let create_table_command = format!("CREATE TABLE test_result (a {});", typename);
         Spi::run(create_table_command.as_str()).unwrap();
 
         let mut copy_to_options = HashMap::new();
@@ -274,7 +282,7 @@ pub(crate) fn assert_int_text_map(expected: Option<Map>, actual: Option<Map>) {
 }
 
 pub(crate) fn assert_float(expected_result: Vec<Option<f32>>, result: Vec<Option<f32>>) {
-    for (expected, actual) in expected_result.into_iter().zip(result.into_iter()) {
+    for (expected, actual) in expected_result.into_iter().zip(result) {
         if let Some(expected) = expected {
             assert!(actual.is_some());
 
@@ -295,7 +303,7 @@ pub(crate) fn assert_float(expected_result: Vec<Option<f32>>, result: Vec<Option
 }
 
 pub(crate) fn assert_double(expected_result: Vec<Option<f64>>, result: Vec<Option<f64>>) {
-    for (expected, actual) in expected_result.into_iter().zip(result.into_iter()) {
+    for (expected, actual) in expected_result.into_iter().zip(result) {
         if let Some(expected) = expected {
             assert!(actual.is_some());
 
@@ -316,7 +324,7 @@ pub(crate) fn assert_double(expected_result: Vec<Option<f64>>, result: Vec<Optio
 }
 
 pub(crate) fn assert_json(expected: Vec<Option<Json>>, result: Vec<Option<Json>>) {
-    for (expected, actual) in expected.into_iter().zip(result.into_iter()) {
+    for (expected, actual) in expected.into_iter().zip(result) {
         if let Some(expected) = expected {
             assert!(actual.is_some());
 
@@ -330,7 +338,7 @@ pub(crate) fn assert_json(expected: Vec<Option<Json>>, result: Vec<Option<Json>>
 }
 
 pub(crate) fn assert_jsonb(expected: Vec<Option<JsonB>>, result: Vec<Option<JsonB>>) {
-    for (expected, actual) in expected.into_iter().zip(result.into_iter()) {
+    for (expected, actual) in expected.into_iter().zip(result) {
         if let Some(expected) = expected {
             assert!(actual.is_some());
 

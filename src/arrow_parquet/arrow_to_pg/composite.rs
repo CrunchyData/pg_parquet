@@ -18,7 +18,7 @@ impl<'a> ArrowArrayToPgType<PgHeapTuple<'a, AllocatedByRust>> for StructArray {
         for attribute_context in context.attribute_contexts() {
             let column_data = self
                 .column_by_name(attribute_context.name())
-                .unwrap_or_else(|| panic!("column {} not found", &attribute_context.name()));
+                .unwrap_or_else(|| panic!("column {} not found", attribute_context.name()));
 
             let datum = to_pg_datum(column_data.into_data(), attribute_context);
 

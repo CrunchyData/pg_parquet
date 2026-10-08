@@ -1,7 +1,7 @@
 use std::{collections::HashMap, ffi::CStr, fmt::Write};
 
 use ::parquet::{
-    basic::{ConvertedType, LogicalType},
+    basic::{ConvertedType, LogicalType, TimeType, TimestampType},
     file::statistics::Statistics,
     schema::types::ColumnDescriptor,
 };
@@ -169,7 +169,7 @@ pub(crate) fn stats_min_value_to_pg_str(
     statistics: &Statistics,
     column_descriptor: &ColumnDescriptor,
 ) -> Option<String> {
-    let logical_type = column_descriptor.logical_type();
+    let logical_type = column_descriptor.logical_type_ref();
 
     let converted_type = column_descriptor.converted_type();
 
@@ -191,18 +191,18 @@ pub(crate) fn stats_min_value_to_pg_str(
         Statistics::Int64(statistics) => statistics.min_opt().map(|v| {
             if matches!(
                 logical_type,
-                Some(LogicalType::Timestamp {
+                Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c,
                     ..
-                }) if is_adjusted_to_u_t_c
+                })) if *is_adjusted_to_u_t_c
             ) {
                 pg_format(i64_to_timestamptz(*v, "UTC"))
             } else if matches!(
                 logical_type,
-                Some(LogicalType::Timestamp {
+                Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c,
                     ..
-                }) if !is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIMESTAMP_MICROS)
+                })) if !*is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIMESTAMP_MICROS)
             ) {
                 pg_format(i64_to_timestamp(*v))
             }  else if matches!(logical_type, Some(LogicalType::Decimal { .. }))
@@ -211,18 +211,18 @@ pub(crate) fn stats_min_value_to_pg_str(
                 pg_format_numeric(*v as i128, column_descriptor)
             } else if matches!(
                 logical_type,
-                Some(LogicalType::Time {
+                Some(LogicalType::Time(TimeType {
                     is_adjusted_to_u_t_c,
                     ..
-                }) if is_adjusted_to_u_t_c
+                })) if *is_adjusted_to_u_t_c
             ) {
                 pg_format(i64_to_timetz(*v))
             } else if matches!(
                 logical_type,
-                Some(LogicalType::Time {
+                Some(LogicalType::Time(TimeType {
                     is_adjusted_to_u_t_c,
                     ..
-                }) if !is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIME_MICROS)
+                })) if !*is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIME_MICROS)
             ) {
                 pg_format(i64_to_time(*v))
             } else {
@@ -278,7 +278,7 @@ pub(crate) fn stats_max_value_to_pg_str(
     statistics: &Statistics,
     column_descriptor: &ColumnDescriptor,
 ) -> Option<String> {
-    let logical_type = column_descriptor.logical_type();
+    let logical_type = column_descriptor.logical_type_ref();
 
     let converted_type = column_descriptor.converted_type();
 
@@ -300,18 +300,18 @@ pub(crate) fn stats_max_value_to_pg_str(
         Statistics::Int64(statistics) => statistics.max_opt().map(|v| {
             if matches!(
                 logical_type,
-                Some(LogicalType::Timestamp {
+                Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c,
                     ..
-                }) if is_adjusted_to_u_t_c
+                })) if *is_adjusted_to_u_t_c
             ) {
                 pg_format(i64_to_timestamptz(*v, "UTC"))
             } else if matches!(
                 logical_type,
-                Some(LogicalType::Timestamp {
+                Some(LogicalType::Timestamp(TimestampType {
                     is_adjusted_to_u_t_c,
                     ..
-                }) if !is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIMESTAMP_MICROS)
+                })) if !*is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIMESTAMP_MICROS)
             ) {
                 pg_format(i64_to_timestamp(*v))
             } else if matches!(logical_type, Some(LogicalType::Decimal { .. }))
@@ -320,18 +320,18 @@ pub(crate) fn stats_max_value_to_pg_str(
                 pg_format_numeric(*v as i128, column_descriptor)
             } else if matches!(
                 logical_type,
-                Some(LogicalType::Time {
+                Some(LogicalType::Time(TimeType {
                     is_adjusted_to_u_t_c,
                     ..
-                }) if is_adjusted_to_u_t_c
+                })) if *is_adjusted_to_u_t_c
             ) {
                 pg_format(i64_to_timetz(*v))
             } else if matches!(
                 logical_type,
-                Some(LogicalType::Time {
+                Some(LogicalType::Time(TimeType {
                     is_adjusted_to_u_t_c,
                     ..
-                }) if !is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIME_MICROS)
+                })) if !*is_adjusted_to_u_t_c || matches!(converted_type, ConvertedType::TIME_MICROS)
             ) {
                 pg_format(i64_to_time(*v))
             } else {

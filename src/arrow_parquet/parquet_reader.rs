@@ -8,7 +8,7 @@ use arrow_cast::{cast_with_options, CastOptions};
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use glob::Pattern;
-use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStream};
+use parquet::arrow::async_reader::ParquetRecordBatchStream;
 use pgrx::{
     check_for_interrupts,
     pg_sys::{
@@ -40,17 +40,17 @@ use super::{
     schema_parser::{
         ensure_file_schema_match_tupledesc_schema, parse_arrow_schema_from_attributes,
     },
-    uri_utils::{parquet_reader_from_uri, ParsedUriInfo},
+    uri_utils::{parquet_reader_from_uri, ParquetObjectStoreReader, ParsedUriInfo},
 };
 
 pub(crate) struct SingleParquetReader {
-    reader: ParquetRecordBatchStream<ParquetObjectReader>,
+    reader: ParquetRecordBatchStream<ParquetObjectStoreReader>,
     attribute_contexts: Vec<ArrowToPgAttributeContext>,
     match_by: MatchBy,
 }
 
 impl Deref for SingleParquetReader {
-    type Target = ParquetRecordBatchStream<ParquetObjectReader>;
+    type Target = ParquetRecordBatchStream<ParquetObjectStoreReader>;
 
     fn deref(&self) -> &Self::Target {
         &self.reader

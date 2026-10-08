@@ -32,12 +32,7 @@ RUN chmod a+rwx `pg_config --pkglibdir`          \
                 /var/run/postgresql/
 
 # install pgaudit extension
-RUN if [ ${PG_MAJOR} != "18" ]; then \
-      apt-get -y install postgresql-${PG_MAJOR}-pgaudit; \
-    else \
-      git clone --branch integration https://github.com/pgaudit/pgaudit.git /tmp/pgaudit && \
-      cd /tmp/pgaudit && make install USE_PGXS=1 PG_CONFIG=pg_config; \
-    fi
+RUN apt-get -y install postgresql-${PG_MAJOR}-pgaudit
 
 # initdb requires non-root user. This will also be the user that runs the container.
 ARG USERNAME=rust
@@ -55,7 +50,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | bash -s -- -y
 ENV PATH="/home/rust/.cargo/bin:${PATH}"
 
 # install and configure pgrx
-ARG PGRX_VERSION=0.16.1
+ARG PGRX_VERSION=0.19.3
 RUN cargo install --locked cargo-pgrx@${PGRX_VERSION}
 RUN cargo pgrx init --pg${PG_MAJOR} $(which pg_config)
 RUN echo "shared_preload_libraries = 'pgaudit,pg_parquet'" >> $HOME/.pgrx/data-${PG_MAJOR}/postgresql.conf

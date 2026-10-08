@@ -474,7 +474,7 @@ mod tests {
         let azure_blob_uris = [
             format!("az://{test_container_name}/pg_parquet_test.parquet"),
             format!("azure://{test_container_name}/pg_parquet_test.parquet"),
-            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}"),
+            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}/pg_parquet_test.parquet"),
         ];
 
         for azure_blob_uri in azure_blob_uris {
@@ -724,7 +724,7 @@ mod tests {
             std::env::var("AZURE_STORAGE_ACCOUNT").expect("AZURE_STORAGE_ACCOUNT not found");
 
         let azure_blob_uri =
-            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}");
+            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}/pg_parquet_test.parquet");
 
         let test_table = TestTable::<i32>::new("int4".into()).with_uri(azure_blob_uri);
 
@@ -742,7 +742,7 @@ mod tests {
             std::env::var("AZURE_STORAGE_ACCOUNT").expect("AZURE_STORAGE_ACCOUNT not found");
 
         let azure_blob_uri =
-            format!("https://{test_account_name}.blob.core.windows.net/nonexistentcontainer");
+            format!("https://{test_account_name}.blob.core.windows.net/nonexistentcontainer/pg_parquet_test.parquet");
 
         let copy_to_command = format!(
             "COPY (SELECT i FROM generate_series(1,10) i) TO '{azure_blob_uri}' WITH (format parquet);"
@@ -770,7 +770,7 @@ mod tests {
         std::env::set_var("AZURE_STORAGE_SAS_TOKEN", read_write_sas_token);
 
         let azure_blob_uri =
-            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}");
+            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}/pg_parquet_test.parquet");
 
         let copy_to_command = format!(
             "COPY (SELECT i FROM generate_series(1,10) i) TO '{azure_blob_uri}' WITH (format parquet);"
@@ -799,7 +799,7 @@ mod tests {
         std::env::set_var("AZURE_STORAGE_SAS_TOKEN", read_only_sas_token);
 
         let azure_blob_uri =
-            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}");
+            format!("https://{test_account_name}.blob.core.windows.net/{test_container_name}/pg_parquet_test.parquet");
 
         let copy_to_command = format!(
             "COPY (SELECT i FROM generate_series(1,10) i) TO '{azure_blob_uri}' WITH (format parquet);"

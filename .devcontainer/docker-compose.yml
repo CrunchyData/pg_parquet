@@ -25,11 +25,12 @@ services:
       - fake-gcs-server
 
   minio:
-    image: minio/minio
+    # MinIO gated its community images, so this is an archived MinIO build
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     env_file:
       - .env
     network_mode: host
-    entrypoint: "./entrypoint.sh"
+    entrypoint: /entrypoint.sh
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "http://localhost:9000"]
