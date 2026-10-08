@@ -90,7 +90,7 @@ pub(crate) fn parse_azure_blob_container(uri: &Url) -> Option<String> {
     if uri.scheme() == "az" || uri.scheme() == "azure" {
         return Some(host.to_string());
     }
-    // https://{account}.blob.core.windows.net/{container}
+    // https://{account}.blob.core.windows.net/{container}/key
     else if host.ends_with(".blob.core.windows.net") {
         let path_segments: Vec<&str> = uri.path_segments()?.collect();
 

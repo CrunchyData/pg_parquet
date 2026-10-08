@@ -330,7 +330,7 @@ Config source priority order is shown below:
 Supported Azure Blob Storage uri formats are shown below:
 - az:// \<container\> / \<path\>
 - azure:// \<container\> / \<path\>
-- https:// \<account\>.blob.core.windows.net / \<container\>
+- https:// \<account\>.blob.core.windows.net / \<container\> / \<path\>
 
 Supported authorization methods' priority order is shown below:
 1. Bearer token via client secret,
