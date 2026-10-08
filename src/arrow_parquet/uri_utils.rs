@@ -32,6 +32,7 @@ use crate::{
     object_store::{
         aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
         http::parse_http_base_uri, object_store_cache::get_or_create_object_store,
+        object_store_error_message,
     },
     PG_BACKEND_TOKIO_RUNTIME,
 };
@@ -245,7 +246,8 @@ pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<Parquet
             .unwrap_or_else(|e| {
                 panic!(
                     "failed to get object store metadata for uri {}: {}",
-                    uri_info.uri, e
+                    uri_info.uri,
+                    object_store_error_message(e)
                 )
             });
 
@@ -273,7 +275,8 @@ pub(crate) fn parquet_reader_from_uri(
         let object_store_meta = parquet_object_store.head(&location).await.map_err(|e| {
             format!(
                 "failed to get object store metadata for uri {}: {}",
-                uri_info.uri, e
+                uri_info.uri,
+                object_store_error_message(e)
             )
         })?;
 
