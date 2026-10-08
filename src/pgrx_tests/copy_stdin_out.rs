@@ -209,4 +209,159 @@ mod tests {
             .expect("failed to execute process");
         assert!(output.status.success(), "Failed to clean up");
     }
+
+    // Regression test for https://github.com/CrunchyData/pg_parquet/issues/175: the temporary
+    // file that backs COPY .. TO STDOUT / FROM STDIN must be the one postgres manages, so that
+    // it is gone once the backend closes it.
+    #[pg_test]
+    fn test_copy_stdin_out_does_not_leak_tmp_files() {
+        let test_port = test_pg_port();
+
+        let data_dir = Spi::get_one::<String>(
+            "SELECT setting FROM pg_settings WHERE name = 'data_directory';",
+        )
+        .unwrap()
+        .expect("data_directory is not set");
+
+        let pgsql_tmp = std::path::Path::new(&data_dir)
+            .join("base")
+            .join("pgsql_tmp");
+
+        let mut copy_to = Command::new("psql")
+            .arg("-p")
+            .arg(test_port.clone())
+            .arg("-h")
+            .arg("localhost")
+            .arg("-d")
+            .arg("pgrx_tests")
+            .arg("-c")
+            .arg(
+                "COPY (SELECT i AS a, i::text AS b FROM generate_series(1, 1000) i)
+                 TO STDOUT WITH (format parquet);",
+            )
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("failed to execute process");
+
+        let mut buffer = Vec::new();
+        {
+            let copy_to_stdout = copy_to.stdout.as_mut().expect("Failed to open stdout");
+            copy_to_stdout
+                .read_to_end(&mut buffer)
+                .expect("Failed to read from stdout");
+
+            let status = copy_to.wait().expect("Failed to wait for 'copy_to'");
+            assert!(status.success(), "psql COPY TO STDOUT did not succeed");
+        }
+
+        // the temp file is still written and streamed as a valid parquet file
+        assert!(buffer.starts_with(b"PAR1") && buffer.ends_with(b"PAR1"));
+
+        assert_tmp_files_are_cleaned_up(&pgsql_tmp);
+
+        // the same temp file is used by COPY .. FROM STDIN
+        let mut copy_from = Command::new("psql")
+            .arg("-p")
+            .arg(test_port.clone())
+            .arg("-h")
+            .arg("localhost")
+            .arg("-d")
+            .arg("pgrx_tests")
+            .arg("-c")
+            .arg(
+                "CREATE TABLE tmp_file_test (a int, b text);
+                 COPY tmp_file_test FROM STDIN WITH (format parquet);",
+            )
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("failed to execute process");
+
+        {
+            let copy_from_stdin = copy_from.stdin.as_mut().expect("Failed to open stdin");
+            copy_from_stdin
+                .write_all(&buffer)
+                .expect("Failed to write to stdin");
+            copy_from_stdin.flush().expect("Failed to flush stdin");
+
+            let status = copy_from.wait().expect("Failed to wait for 'copy_from'");
+            assert!(status.success(), "psql COPY FROM STDIN did not succeed");
+        }
+
+        assert_tmp_files_are_cleaned_up(&pgsql_tmp);
+
+        let output = Command::new("psql")
+            .arg("-p")
+            .arg(test_port.clone())
+            .arg("-h")
+            .arg("localhost")
+            .arg("-d")
+            .arg("pgrx_tests")
+            .arg("-c")
+            .arg("DROP TABLE tmp_file_test;")
+            .output()
+            .expect("failed to execute process");
+        assert!(output.status.success(), "Failed to clean up");
+    }
+
+    // Asserts that nothing is left behind under the temp directory, except for the temp files
+    // of the backends that are still running: the other tests run concurrently and may have
+    // temp files of their own in flight. A file is left behind if the backend that owns it is
+    // gone, or if it is not named after any backend at all, which is the case for files that
+    // we write behind postgres' back and that nobody ever cleans up.
+    fn assert_tmp_files_are_cleaned_up(tmp_dir: &std::path::Path) {
+        let live_backends = Spi::get_one::<Vec<i32>>(
+            "SELECT array_agg(pid) FROM pg_stat_activity WHERE pid IS NOT NULL;",
+        )
+        .unwrap()
+        .expect("no backend is running");
+
+        let mut files = Vec::new();
+        files_under(tmp_dir, &mut files);
+
+        let leftovers: Vec<String> = files
+            .into_iter()
+            .filter(|path| match owner_backend_pid(tmp_dir, path) {
+                Some(pid) => !live_backends.contains(&pid),
+                None => true,
+            })
+            .collect();
+
+        assert!(
+            leftovers.is_empty(),
+            "temporary files leaked under {}: {:?}",
+            tmp_dir.display(),
+            leftovers
+        );
+    }
+
+    // Extracts the pid from the "pgsql_tmp<pid>.<n>" file or directory that postgres created
+    // for a backend under the temp directory, e.g. "pgsql_tmp42.0" or, for shared file sets,
+    // "pgsql_tmp42.0.sharedfileset/1.0".
+    fn owner_backend_pid(tmp_dir: &std::path::Path, path: &str) -> Option<i32> {
+        let relative_path = std::path::Path::new(path).strip_prefix(tmp_dir).ok()?;
+
+        let name = relative_path.components().next()?;
+
+        let name = name.as_os_str().to_str()?.strip_prefix("pgsql_tmp")?;
+
+        name.split('.').next()?.parse().ok()
+    }
+
+    fn files_under(dir: &std::path::Path, found: &mut Vec<String>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            // postgres creates the temp directory on demand
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            if path.is_dir() {
+                files_under(&path, found);
+            } else {
+                found.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
 }
