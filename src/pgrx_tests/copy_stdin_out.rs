@@ -209,4 +209,121 @@ mod tests {
             .expect("failed to execute process");
         assert!(output.status.success(), "Failed to clean up");
     }
+
+    // Regression test for https://github.com/CrunchyData/pg_parquet/issues/175: the temporary
+    // file that backs COPY .. TO STDOUT / FROM STDIN must be the one postgres manages, so that
+    // it is gone once the backend closes it.
+    #[pg_test]
+    fn test_copy_stdin_out_does_not_leak_tmp_files() {
+        let test_port = test_pg_port();
+
+        let data_dir = Spi::get_one::<String>(
+            "SELECT setting FROM pg_settings WHERE name = 'data_directory';",
+        )
+        .unwrap()
+        .expect("data_directory is not set");
+
+        let pgsql_tmp = std::path::Path::new(&data_dir)
+            .join("base")
+            .join("pgsql_tmp");
+
+        let mut copy_to = Command::new("psql")
+            .arg("-p")
+            .arg(test_port.clone())
+            .arg("-h")
+            .arg("localhost")
+            .arg("-d")
+            .arg("pgrx_tests")
+            .arg("-c")
+            .arg("COPY (SELECT i AS a, i::text AS b FROM generate_series(1, 1000) i) TO STDOUT WITH (format parquet);")
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("failed to execute process");
+
+        let mut buffer = Vec::new();
+        {
+            let copy_to_stdout = copy_to.stdout.as_mut().expect("Failed to open stdout");
+            copy_to_stdout
+                .read_to_end(&mut buffer)
+                .expect("Failed to read from stdout");
+
+            let status = copy_to.wait().expect("Failed to wait for 'copy_to'");
+            assert!(status.success(), "psql COPY TO STDOUT did not succeed");
+        }
+
+        // the temp file is still written and streamed as a valid parquet file
+        assert!(buffer.starts_with(b"PAR1") && buffer.ends_with(b"PAR1"));
+
+        assert_tmp_dir_has_no_unmanaged_entries(&pgsql_tmp);
+
+        // the same temp file is used by COPY .. FROM STDIN
+        let mut copy_from = Command::new("psql")
+            .arg("-p")
+            .arg(test_port.clone())
+            .arg("-h")
+            .arg("localhost")
+            .arg("-d")
+            .arg("pgrx_tests")
+            .arg("-c")
+            .arg(
+                "CREATE TABLE tmp_file_test (a int, b text);
+                  COPY tmp_file_test FROM STDIN WITH (format parquet);",
+            )
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("failed to execute process");
+
+        {
+            let copy_from_stdin = copy_from.stdin.as_mut().expect("Failed to open stdin");
+            copy_from_stdin
+                .write_all(&buffer)
+                .expect("Failed to write to stdin");
+            copy_from_stdin.flush().expect("Failed to flush stdin");
+
+            let status = copy_from.wait().expect("Failed to wait for 'copy_from'");
+            assert!(status.success(), "psql COPY FROM STDIN did not succeed");
+        }
+
+        assert_tmp_dir_has_no_unmanaged_entries(&pgsql_tmp);
+
+        let output = Command::new("psql")
+            .arg("-p")
+            .arg(test_port.clone())
+            .arg("-h")
+            .arg("localhost")
+            .arg("-d")
+            .arg("pgrx_tests")
+            .arg("-c")
+            .arg("DROP TABLE tmp_file_test;")
+            .output()
+            .expect("failed to execute process");
+        assert!(output.status.success(), "Failed to clean up");
+    }
+
+    // asserts that the temp directory contains only files that postgres itself created and
+    // therefore removes. They are all prefixed with "pgsql_tmp", so anything else under the
+    // temp directory is a file that we wrote behind postgres' back and nobody cleans up.
+    //
+    // We cannot assert that the directory is empty instead, because the other tests run
+    // concurrently and may have temp files of their own in flight.
+    fn assert_tmp_dir_has_no_unmanaged_entries(tmp_dir: &std::path::Path) {
+        let entries = match std::fs::read_dir(tmp_dir) {
+            Ok(entries) => entries,
+            // postgres creates the temp directory on demand
+            Err(_) => return,
+        };
+
+        let unmanaged: Vec<String> = entries
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| !name.starts_with("pgsql_tmp"))
+            .collect();
+
+        assert!(
+            unmanaged.is_empty(),
+            "unmanaged temporary entries under {}: {:?}",
+            tmp_dir.display(),
+            unmanaged
+        );
+    }
 }

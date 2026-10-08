@@ -21,11 +21,9 @@ use parquet::{
 };
 use pgrx::{
     ereport,
-    ffi::c_char,
     pg_sys::{
-        get_role_oid, has_privs_of_role, palloc0, superuser, AsPgCStr, ClosePipeStream, DataDir,
-        FileClose, FilePathName, GetUserId, InvalidOid, OpenPipeStream, OpenTemporaryFile,
-        TempTablespacePath, MAXPGPATH, PG_BINARY_R, PG_BINARY_W,
+        get_role_oid, has_privs_of_role, superuser, AsPgCStr, ClosePipeStream, DataDir, FileClose,
+        FilePathName, GetUserId, OpenPipeStream, OpenTemporaryFile, PG_BINARY_R, PG_BINARY_W,
     },
 };
 use url::Url;
@@ -94,20 +92,16 @@ impl ParsedUriInfo {
         let tmp_path = unsafe {
             let data_dir = CStr::from_ptr(DataDir).to_str().expect("invalid base dir");
 
-            let tmp_tblspace_path: *const c_char = palloc0(MAXPGPATH as _) as _;
-            TempTablespacePath(tmp_tblspace_path as _, InvalidOid);
-            let tmp_tblspace_path = CStr::from_ptr(tmp_tblspace_path)
-                .to_str()
-                .expect("invalid temp tablespace path");
-
+            // FilePathName already returns the path of the temporary file relative to the
+            // data directory, e.g. "base/pgsql_tmp/pgsql_tmp<pid>.<n>", so the data directory
+            // is the only prefix we need. Prepending the temp tablespace path on top of it
+            // would point us to a file that postgres does not know about and never removes.
             let tmp_file_path = FilePathName(tmp_path_fd);
             let tmp_file_path = CStr::from_ptr(tmp_file_path)
                 .to_str()
                 .expect("invalid temp path");
 
-            let tmp_path = std::path::Path::new(data_dir)
-                .join(tmp_tblspace_path)
-                .join(tmp_file_path);
+            let tmp_path = std::path::Path::new(data_dir).join(tmp_file_path);
 
             tmp_path.to_str().expect("invalid tmp path").to_string()
         };
