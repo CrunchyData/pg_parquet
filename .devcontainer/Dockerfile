@@ -32,12 +32,7 @@ RUN chmod a+rwx `pg_config --pkglibdir`          \
                 /var/run/postgresql/
 
 # install pgaudit extension
-RUN if [ ${PG_MAJOR} != "18" ]; then \
-      apt-get -y install postgresql-${PG_MAJOR}-pgaudit; \
-    else \
-      git clone --branch integration https://github.com/pgaudit/pgaudit.git /tmp/pgaudit && \
-      cd /tmp/pgaudit && make install USE_PGXS=1 PG_CONFIG=pg_config; \
-    fi
+RUN apt-get -y install postgresql-${PG_MAJOR}-pgaudit
 
 # initdb requires non-root user. This will also be the user that runs the container.
 ARG USERNAME=rust

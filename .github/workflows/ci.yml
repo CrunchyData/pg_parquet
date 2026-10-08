@@ -125,20 +125,7 @@ jobs:
                            $(${{ env.PG_CONFIG }} --sharedir)/extension \
                            /var/run/postgresql/
 
-      - uses: actions/checkout@v4
-        if: ${{ env.PG_MAJOR == '18' }}
-        with:
-          repository: 'pgaudit/pgaudit'
-          ref: 'integration'
-          path: pgaudit
-
-      - name: Install pgaudit extension for pg18
-        if: ${{ env.PG_MAJOR == '18' }}
-        run: |
-          cd pgaudit && make install USE_PGXS=1 PG_CONFIG=${{ env.PG_CONFIG }}
-
-      - name: Install pgaudit extension for < pg18
-        if: ${{ env.PG_MAJOR != '18' }}
+      - name: Install pgaudit extension
         run: |
           sudo apt-get -y install postgresql-${{ env.PG_MAJOR }}-pgaudit
 
