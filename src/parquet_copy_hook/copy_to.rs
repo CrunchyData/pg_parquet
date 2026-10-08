@@ -3,8 +3,8 @@ use std::ffi::{c_char, CStr};
 use pgrx::{
     ereport, is_a,
     pg_sys::{
-        makeRangeVar, pg_plan_query, A_Star, ColumnRef, CommandTag, CopyStmt, CreateNewPortal,
-        DestReceiver, GetActiveSnapshot, Node,
+        makeRangeVar, A_Star, ColumnRef, CommandTag, CopyStmt, CreateNewPortal, DestReceiver,
+        GetActiveSnapshot, Node,
         NodeTag::{self, T_CopyStmt},
         ParamListInfoData, PlannedStmt, PortalDefineQuery, PortalDrop, PortalRun, PortalStart,
         QueryCompletion, QueryEnvironment, RawStmt, ResTarget, SelectStmt, CURSOR_OPT_PARALLEL_OK,
@@ -16,7 +16,7 @@ use pgrx::{
 
 use crate::parquet_copy_hook::{
     copy_utils::{copy_stmt_has_relation, copy_stmt_lock_mode, copy_stmt_relation_oid},
-    pg_compat::pg_analyze_and_rewrite,
+    pg_compat::{pg_analyze_and_rewrite, pg_plan_query},
 };
 
 // execute_copy_to_with_dest_receiver executes a COPY TO statement with our custom DestReceiver
@@ -184,7 +184,10 @@ fn convert_copy_to_relation_to_select_stmt(
         )
     };
     let mut from = unsafe { PgBox::from_pg(from) };
-    from.inh = false;
+
+    // PG19 allows COPY TO from a partitioned table, which means the generated SELECT
+    // has to recurse into the partitions. Any other relation kind has no children.
+    from.inh = (unsafe { *relation.rd_rel }).relkind == RELKIND_PARTITIONED_TABLE as c_char;
 
     let mut select_stmt = unsafe { PgBox::<SelectStmt>::alloc_node(NodeTag::T_SelectStmt) };
 
@@ -250,6 +253,10 @@ fn copy_to_stmt_ensure_table_kind(relation: &PgRelation) {
             "Try the COPY (SELECT ...) TO variant.",
         );
     } else if relation_kind == RELKIND_PARTITIONED_TABLE as c_char {
+        #[cfg(not(pre_pg19))]
+        copy_to_stmt_ensure_no_foreign_partition(relation);
+
+        #[cfg(pre_pg19)]
         ereport!(
             PgLogLevel::ERROR,
             PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE,
@@ -266,5 +273,38 @@ fn copy_to_stmt_ensure_table_kind(relation: &PgRelation) {
             ),
             "Try the COPY (SELECT ...) TO variant.",
         );
+    }
+}
+
+// copy_to_stmt_ensure_no_foreign_partition rejects COPY TO from a partitioned table that
+// has a foreign table partition. Reading one would require the FDW to support it, so PG
+// refuses the whole command rather than part of it.
+// Taken from PG COPY TO code path.
+#[cfg(not(pre_pg19))]
+fn copy_to_stmt_ensure_no_foreign_partition(relation: &PgRelation) {
+    use pgrx::pg_sys::{find_all_inheritors, get_rel_name, get_rel_relkind, AccessShareLock};
+
+    let partitions =
+        unsafe { find_all_inheritors(relation.oid(), AccessShareLock as _, std::ptr::null_mut()) };
+    let partitions = unsafe { PgList::<std::ffi::c_void>::from_pg(partitions) };
+
+    for partition in partitions.iter_oid() {
+        if unsafe { get_rel_relkind(partition) } == RELKIND_FOREIGN_TABLE as c_char {
+            let partition_name = unsafe { get_rel_name(partition) };
+            let partition_name = unsafe { CStr::from_ptr(partition_name) }
+                .to_str()
+                .expect("invalid partition name");
+
+            ereport!(
+                PgLogLevel::ERROR,
+                PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE,
+                format!("cannot copy from foreign table \"{}\"", partition_name),
+                format!(
+                    "Partition \"{}\" is a foreign table in partitioned table \"{}\".",
+                    partition_name,
+                    relation.name()
+                ),
+            );
+        }
     }
 }

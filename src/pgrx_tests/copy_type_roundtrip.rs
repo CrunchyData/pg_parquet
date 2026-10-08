@@ -12,6 +12,8 @@ mod tests {
         Geometry, GeometryColumnsMetadata, GeometryEncoding, GeometryType,
     };
     use crate::type_compat::map::Map;
+    #[cfg(not(pre_pg19))]
+    use crate::type_compat::oid8::Oid8;
     use crate::type_compat::pg_arrow_type_conversions::{
         DEFAULT_UNBOUNDED_NUMERIC_PRECISION, DEFAULT_UNBOUNDED_NUMERIC_SCALE,
     };
@@ -365,6 +367,76 @@ mod tests {
         let test_table = TestTable::<Vec<Option<Oid>>>::new("oid[]".into());
         test_table.insert(
             "INSERT INTO test_expected (a) VALUES (array[1,2,null]), (null), (array[]::oid[]);",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // "oid8" is new in PostgreSQL 19. It is mapped to arrow UInt64, which covers the whole
+    // unsigned 64 bit range of the type.
+    #[cfg(not(pre_pg19))]
+    #[pg_test]
+    fn test_oid8() {
+        let test_table = TestTable::<Oid8>::new("oid8".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('0'), ('1'), ('4294967296'), ('18446744073709551615'), (null);",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[cfg(not(pre_pg19))]
+    #[pg_test]
+    fn test_oid8_array() {
+        let test_table = TestTable::<Vec<Option<Oid8>>>::new("oid8[]".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['1','18446744073709551615',null]::oid8[]), (null), (array[]::oid8[]);",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // the whole point of the UInt64 mapping is that oid8 stays unsigned in the file, so pin the
+    // parquet type down rather than only the round-trip.
+    #[cfg(not(pre_pg19))]
+    #[pg_test]
+    fn test_oid8_is_written_as_unsigned_int64() {
+        let test_table = TestTable::<Oid8>::new("oid8".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('18446744073709551615');");
+        test_table.assert_expected_and_result_rows();
+
+        let attribute_schema = Spi::connect(|client| {
+            let parquet_schema_command = format!("select type_name, converted_type, logical_type from parquet.schema('{LOCAL_TEST_FILE_PATH}') where name = 'a';");
+
+            let tup_table = client.select(&parquet_schema_command, None, &[]).unwrap();
+            let mut results = Vec::new();
+
+            for row in tup_table {
+                let physical_type = row["type_name"].value::<String>().unwrap().unwrap();
+                let converted_type = row["converted_type"].value::<String>().unwrap();
+                let logical_type = row["logical_type"].value::<String>().unwrap();
+
+                results.push((physical_type, converted_type, logical_type));
+            }
+
+            results
+        });
+
+        assert_eq!(attribute_schema.len(), 1);
+        assert_eq!(
+            attribute_schema[0],
+            (
+                "INT64".to_string(),
+                Some("UINT_64".to_string()),
+                Some("INTEGER".to_string())
+            )
+        );
+    }
+
+    // "regdatabase" is new in PostgreSQL 19 and round-trips as text like the other reg* types.
+    #[cfg(not(pre_pg19))]
+    #[pg_test]
+    fn test_regdatabase() {
+        let test_table = TestTable::<FallbackToText>::new("regdatabase".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('template1'), (current_database()::text::regdatabase), (null);",
         );
         test_table.assert_expected_and_result_rows();
     }

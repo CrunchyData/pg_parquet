@@ -43,6 +43,8 @@ pub(crate) mod jsonb;
 pub(crate) mod map;
 pub(crate) mod numeric;
 pub(crate) mod oid;
+#[cfg(not(pre_pg19))]
+pub(crate) mod oid8;
 pub(crate) mod text;
 pub(crate) mod time;
 pub(crate) mod timestamp;
@@ -97,6 +99,15 @@ fn to_pg_nonarray_datum(
         }
         DataType::UInt32 => {
             to_pg_datum!(UInt32Array, Oid, primitive_array, attribute_context)
+        }
+        #[cfg(not(pre_pg19))]
+        DataType::UInt64 => {
+            to_pg_datum!(
+                arrow::array::UInt64Array,
+                crate::type_compat::oid8::Oid8,
+                primitive_array,
+                attribute_context
+            )
         }
         DataType::Boolean => {
             to_pg_datum!(BooleanArray, bool, primitive_array, attribute_context)
@@ -234,6 +245,15 @@ fn to_pg_array_datum(
         }
         DataType::UInt32 => {
             to_pg_datum!(UInt32Array, Vec<Option<Oid>>, list_array, element_context)
+        }
+        #[cfg(not(pre_pg19))]
+        DataType::UInt64 => {
+            to_pg_datum!(
+                arrow::array::UInt64Array,
+                Vec<Option<crate::type_compat::oid8::Oid8>>,
+                list_array,
+                element_context
+            )
         }
         DataType::Boolean => {
             to_pg_datum!(BooleanArray, Vec<Option<bool>>, list_array, element_context)

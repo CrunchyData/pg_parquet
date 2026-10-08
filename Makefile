@@ -12,7 +12,8 @@ IS_EL8 := $(shell grep -q 'PLATFORM_ID="platform:el8"' /etc/os-release 2>/dev/nu
 
 PG_CONFIG ?= pg_config
 
-PG_MAJOR ?= $(shell $(PG_CONFIG) --version | cut -d '.' -f 1 | cut -d ' ' -f 2)
+# a beta reports e.g. "PostgreSQL 19beta4", so take the leading digits only
+PG_MAJOR ?= $(shell $(PG_CONFIG) --version | sed -E 's/^PostgreSQL ([0-9]+).*/\1/')
 
 # MinIO gated its community images: minio/minio and quay.io/minio/minio no longer
 # allow anonymous pulls, and dl.min.io returns 410. This is an archived MinIO build.

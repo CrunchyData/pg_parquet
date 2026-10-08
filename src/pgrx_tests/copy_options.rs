@@ -1194,4 +1194,89 @@ mod tests {
         );
         Spi::run(&copy_to_parquet).unwrap();
     }
+
+    // PostgreSQL 19 added the "set_null" value for the COPY FROM "on_error" option. The option
+    // itself is not supported by "copy from parquet", so it must keep being rejected by name
+    // before its value is ever parsed.
+    #[pg_test]
+    #[should_panic(expected = "on_error is not a valid option for \"copy from parquet\".")]
+    fn test_copy_from_on_error_set_null() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "on_error".to_string(),
+            CopyOptionValue::StringOption("set_null".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // PostgreSQL 19 allows COPY FROM "header" to take a number of lines to skip. "header" is not
+    // a supported option for parquet, so the integer form must be rejected too.
+    #[pg_test]
+    #[should_panic(expected = "header is not a valid option for \"copy from parquet\".")]
+    fn test_copy_from_header_line_count() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert("header".to_string(), CopyOptionValue::IntOption(2));
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_from_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // "force_array" is new in PostgreSQL 19 (COPY TO with format json) and is not supported for
+    // parquet.
+    #[pg_test]
+    #[should_panic(expected = "force_array is not a valid option for \"copy to parquet\".")]
+    fn test_copy_to_force_array() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "force_array".to_string(),
+            CopyOptionValue::StringOption("true".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // PostgreSQL 19 added the "json" format to core COPY TO. It is rejected for parquet uris,
+    // just like any other non-parquet format.
+    #[pg_test]
+    #[should_panic(expected = "json is not a valid format. Only parquet format is supported.")]
+    fn test_copy_to_json_format() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "format".to_string(),
+            CopyOptionValue::StringOption("json".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // The hook must not hijack PostgreSQL 19's new json format when the uri is not a parquet one.
+    #[cfg(not(pre_pg19))]
+    #[pg_test]
+    fn test_copy_to_json_format_is_handled_by_core() {
+        let json_file = "/tmp/pg_parquet_test.json";
+        let _file_cleanup = FileCleanup::new(json_file);
+
+        Spi::run("create table test_table(a int, b text);").unwrap();
+        Spi::run("insert into test_table values (1, 'hello'), (null, null);").unwrap();
+
+        let copy_to_json = format!("copy test_table to '{json_file}' with (format json);");
+        Spi::run(&copy_to_json).unwrap();
+
+        let contents = Spi::get_one::<String>(&format!("select pg_read_file('{json_file}');"))
+            .unwrap()
+            .expect("json file is empty");
+
+        let lines: Vec<&str> = contents.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].starts_with('{') && lines[0].contains("hello"));
+        assert!(lines[1].starts_with('{'));
+    }
 }

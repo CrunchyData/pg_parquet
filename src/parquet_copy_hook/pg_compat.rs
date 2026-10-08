@@ -4,8 +4,8 @@ use pgrx::{
     pg_sys::{
         bms_add_member, set_config_option, AsPgCStr, AtEOXact_GUC, CopyGetAttnums, CopyStmt,
         FirstLowInvalidHeapAttributeNumber, GucAction::GUC_ACTION_SAVE, GucContext::PGC_SUSET,
-        GucSource::PGC_S_SESSION, List, NewGUCNestLevel, Node, ParseNamespaceItem, ParseState,
-        PlannedStmt, QueryEnvironment, RawStmt, ACL_INSERT, ACL_SELECT,
+        GucSource::PGC_S_SESSION, List, NewGUCNestLevel, Node, ParamListInfo, ParseNamespaceItem,
+        ParseState, PlannedStmt, Query, QueryEnvironment, RawStmt, ACL_INSERT, ACL_SELECT,
     },
     PgBox, PgList, PgRelation,
 };
@@ -34,6 +34,30 @@ pub(crate) fn pg_analyze_and_rewrite(
             std::ptr::null_mut(),
             0,
             query_env,
+        )
+    }
+}
+
+pub(crate) fn pg_plan_query(
+    query: *mut Query,
+    query_string: *const c_char,
+    cursor_options: i32,
+    bound_params: ParamListInfo,
+) -> *mut PlannedStmt {
+    #[cfg(pre_pg19)]
+    unsafe {
+        pgrx::pg_sys::pg_plan_query(query, query_string, cursor_options, bound_params)
+    }
+
+    // PG19 takes an ExplainState, which is only set when planning for EXPLAIN.
+    #[cfg(not(pre_pg19))]
+    unsafe {
+        pgrx::pg_sys::pg_plan_query(
+            query,
+            query_string,
+            cursor_options,
+            bound_params,
+            std::ptr::null_mut(),
         )
     }
 }
