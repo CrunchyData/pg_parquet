@@ -22,6 +22,23 @@ AZURITE_IMAGE ?= mcr.microsoft.com/azure-storage/azurite
 FAKE_GCS_IMAGE ?= tustvold/fake-gcs-server
 WEBDAV_IMAGE ?= rclone/rclone
 
+# Containers do not always come up, e.g. when an image pull is rate limited, so
+# the readiness checks below give up instead of waiting forever. Seconds.
+WAIT_FOR_ENDPOINT_TIMEOUT ?= 60
+
+# $(call wait_for_endpoint,<url>). curl is only asked to reach the endpoint, not
+# to get a 2xx out of it: a bare GET on the root of these services answers with
+# 400 or 403 once they are up.
+define wait_for_endpoint
+	for _ in $$(seq ${WAIT_FOR_ENDPOINT_TIMEOUT}); do \
+	  curl -s -o /dev/null --max-time 5 $(1) && exit 0; \
+	  echo "Waiting for $(1)..."; \
+	  sleep 1; \
+	done; \
+	echo "$(1) is not ready after ${WAIT_FOR_ENDPOINT_TIMEOUT} seconds"; \
+	exit 1
+endef
+
 all: build
 
 init-pgrx:
@@ -96,10 +113,7 @@ start-minio: start-mitmdump
 	  --volume ./.devcontainer/minio-entrypoint.sh:/entrypoint.sh \
 	  $(MINIO_IMAGE)
 
-	while ! curl ${AWS_ENDPOINT_URL}; do \
-	  echo "Waiting for ${AWS_ENDPOINT_URL}..."; \
-	  sleep 1; \
-	done
+	$(call wait_for_endpoint,${AWS_ENDPOINT_URL})
 
 stop-minio: stop-mitmdump
 	docker stop minio || true
@@ -112,10 +126,7 @@ ifeq ($(IS_EL8),false)
 	  -p 10000:10000 \
 	  $(AZURITE_IMAGE)
 
-	while ! curl ${AZURE_STORAGE_ENDPOINT}; do \
-	  echo "Waiting for ${AZURE_STORAGE_ENDPOINT}..."; \
-	  sleep 1; \
-	done
+	$(call wait_for_endpoint,${AZURE_STORAGE_ENDPOINT})
 
 	az storage container create -n ${AZURE_TEST_CONTAINER_NAME} --connection-string ${AZURE_STORAGE_CONNECTION_STRING}
 	az storage container create -n ${AZURE_TEST_CONTAINER_NAME}2 --connection-string ${AZURE_STORAGE_CONNECTION_STRING}
@@ -142,10 +153,7 @@ start-fake-gcs:
 		-p 4443:4443 \
 		$(FAKE_GCS_IMAGE) -scheme http -public-host localhost:4443;
 
-	while ! curl ${GOOGLE_SERVICE_ENDPOINT}; do \
-	  echo "Waiting for ${GOOGLE_SERVICE_ENDPOINT}..."; \
-	  sleep 1; \
-	done
+	$(call wait_for_endpoint,${GOOGLE_SERVICE_ENDPOINT})
 
 	curl -v -X POST --data-binary "{\"name\":\"${GOOGLE_TEST_BUCKET}\"}" -H "Content-Type: application/json" "${GOOGLE_SERVICE_ENDPOINT}/storage/v1/b"
 	curl -v -X POST --data-binary "{\"name\":\"${GOOGLE_TEST_BUCKET}2\"}" -H "Content-Type: application/json" "${GOOGLE_SERVICE_ENDPOINT}/storage/v1/b"
@@ -160,10 +168,7 @@ start-web-dav:
 	  -p 8080:80 \
 	  $(WEBDAV_IMAGE) serve webdav /data --addr :80
 
-	while ! curl ${HTTP_ENDPOINT}; do \
-	  echo "Waiting for ${HTTP_ENDPOINT}..."; \
-	  sleep 1; \
-	done
+	$(call wait_for_endpoint,${HTTP_ENDPOINT})
 
 stop-web-dav:
 	docker stop rclone-webdav || true
