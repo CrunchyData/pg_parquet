@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use object_store::{http::HttpBuilder, ClientOptions};
+use object_store::http::HttpBuilder;
 use url::Url;
 
 use crate::arrow_parquet::uri_utils::object_store_base_uri;
 
-use super::object_store_cache::ObjectStoreWithExpiration;
+use super::{client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration};
 
 // create_http_object_store creates a http(s) object store with the given bucket name.
 pub(crate) fn create_http_object_store(uri: &Url) -> ObjectStoreWithExpiration {
@@ -15,9 +15,8 @@ pub(crate) fn create_http_object_store(uri: &Url) -> ObjectStoreWithExpiration {
 
     let allow_http = std::env::var("ALLOW_HTTP").is_ok();
 
-    let client_options = ClientOptions::new()
-        .with_allow_http2()
-        .with_allow_http(allow_http);
+    // http client options, e.g. HTTP_TIMEOUT
+    let client_options = load_client_options("HTTP", allow_http).with_allow_http2();
 
     let http_builder = HttpBuilder::new()
         .with_url(base_uri)

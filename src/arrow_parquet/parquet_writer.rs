@@ -22,6 +22,7 @@ use crate::{
         },
         uri_utils::parquet_writer_from_uri,
     },
+    object_store::object_store_error_message,
     parquet_copy_hook::copy_to_split_dest_receiver::CopyToParquetOptions,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
     type_compat::{
@@ -122,14 +123,24 @@ impl ParquetWriterContext {
 
         PG_BACKEND_TOKIO_RUNTIME
             .block_on(parquet_writer.write(&record_batch))
-            .unwrap_or_else(|e| panic!("failed to write record batch: {e}"));
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to write record batch: {}",
+                    object_store_error_message(e)
+                )
+            });
 
         if parquet_writer.in_progress_rows() >= self.options.row_group_size as _
             || parquet_writer.in_progress_size() >= self.options.row_group_size_bytes as _
         {
             PG_BACKEND_TOKIO_RUNTIME
                 .block_on(parquet_writer.flush())
-                .unwrap_or_else(|e| panic!("failed to flush record batch: {e}"));
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "failed to flush record batch: {}",
+                        object_store_error_message(e)
+                    )
+                });
         }
     }
 
@@ -137,7 +148,12 @@ impl ParquetWriterContext {
     pub(crate) fn finalize(&mut self) {
         PG_BACKEND_TOKIO_RUNTIME
             .block_on(self.parquet_writer.finish())
-            .unwrap_or_else(|e| panic!("failed to finish parquet writer: {e}"));
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to finish parquet writer: {}",
+                    object_store_error_message(e)
+                )
+            });
     }
 
     pub(crate) fn bytes_written(&self) -> usize {

@@ -7,7 +7,7 @@ use url::Url;
 
 use crate::PG_BACKEND_TOKIO_RUNTIME;
 
-use super::object_store_cache::ObjectStoreWithExpiration;
+use super::{client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration};
 
 // create_s3_object_store creates an AmazonS3 object store with the given bucket name.
 // It is configured by environment variables and aws config files as fallback method.
@@ -23,6 +23,7 @@ use super::object_store_cache::ObjectStoreWithExpiration;
 // - AWS_CONFIG_FILE (env var only)
 // - AWS_PROFILE (env var only)
 // - AWS_ALLOW_HTTP (env var only, object_store specific)
+// - AWS_<HTTP CLIENT OPTION>, e.g. AWS_TIMEOUT (env var only, object_store specific)
 pub(crate) fn create_s3_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     let bucket_name = parse_s3_bucket(uri).unwrap_or_else(|| {
         panic!("unsupported s3 uri: {uri}");
@@ -34,8 +35,9 @@ pub(crate) fn create_s3_object_store(uri: &Url) -> ObjectStoreWithExpiration {
 
     let aws_s3_config = AwsS3Config::load();
 
-    // allow http
-    aws_s3_builder = aws_s3_builder.with_allow_http(aws_s3_config.allow_http);
+    // http client options, including allow http
+    aws_s3_builder =
+        aws_s3_builder.with_client_options(load_client_options("AWS", aws_s3_config.allow_http));
 
     // access key id
     if let Some(access_key_id) = aws_s3_config.access_key_id {

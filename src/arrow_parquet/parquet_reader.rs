@@ -28,6 +28,7 @@ use crate::{
             parquet_schema_string_from_attributes,
         },
     },
+    object_store::object_store_error_message,
     parquet_udfs::list::list_uri,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
     type_compat::{geometry::reset_postgis_context, map::reset_map_context},
@@ -291,8 +292,12 @@ impl ParquetReaderContext {
             .block_on(self.current_reader_mut().expect("no reader found").next());
 
         if let Some(batch_result) = record_batch {
-            let record_batch =
-                batch_result.unwrap_or_else(|e| panic!("failed to read record batch: {e}"));
+            let record_batch = batch_result.unwrap_or_else(|e| {
+                panic!(
+                    "failed to read record batch: {}",
+                    object_store_error_message(e)
+                )
+            });
 
             let num_rows = record_batch.num_rows();
 

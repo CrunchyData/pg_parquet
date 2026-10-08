@@ -6,7 +6,7 @@ use ini::Ini;
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use url::Url;
 
-use super::object_store_cache::ObjectStoreWithExpiration;
+use super::{client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration};
 
 // create_azure_object_store creates a MicrosoftAzure object store with the given container name.
 // It is configured by environment variables and azure config files as fallback method.
@@ -20,6 +20,7 @@ use super::object_store_cache::ObjectStoreWithExpiration;
 // - AZURE_CONFIG_FILE (env var only, object_store specific)
 // - AZURE_STORAGE_ENDPOINT (env var only, object_store specific)
 // - AZURE_ALLOW_HTTP (env var only, object_store specific)
+// - AZURE_<HTTP CLIENT OPTION>, e.g. AZURE_TIMEOUT (env var only, object_store specific)
 pub(crate) fn create_azure_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     let container_name = parse_azure_blob_container(uri).unwrap_or_else(|| {
         panic!("unsupported azure blob storage uri: {uri}");
@@ -29,8 +30,9 @@ pub(crate) fn create_azure_object_store(uri: &Url) -> ObjectStoreWithExpiration 
 
     let azure_blob_config = AzureStorageConfig::load();
 
-    // allow http
-    azure_builder = azure_builder.with_allow_http(azure_blob_config.allow_http);
+    // http client options, including allow http
+    azure_builder = azure_builder
+        .with_client_options(load_client_options("AZURE", azure_blob_config.allow_http));
 
     // endpoint
     if let Some(endpoint) = azure_blob_config.endpoint {

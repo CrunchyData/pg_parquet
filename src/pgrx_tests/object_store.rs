@@ -2,9 +2,16 @@
 mod tests {
     use std::{collections::HashMap, io::Write};
 
+    use object_store::ClientConfigKey;
+    use parquet::errors::ParquetError;
     use pgrx::{pg_sys::Timestamp, pg_test, Spi};
 
-    use crate::pgrx_tests::common::{CopyOptionValue, TestTable};
+    use crate::{
+        object_store::{
+            client_options::load_client_options, object_store_error_message, proxy_hint,
+        },
+        pgrx_tests::common::{CopyOptionValue, TestTable},
+    };
 
     fn object_store_cache_clear() {
         Spi::run("SELECT parquet_test.object_store_cache_clear();").unwrap();
@@ -212,6 +219,144 @@ mod tests {
         object_store_cache_clear();
 
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "wrong_secret_access_key");
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_client_options_are_collected_per_object_store() {
+        std::env::set_var("AWS_TIMEOUT", "5m");
+        std::env::set_var("AWS_CONNECT_TIMEOUT", "1m");
+
+        // belongs to another object store
+        std::env::set_var("AZURE_READ_TIMEOUT", "2m");
+
+        // does not name an http client option
+        std::env::set_var("AWS_NOT_A_CLIENT_OPTION", "3m");
+
+        let client_options = load_client_options("AWS", false);
+
+        assert_eq!(
+            client_options.get_config_value(&ClientConfigKey::Timeout),
+            Some("5m".into())
+        );
+        assert_eq!(
+            client_options.get_config_value(&ClientConfigKey::ConnectTimeout),
+            Some("1m".into())
+        );
+        assert_eq!(
+            client_options.get_config_value(&ClientConfigKey::ReadTimeout),
+            None
+        );
+    }
+
+    #[pg_test]
+    fn test_client_options_allow_http_is_owned_by_the_caller() {
+        // only the caller decides, it parses "<prefix>_ALLOW_HTTP" itself
+        std::env::set_var("AWS_ALLOW_HTTP", "no");
+
+        let client_options = load_client_options("AWS", true);
+
+        assert_eq!(
+            client_options.get_config_value(&ClientConfigKey::AllowHttp),
+            Some("true".into())
+        );
+    }
+
+    #[pg_test]
+    fn test_object_store_error_message_unwraps_wrapped_errors() {
+        let object_store_error = object_store::Error::Generic {
+            store: "S3",
+            source: "404 Not Found".into(),
+        };
+        let expected_message = object_store_error.to_string();
+
+        // arrow and parquet both wrap the error of the object store
+        let error = ParquetError::External(Box::new(ParquetError::External(Box::new(
+            object_store_error,
+        ))));
+
+        assert_eq!(object_store_error_message(error), expected_message);
+    }
+
+    #[pg_test]
+    fn test_object_store_error_message_keeps_other_errors() {
+        let error = ParquetError::General("not an error of an object store".into());
+        let expected_message = error.to_string();
+
+        assert_eq!(object_store_error_message(error), expected_message);
+    }
+
+    #[pg_test]
+    fn test_proxy_hint() {
+        // the error page that haproxy answers a request that it rejects with
+        assert!(proxy_hint(
+            "Generic S3 error: Server returned non-2xx status code: 400 Bad Request: \
+             <html><body><h1>400 Bad request</h1></body></html>"
+        )
+        .is_some());
+
+        assert!(proxy_hint("Error after 0 retries: <!DOCTYPE html><html></html>").is_some());
+
+        // the error of an object store itself
+        assert!(proxy_hint(
+            "Generic S3 error: Server returned non-2xx status code: 404 Not Found: \
+             <?xml version=\"1.0\"?><Error><Code>NoSuchKey</Code></Error>"
+        )
+        .is_none());
+    }
+
+    #[pg_test]
+    fn test_object_store_error_message_hints_at_a_proxy() {
+        let error = ParquetError::External(Box::new(object_store::Error::Generic {
+            store: "S3",
+            source: "Server returned non-2xx status code: 400 Bad Request: \
+                     <html><body><h1>400 Bad request</h1></body></html>"
+                .into(),
+        }));
+
+        let message = object_store_error_message(error);
+
+        assert!(message.starts_with("Generic S3 error: "));
+        assert!(message.ends_with("likely rejected the request)"));
+    }
+
+    #[pg_test]
+    fn test_s3_client_options_from_env() {
+        object_store_cache_clear();
+
+        // http client options of the object store are configurable via the environment
+        std::env::set_var("AWS_TIMEOUT", "5m");
+        std::env::set_var("AWS_CONNECT_TIMEOUT", "30s");
+
+        // not a client option, it should just be ignored
+        std::env::set_var("AWS_NOT_A_CLIENT_OPTION", "1");
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test.parquet");
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "failed to parse \"banana\" as Duration")]
+    fn test_s3_invalid_client_option_from_env() {
+        object_store_cache_clear();
+
+        std::env::set_var("AWS_TIMEOUT", "banana");
 
         let test_bucket_name: String =
             std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");

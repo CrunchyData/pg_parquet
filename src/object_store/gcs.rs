@@ -3,13 +3,14 @@ use std::sync::Arc;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use url::Url;
 
-use super::object_store_cache::ObjectStoreWithExpiration;
+use super::{client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration};
 
 // create_gcs_object_store a GoogleCloudStorage object store from given uri.
 // It is configured by environment variables. Currently, we only support
 // following environment variables:
 // - GOOGLE_SERVICE_ACCOUNT_KEY
 // - GOOGLE_SERVICE_ACCOUNT_PATH
+// - GOOGLE_<HTTP CLIENT OPTION>, e.g. GOOGLE_TIMEOUT (object_store specific)
 pub(crate) fn create_gcs_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     let bucket_name = parse_gcs_bucket(uri).unwrap_or_else(|| {
         panic!("unsupported gcs uri: {uri}");
@@ -18,6 +19,11 @@ pub(crate) fn create_gcs_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     let mut gcs_builder = GoogleCloudStorageBuilder::new().with_bucket_name(bucket_name);
 
     let gcs_config = GoogleStorageConfig::load();
+
+    // http client options. object_store allows http endpoints for gcs by default,
+    // which we keep since the gcs config file is the only way to point the client at
+    // an alternative, possibly local, endpoint
+    gcs_builder = gcs_builder.with_client_options(load_client_options("GOOGLE", true));
 
     // service account key
     if let Some(service_account_key) = gcs_config.service_account_key {
