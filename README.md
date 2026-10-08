@@ -65,6 +65,24 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 psql> "CREATE EXTENSION pg_parquet;"
 ```
 
+> [!NOTE]
+> `pgrx` installs the extension into the directories of the `pg_config` that it is configured with, which are owned by `root` for a packaged `Postgres`. `cargo pgrx install` can be told to use `sudo` for that, but `cargo pgrx run` has no such flag and instead needs those directories to be writable, as shown below. Alternatively, `cargo pgrx init --pg"${PG_MAJOR}" download` has `pgrx` build its own `Postgres` under `~/.pgrx`, which belongs to you and needs no root permissions at all.
+
+```bash
+# either install the extension with sudo
+> cargo pgrx install --release --sudo --features pg"${PG_MAJOR}"
+
+# or make the installation directories writable once
+> sudo chmod a+rwx $(pg_config --pkglibdir)         \
+                   $(pg_config --pkglibdir)/bitcode \
+                   $(pg_config --sharedir)/extension
+
+# the files of a packaged pg_parquet are still owned by root after that, and they are
+# overwritten in place rather than recreated, so remove them to be able to install over
+> sudo rm -f $(pg_config --pkglibdir)/pg_parquet* \
+             $(pg_config --sharedir)/extension/pg_parquet*
+```
+
 ## Usage
 There are mainly 3 things that you can do with `pg_parquet`:
 1. You can export Postgres tables/queries to Parquet files, stdin/stdout or a program's stream,
