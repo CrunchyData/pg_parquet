@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
+use object_store::buffered::BufWriter;
 use parquet::{
-    arrow::{async_writer::ParquetObjectWriter, AsyncArrowWriter},
+    arrow::AsyncArrowWriter,
     file::{
         metadata::KeyValue,
         properties::{EnabledStatistics, WriterProperties},
@@ -40,7 +41,7 @@ pub(crate) const DEFAULT_ROW_GROUP_SIZE: i64 = 122880;
 pub(crate) const DEFAULT_ROW_GROUP_SIZE_BYTES: i64 = DEFAULT_ROW_GROUP_SIZE * 1024;
 
 pub(crate) struct ParquetWriterContext {
-    parquet_writer: AsyncArrowWriter<ParquetObjectWriter>,
+    parquet_writer: AsyncArrowWriter<BufWriter>,
     schema: SchemaRef,
     attribute_contexts: Vec<PgToArrowAttributeContext>,
     options: CopyToParquetOptions,
@@ -95,7 +96,7 @@ impl ParquetWriterContext {
         let mut writer_props_builder = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
             .set_compression(compression.into())
-            .set_max_row_group_size(options.row_group_size as usize)
+            .set_max_row_group_row_count(Some(options.row_group_size as usize))
             .set_writer_version(options.parquet_version.into())
             .set_created_by("pg_parquet".to_string());
 

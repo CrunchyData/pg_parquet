@@ -1,14 +1,22 @@
-use std::{ffi::CStr, fs::File, os::fd::FromRawFd, panic, sync::Arc};
+use std::{ffi::CStr, fs::File, ops::Range, os::fd::FromRawFd, panic, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
-use object_store::{path::Path, ObjectStoreScheme};
+use bytes::Bytes;
+use futures::{future::BoxFuture, FutureExt, TryFutureExt};
+use object_store::{
+    buffered::BufWriter, path::Path, ObjectStore, ObjectStoreExt, ObjectStoreScheme,
+};
 use parquet::{
     arrow::{
-        async_reader::{ParquetObjectReader, ParquetRecordBatchStream},
-        async_writer::ParquetObjectWriter,
+        arrow_reader::ArrowReaderOptions,
+        async_reader::{AsyncFileReader, ParquetRecordBatchStream},
         ArrowSchemaConverter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
     },
-    file::{metadata::ParquetMetaData, properties::WriterProperties},
+    errors::{ParquetError, Result as ParquetResult},
+    file::{
+        metadata::{ParquetMetaData, ParquetMetaDataReader},
+        properties::WriterProperties,
+    },
     schema::types::SchemaDescriptor,
 };
 use pgrx::{
@@ -247,8 +255,8 @@ pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<Parquet
                 )
             });
 
-        let parquet_object_reader = ParquetObjectReader::new(parquet_object_store, location)
-            .with_file_size(object_store_meta.size);
+        let parquet_object_reader =
+            ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
 
         let builder = ParquetRecordBatchStreamBuilder::new(parquet_object_reader)
             .await
@@ -263,7 +271,7 @@ pub(crate) const RECORD_BATCH_SIZE: i64 = 1024;
 
 pub(crate) fn parquet_reader_from_uri(
     uri_info: &ParsedUriInfo,
-) -> Result<ParquetRecordBatchStream<ParquetObjectReader>, String> {
+) -> Result<ParquetRecordBatchStream<ParquetObjectStoreReader>, String> {
     let copy_from = true;
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
@@ -275,8 +283,8 @@ pub(crate) fn parquet_reader_from_uri(
             )
         })?;
 
-        let parquet_object_reader = ParquetObjectReader::new(parquet_object_store, location)
-            .with_file_size(object_store_meta.size);
+        let parquet_object_reader =
+            ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
 
         let builder = ParquetRecordBatchStreamBuilder::new(parquet_object_reader)
             .await
@@ -318,11 +326,11 @@ pub(crate) fn parquet_writer_from_uri(
     uri_info: &ParsedUriInfo,
     arrow_schema: SchemaRef,
     writer_props: WriterProperties,
-) -> AsyncArrowWriter<ParquetObjectWriter> {
+) -> AsyncArrowWriter<BufWriter> {
     let copy_from = false;
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
-    let parquet_object_writer = ParquetObjectWriter::new(parquet_object_store, location);
+    let parquet_object_writer = BufWriter::new(parquet_object_store, location);
 
     AsyncArrowWriter::try_new(parquet_object_writer, arrow_schema, Some(writer_props))
         .unwrap_or_else(|e| {
@@ -388,5 +396,64 @@ pub(crate) fn ensure_access_privilege_to_uri(uri_info: &ParsedUriInfo, copy_from
                 required_role_name, operation_str, object_type
             ),
         );
+    }
+}
+
+// A minimal AsyncFileReader over an ObjectStore, mirroring parquet's examples/object_store.rs.
+// parquet deprecated ParquetObjectReader in 59.2.0 and asks downstreams to implement the trait
+// themselves instead, see https://github.com/apache/arrow-rs/issues/10308.
+#[derive(Clone, Debug)]
+pub(crate) struct ParquetObjectStoreReader {
+    object_store: Arc<dyn ObjectStore>,
+    location: Path,
+    file_size: u64,
+}
+
+impl ParquetObjectStoreReader {
+    fn new(object_store: Arc<dyn ObjectStore>, location: Path, file_size: u64) -> Self {
+        Self {
+            object_store,
+            location,
+            file_size,
+        }
+    }
+}
+
+impl AsyncFileReader for ParquetObjectStoreReader {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, ParquetResult<Bytes>> {
+        self.object_store
+            .get_range(&self.location, range)
+            .map_err(ParquetError::from)
+            .boxed()
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, ParquetResult<Vec<Bytes>>> {
+        async move {
+            self.object_store
+                .get_ranges(&self.location, &ranges)
+                .await
+                .map_err(ParquetError::from)
+        }
+        .boxed()
+    }
+
+    fn get_metadata<'a>(
+        &'a mut self,
+        options: Option<&'a ArrowReaderOptions>,
+    ) -> BoxFuture<'a, ParquetResult<Arc<ParquetMetaData>>> {
+        let file_size = self.file_size;
+
+        async move {
+            let metadata = ParquetMetaDataReader::new()
+                .with_arrow_reader_options(options)
+                .load_and_finish(self, file_size)
+                .await?;
+
+            Ok(Arc::new(metadata))
+        }
+        .boxed()
     }
 }

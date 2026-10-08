@@ -90,7 +90,7 @@ mod tests {
 
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
-        for ((expected,), (result,)) in expected.into_iter().zip(result.into_iter()) {
+        for ((expected,), (result,)) in expected.into_iter().zip(result) {
             if let Some(expected) = expected {
                 assert!(result.is_some());
 
@@ -124,7 +124,7 @@ mod tests {
 
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
-        for ((expected,), (result,)) in expected.into_iter().zip(result.into_iter()) {
+        for ((expected,), (result,)) in expected.into_iter().zip(result) {
             if let Some(expected) = expected {
                 assert!(result.is_some());
 
@@ -338,7 +338,7 @@ mod tests {
         );
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
-        for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
+        for ((expected,), (actual,)) in expected.into_iter().zip(result) {
             if let Some(expected) = expected {
                 assert!(actual.is_some());
 
@@ -385,7 +385,7 @@ mod tests {
 
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
-        for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
+        for ((expected,), (actual,)) in expected.into_iter().zip(result) {
             assert_int_text_map(expected, actual);
         }
     }
@@ -407,13 +407,13 @@ mod tests {
 
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
-        for ((expected,), (actual,)) in expected.into_iter().zip(result.into_iter()) {
+        for ((expected,), (actual,)) in expected.into_iter().zip(result) {
             if let Some(expected) = expected {
                 assert!(actual.is_some());
 
                 let actual = actual.unwrap();
 
-                for (expected, actual) in expected.into_iter().zip(actual.into_iter()) {
+                for (expected, actual) in expected.into_iter().zip(actual) {
                     assert_int_text_map(expected, actual);
                 }
             } else {
@@ -721,7 +721,7 @@ mod tests {
         test_table.insert("INSERT INTO test_expected (a) VALUES (array['{\"a\":\"test_json_1\"}','{\"a\":\"test_json_2\"}',null]::json[]), (null), (array[]::json[]);");
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
-        for ((expected,), (result,)) in expected.into_iter().zip(result.into_iter()) {
+        for ((expected,), (result,)) in expected.into_iter().zip(result) {
             if let Some(expected) = expected {
                 assert!(result.is_some());
 
@@ -752,7 +752,7 @@ mod tests {
         test_table.insert("INSERT INTO test_expected (a) VALUES (array['{\"a\":\"test_jsonb_1\"}','{\"a\":\"test_jsonb_2\"}',null]::jsonb[]), (null), (array[]::jsonb[]);");
         let TestResult { expected, result } = test_table.select_expected_and_result_rows();
 
-        for ((expected,), (result,)) in expected.into_iter().zip(result.into_iter()) {
+        for ((expected,), (result,)) in expected.into_iter().zip(result) {
             if let Some(expected) = expected {
                 assert!(result.is_some());
 
@@ -1228,7 +1228,7 @@ mod tests {
             results
         });
 
-        for (expected, actual) in expected_result.into_iter().zip(result.into_iter()) {
+        for (expected, actual) in expected_result.into_iter().zip(result) {
             if let Some(expected) = expected {
                 assert!(actual.is_some());
 
@@ -1283,9 +1283,8 @@ mod tests {
                 if let Some(expected_lucky_numbers) = expected_lucky_numbers {
                     let actual_lucky_numbers = actual_lucky_numbers.unwrap();
 
-                    for (expected_lucky_number, actual_lucky_number) in expected_lucky_numbers
-                        .into_iter()
-                        .zip(actual_lucky_numbers.into_iter())
+                    for (expected_lucky_number, actual_lucky_number) in
+                        expected_lucky_numbers.into_iter().zip(actual_lucky_numbers)
                     {
                         assert_eq!(expected_lucky_number, actual_lucky_number);
                     }

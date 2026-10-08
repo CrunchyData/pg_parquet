@@ -4,23 +4,15 @@ mod tests {
     use std::io::Write;
     use std::process::Command;
     use std::process::Stdio;
-    use std::vec;
 
     use pgrx::pg_test;
     use pgrx::Spi;
 
-    use crate::pgrx_tests::common::LOCAL_TEST_FILE_PATH;
+    use crate::pgrx_tests::common::{test_pg_port, LOCAL_TEST_FILE_PATH};
 
     #[pg_test]
     fn test_copy_stdin_out() {
-        let pg_version = std::env::var("PG_MAJOR").unwrap().parse::<i32>().unwrap();
-
-        let test_base_port = std::env::var("PGRX_TEST_PG_BASE_PORT")
-            .unwrap()
-            .parse::<i32>()
-            .unwrap();
-
-        let test_port = (test_base_port + pg_version).to_string();
+        let test_port = test_pg_port();
 
         // create test_expected
         let output = Command::new("psql")

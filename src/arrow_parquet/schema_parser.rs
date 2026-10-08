@@ -123,7 +123,7 @@ impl FieldIdMappingContext {
             )]);
 
             // append field id metadata to existing metadata of the field
-            let metadata = field
+            let metadata: HashMap<String, String> = field
                 .metadata()
                 .iter()
                 .chain(field_id_metadata.iter())

@@ -153,7 +153,7 @@ fn get_column_info(
         Some(column_info.converted_type().to_string())
     };
 
-    let logical_type = column_info.logical_type().as_ref().map(logical_type_to_str);
+    let logical_type = column_info.logical_type_ref().map(logical_type_to_str);
 
     let num_children = if !column_type.is_primitive() {
         Some(column_type.get_fields().len() as i32)
@@ -240,6 +240,7 @@ fn logical_type_to_str(logical_type: &LogicalType) -> String {
         LogicalType::Variant { .. } => "VARIANT",
         LogicalType::Geometry { .. } => "GEOMETRY",
         LogicalType::Geography { .. } => "GEOGRAPHY",
+        LogicalType::File => "FILE",
         _ => "UNKNOWN",
     }
     .into()
