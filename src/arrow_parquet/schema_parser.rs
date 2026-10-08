@@ -410,6 +410,10 @@ fn parse_primitive_schema(
             .with_extension_type(arrow_schema::extension::Json::default()),
         BYTEAOID => Field::new(scalar_name, arrow::datatypes::DataType::Binary, nullable),
         OIDOID => Field::new(scalar_name, arrow::datatypes::DataType::UInt32, nullable),
+        #[cfg(not(pre_pg19))]
+        pgrx::pg_sys::OID8OID => {
+            Field::new(scalar_name, arrow::datatypes::DataType::UInt64, nullable)
+        }
         _ => {
             if is_postgis_geometry_type(typoid) {
                 Field::new(scalar_name, arrow::datatypes::DataType::Binary, nullable)

@@ -29,6 +29,9 @@ use crate::{
     },
 };
 
+#[cfg(not(pre_pg19))]
+use crate::type_compat::oid8::Oid8;
+
 pub(crate) mod bool;
 pub(crate) mod bytea;
 pub(crate) mod char;
@@ -47,6 +50,8 @@ pub(crate) mod jsonb;
 pub(crate) mod map;
 pub(crate) mod numeric;
 pub(crate) mod oid;
+#[cfg(not(pre_pg19))]
+pub(crate) mod oid8;
 pub(crate) mod text;
 pub(crate) mod time;
 pub(crate) mod timestamp;
@@ -163,6 +168,8 @@ fn to_arrow_primitive_array(
         JSONBOID => to_arrow_primitive_array!(JsonB, tuples, attribute_context),
         BYTEAOID => to_arrow_primitive_array!(&[u8], tuples, attribute_context),
         OIDOID => to_arrow_primitive_array!(Oid, tuples, attribute_context),
+        #[cfg(not(pre_pg19))]
+        pgrx::pg_sys::OID8OID => to_arrow_primitive_array!(Oid8, tuples, attribute_context),
         _ => {
             if attribute_context.is_composite() {
                 let mut attribute_vals = vec![];
@@ -261,6 +268,10 @@ fn to_arrow_list_array(
         JSONBOID => to_arrow_list_array!(pgrx::Array<JsonB>, tuples, element_context),
         BYTEAOID => to_arrow_list_array!(pgrx::Array<&[u8]>, tuples, element_context),
         OIDOID => to_arrow_list_array!(pgrx::Array<Oid>, tuples, element_context),
+        #[cfg(not(pre_pg19))]
+        pgrx::pg_sys::OID8OID => {
+            to_arrow_list_array!(pgrx::Array<Oid8>, tuples, element_context)
+        }
         _ => {
             if element_context.is_composite() {
                 let mut attribute_vals = vec![];

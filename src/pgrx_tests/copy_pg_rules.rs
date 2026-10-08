@@ -282,6 +282,7 @@ mod tests {
         Spi::run(copy_to_parquet).unwrap();
     }
 
+    #[cfg(pre_pg19)]
     #[pg_test]
     #[should_panic(expected = "cannot copy from partitioned table \"partitioned_table\"")]
     fn test_copy_to_partitioned_table() {
@@ -308,6 +309,92 @@ mod tests {
         // should fail with partitioned table
         let copy_to_parquet = format!("copy partitioned_table to '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    // PG19 allows COPY TO directly from a partitioned table
+    #[cfg(not(pre_pg19))]
+    #[pg_test]
+    fn test_copy_to_partitioned_table() {
+        let create_table = "create table partitioned_table(id int) partition by range (id);";
+        Spi::run(create_table).unwrap();
+
+        let create_partition =
+            "create table partitioned_table_1 partition of partitioned_table for values from (1) to (6);";
+        Spi::run(create_partition).unwrap();
+
+        // a sub-partitioned partition, to make sure every level is visited
+        let create_partition =
+            "create table partitioned_table_2 partition of partitioned_table for values from (6) to (11) partition by range (id);";
+        Spi::run(create_partition).unwrap();
+
+        let create_partition =
+            "create table partitioned_table_2_1 partition of partitioned_table_2 for values from (6) to (11);";
+        Spi::run(create_partition).unwrap();
+
+        let insert_data = "insert into partitioned_table select i from generate_series(1, 10) i;";
+        Spi::run(insert_data).unwrap();
+
+        let copy_to_parquet = format!("copy partitioned_table to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let create_table = "create table copied_table(id int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_parquet = format!("copy copied_table from '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from_parquet).unwrap();
+
+        let result = Spi::get_one::<i64>(
+            "select count(*) from copied_table c
+             join partitioned_table p using (id);",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(result, 10);
+
+        let total_rows = Spi::get_one::<i64>("select count(*) from copied_table;")
+            .unwrap()
+            .unwrap();
+        assert_eq!(total_rows, 10);
+    }
+
+    // PG19 rejects system columns in the COPY FROM WHERE clause
+    #[cfg(not(pre_pg19))]
+    #[pg_test]
+    #[should_panic(expected = "system columns are not supported in COPY FROM WHERE conditions")]
+    fn test_copy_from_where_clause_with_system_column() {
+        let create_table = "create table test_table(id int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_to_parquet = format!(
+            "copy (select i as id from generate_series(1,5) i) to '{LOCAL_TEST_FILE_PATH}';"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let copy_from_parquet =
+            format!("copy test_table from '{LOCAL_TEST_FILE_PATH}' where ctid is not null;");
+        Spi::run(&copy_from_parquet).unwrap();
+    }
+
+    // a whole-row reference is not a system column reference
+    #[cfg(not(pre_pg19))]
+    #[pg_test]
+    fn test_copy_from_where_clause_with_whole_row_reference() {
+        let create_table = "create table test_table(id int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_to_parquet = format!(
+            "copy (select i as id from generate_series(1,5) i) to '{LOCAL_TEST_FILE_PATH}';"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let copy_from_parquet =
+            format!("copy test_table from '{LOCAL_TEST_FILE_PATH}' where test_table is not null;");
+        Spi::run(&copy_from_parquet).unwrap();
+
+        let total_rows = Spi::get_one::<i64>("select count(*) from test_table;")
+            .unwrap()
+            .unwrap();
+        assert_eq!(total_rows, 5);
     }
 
     #[pg_test]

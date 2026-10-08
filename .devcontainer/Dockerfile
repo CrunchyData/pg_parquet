@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND="noninteractive"
 ENV TZ="Europe/Istanbul"
 
-ARG PG_MAJOR=18
+ARG PG_MAJOR=19
 
 # install deps
 RUN apt-get update && apt-get -y install build-essential libreadline-dev zlib1g-dev      \
@@ -18,7 +18,8 @@ RUN echo "deb [arch=`dpkg --print-architecture` signed-by=/etc/apt/keyrings/micr
 RUN apt-get update && apt-get install -y azure-cli
 
 # install Postgres
-RUN sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+# the per-major component carries the beta packages for a major that is not GA yet
+RUN sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main ${PG_MAJOR}" > /etc/apt/sources.list.d/pgdg.list'
 RUN wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | apt-key add -
 RUN apt-get update && apt-get -y install postgresql-${PG_MAJOR}-postgis-3  \
                                          postgresql-server-dev-${PG_MAJOR} \

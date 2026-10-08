@@ -8,7 +8,8 @@ license-file = "LICENSE"
 crate-type = ["cdylib"]
 
 [features]
-default = ["pg18"]
+default = ["pg19"]
+pg19 = ["pgrx/pg19", "pgrx-tests/pg19"]
 pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
 pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]

@@ -45,7 +45,7 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 
 # set cargo-pgrx (should be the same as pgrx dep in Cargo.toml) and pg versions
 > export CARGO_PGRX_VERSION=0.19.3
-> export PG_MAJOR=18
+> export PG_MAJOR=19
 
 # install cargo-pgrx
 > cargo install --force --locked cargo-pgrx@"${CARGO_PGRX_VERSION}"
@@ -393,6 +393,7 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 | `bigint`          | INT64                     |                  |
 | `real`            | FLOAT                     |                  |
 | `oid`             | INT32                     |                  |
+| `oid8`(6)         | INT64                     | INTEGER(64,false)|
 | `double`          | DOUBLE                    |                  |
 | `numeric`(1)      | FIXED_LEN_BYTE_ARRAY(16)  | DECIMAL(128)     |
 | `text`            | BYTE_ARRAY                | STRING           |
@@ -425,6 +426,7 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 > - (3) The `timestamptz` and `timetz` types are adjusted to `UTC` when writing to Parquet files. They are converted back with `UTC` timezone when reading from Parquet files.
 > - (4) The `geometry` type is represented as `BYTE_ARRAY` encoded as `WKB`, specified by [geoparquet spec](https://geoparquet.org/releases/v1.1.0/), when `postgis` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
 > - (5) `crunchy_map` is dependent on functionality provided by [Crunchy Bridge](https://www.crunchydata.com/products/crunchy-bridge). The `crunchy_map` type is represented as `GROUP` with `MAP` logical type when `crunchy_map` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
+> - (6) The `oid8` type only exists on PostgreSQL 19 and later. It is written as an unsigned `INT64`, so its whole range round-trips.
 
 > [!WARNING]
 > Any type that does not have a corresponding Parquet type will be represented, as a fallback mechanism, as `BYTE_ARRAY` with `STRING` logical type. e.g. `enum`
@@ -438,3 +440,4 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 | 16                       |    ✅     |
 | 17                       |    ✅     |
 | 18                       |    ✅     |
+| 19                       |    ✅     |

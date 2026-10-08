@@ -138,7 +138,8 @@ pub(crate) fn execute_copy_from(
     let mut where_clause = copy_from_stmt_where_clause(p_stmt);
 
     if !where_clause.is_null() {
-        where_clause = copy_from_stmt_transform_where_clause(&p_state, &ns_item, where_clause);
+        where_clause =
+            copy_from_stmt_transform_where_clause(&p_state, &ns_item, &relation, where_clause);
     }
 
     check_copy_table_permission(p_stmt, &p_state, &ns_item, &relation);
@@ -194,6 +195,7 @@ fn copy_from_stmt_where_clause(p_stmt: &PgBox<PlannedStmt>) -> *mut Node {
 fn copy_from_stmt_transform_where_clause(
     p_state: &PgBox<ParseState>,
     ns_item: &PgBox<ParseNamespaceItem>,
+    relation: &PgRelation,
     where_clause: *mut Node,
 ) -> *mut Node {
     unsafe { addNSItemToQuery(p_state.as_ptr(), ns_item.as_ptr(), false, true, true) };
@@ -212,6 +214,13 @@ fn copy_from_stmt_transform_where_clause(
 
     unsafe { assign_expr_collations(p_state.as_ptr(), where_clause) };
 
+    #[cfg(not(pre_pg19))]
+    copy_from_stmt_ensure_no_system_column_in_where_clause(relation, where_clause);
+
+    // relation is only needed by the PG19 system column check above
+    #[cfg(pre_pg19)]
+    let _ = relation;
+
     let where_clause = unsafe { eval_const_expressions(std::ptr::null_mut(), where_clause) };
 
     let where_clause = unsafe { canonicalize_qual(where_clause as _, false) };
@@ -219,6 +228,56 @@ fn copy_from_stmt_transform_where_clause(
     let where_clause = unsafe { make_ands_implicit(where_clause as _) };
 
     where_clause as _
+}
+
+// copy_from_stmt_ensure_no_system_column_in_where_clause rejects system columns in the
+// COPY FROM WHERE clause. They are not filled in yet when the filter runs, so PG19 started
+// refusing them instead of silently reading whatever is in the slot.
+// Taken from PG COPY FROM code path.
+#[cfg(not(pre_pg19))]
+fn copy_from_stmt_ensure_no_system_column_in_where_clause(
+    relation: &PgRelation,
+    where_clause: *mut Node,
+) {
+    use pgrx::pg_sys::{
+        bms_del_member, bms_next_member, get_attname, pull_varattnos,
+        FirstLowInvalidHeapAttributeNumber,
+    };
+
+    let mut expr_attrs = std::ptr::null_mut();
+    unsafe { pull_varattnos(where_clause, 1, &mut expr_attrs) };
+
+    // a whole-row reference stands for all user columns, so it has no system column in it
+    let whole_row_attno = -FirstLowInvalidHeapAttributeNumber;
+    unsafe { expr_attrs = bms_del_member(expr_attrs, whole_row_attno) };
+
+    let mut member = -1;
+
+    loop {
+        member = unsafe { bms_next_member(expr_attrs, member) };
+
+        if member < 0 {
+            break;
+        }
+
+        let attno = member + FirstLowInvalidHeapAttributeNumber;
+
+        if attno >= 0 {
+            continue;
+        }
+
+        let attname = unsafe { get_attname(relation.oid(), attno as _, false) };
+        let attname = unsafe { CStr::from_ptr(attname) }
+            .to_str()
+            .expect("invalid attribute name");
+
+        ereport!(
+            PgLogLevel::ERROR,
+            PgSqlErrorCode::ERRCODE_INVALID_COLUMN_REFERENCE,
+            "system columns are not supported in COPY FROM WHERE conditions",
+            format!("Column \"{}\" is a system column.", attname),
+        );
+    }
 }
 
 // copy_from_stmt_ensure_row_level_security ensures that the relation does not have row-level
