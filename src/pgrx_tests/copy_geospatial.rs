@@ -228,7 +228,34 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_geo_geography_has_no_statistics() {
+    fn test_geo_geography_point_statistics() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        let test_table = TestTable::<Geography>::new("geography".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES
+               (ST_GeogFromText('POINT(1 2)')),
+               (ST_GeogFromText('MULTIPOINT(3 4, 5 6)'));",
+        );
+        test_table.assert_expected_and_result_rows();
+
+        // a geography of points has no edges, so its coordinates bound it
+        assert_eq!(logical_type_of("a"), Some("GEOGRAPHY".to_string()));
+        assert_eq!(
+            stats_geospatial_text("a"),
+            Some(
+                "{\"bbox\": {\"xmax\": 5.0, \"xmin\": 1.0, \"ymax\": 6.0, \"ymin\": 2.0}, \
+                 \"geospatial_types\": [1, 4]}"
+                    .to_string()
+            )
+        );
+    }
+
+    #[pg_test]
+    fn test_geo_geography_with_edges_has_no_bounding_box() {
         if postgis_missing() {
             return;
         }
@@ -242,9 +269,51 @@ mod tests {
         );
         test_table.assert_expected_and_result_rows();
 
-        // parquet only accumulates geospatial statistics for the geometry logical type
+        // the geodesic edge of the linestring can leave the box that its endpoints give, so the
+        // column keeps its geometry types but loses its bounding box
         assert_eq!(logical_type_of("a"), Some("GEOGRAPHY".to_string()));
-        assert_eq!(stats_geospatial_text("a"), None);
+        assert_eq!(bbox_text("a"), Some("null".to_string()));
+        assert_eq!(geospatial_types_text("a"), Some("{1,2}".to_string()));
+    }
+
+    #[pg_test]
+    fn test_geo_geography_crossing_the_antimeridian() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        let test_table = TestTable::<Geography>::new("geography".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES
+               (ST_GeogFromText('POINT(179 1)')),
+               (ST_GeogFromText('POINT(-179 2)'));",
+        );
+        test_table.assert_expected_and_result_rows();
+
+        // the two points are two degrees apart across the antimeridian, and the box of their
+        // coordinates spans the rest of the world instead, which covers them but is not tight
+        assert_eq!(
+            bbox_text("a"),
+            Some("{\"xmax\": 179.0, \"xmin\": -179.0, \"ymax\": 2.0, \"ymin\": 1.0}".to_string())
+        );
+    }
+
+    #[pg_test]
+    fn test_geo_all_null_geography_column() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        let test_table = TestTable::<Geography>::new("geography".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (null), (null);");
+        test_table.assert_expected_and_result_rows();
+
+        assert_eq!(
+            stats_geospatial_text("a"),
+            Some("{\"bbox\": null, \"geospatial_types\": null}".to_string())
+        );
     }
 
     // ---------------------------------------------------------------- piece 2
@@ -289,7 +358,7 @@ mod tests {
         assert!(stats_geospatial_text("g1").is_some());
         assert!(stats_geospatial_text("g2").is_some());
         assert!(stats_geospatial_text("g3").is_some());
-        assert_eq!(stats_geospatial_text("gg1"), None);
+        assert!(stats_geospatial_text("gg1").is_some());
         assert_eq!(stats_geospatial_text("b"), None);
         assert_eq!(stats_geospatial_text("i"), None);
     }
@@ -339,12 +408,15 @@ mod tests {
         ))
         .unwrap()
         .unwrap();
-        // the nested geometry columns get their own statistics, the nested geography ones do not
+        // the nested geometry and geography columns each get their own statistics
         assert!(nested_stats.contains(
             "o.inner_geo.g={\\\"bbox\\\": {\\\"xmax\\\": 1.0, \\\"xmin\\\": 1.0, \
              \\\"ymax\\\": 2.0, \\\"ymin\\\": 2.0}"
         ));
-        assert!(nested_stats.contains("o.inner_geo.gg=-"));
+        assert!(nested_stats.contains(
+            "o.inner_geo.gg={\\\"bbox\\\": {\\\"xmax\\\": 3.0, \\\"xmin\\\": 3.0, \
+             \\\"ymax\\\": 4.0, \\\"ymin\\\": 4.0}"
+        ));
 
         Spi::run(
             "DROP TABLE IF EXISTS nested_result;
