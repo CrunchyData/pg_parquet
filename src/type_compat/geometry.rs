@@ -111,7 +111,7 @@ fn crs_for_srid(srid: i32) -> Option<String> {
 
     // spatial_ref_sys lives in the schema of the postgis extension, which is not necessarily in
     // the search path
-    let schema_name = get_postgis_context().ext_schema_name.as_ref()?;
+    let schema_name = quote_identifier(get_postgis_context().ext_schema_name.as_deref()?);
 
     // the scalar subquery makes the query return a single null row, rather than no row at all,
     // for an srid that spatial_ref_sys does not have
@@ -165,15 +165,33 @@ impl PostgisContext {
             )
         });
 
-        let geometry_to_wkb_funcoid = geometry_typoid.map(Self::to_wkb_funcoid);
+        let geometry_to_wkb_funcoid = geometry_typoid.map(|geometry_typoid| {
+            Self::to_wkb_funcoid(
+                Self::expect_ext_schema_name(&ext_schema_name),
+                geometry_typoid,
+            )
+        });
 
-        let geography_to_wkb_funcoid = geography_typoid.map(Self::to_wkb_funcoid);
+        let geography_to_wkb_funcoid = geography_typoid.map(|geography_typoid| {
+            Self::to_wkb_funcoid(
+                Self::expect_ext_schema_name(&ext_schema_name),
+                geography_typoid,
+            )
+        });
 
-        let geometry_from_wkb_funcoid =
-            postgis_ext_oid.map(|_| Self::from_wkb_funcoid("st_geomfromwkb"));
+        let geometry_from_wkb_funcoid = postgis_ext_oid.map(|_| {
+            Self::from_wkb_funcoid(
+                Self::expect_ext_schema_name(&ext_schema_name),
+                "st_geomfromwkb",
+            )
+        });
 
-        let geography_from_wkb_funcoid =
-            postgis_ext_oid.map(|_| Self::from_wkb_funcoid("st_geogfromwkb"));
+        let geography_from_wkb_funcoid = postgis_ext_oid.map(|_| {
+            Self::from_wkb_funcoid(
+                Self::expect_ext_schema_name(&ext_schema_name),
+                "st_geogfromwkb",
+            )
+        });
 
         Self {
             ext_schema_name,
@@ -186,6 +204,12 @@ impl PostgisContext {
         }
     }
 
+    fn expect_ext_schema_name(ext_schema_name: &Option<String>) -> &str {
+        ext_schema_name
+            .as_deref()
+            .expect("expected postgis is created")
+    }
+
     fn extension_schema_oid() -> Oid {
         Spi::get_one("SELECT extnamespace FROM pg_extension WHERE extname = 'postgis'")
             .expect("failed to get postgis extension schema")
@@ -195,37 +219,28 @@ impl PostgisContext {
     fn schema_name(schema_oid: Oid) -> String {
         let query = format!("SELECT nspname::text FROM pg_namespace WHERE oid = {schema_oid}");
 
-        let schema_name = Spi::get_one::<String>(&query)
+        Spi::get_one::<String>(&query)
             .expect("failed to get the name of the postgis extension schema")
-            .expect("postgis extension schema not found");
-
-        quote_identifier(schema_name)
+            .expect("postgis extension schema not found")
     }
 
-    fn to_wkb_funcoid(postgis_typoid: Oid) -> Oid {
-        unsafe {
-            let function_name = makeString("st_asbinary".as_pg_cstr());
-            let mut function_name_list = PgList::new();
-            function_name_list.push(function_name);
-
-            let mut arg_types = vec![postgis_typoid];
-
-            LookupFuncName(
-                function_name_list.as_ptr(),
-                1,
-                arg_types.as_mut_ptr(),
-                false,
-            )
-        }
+    fn to_wkb_funcoid(schema_name: &str, postgis_typoid: Oid) -> Oid {
+        Self::funcoid(schema_name, "st_asbinary", postgis_typoid)
     }
 
-    fn from_wkb_funcoid(from_wkb_func_name: &str) -> Oid {
-        unsafe {
-            let function_name = makeString(from_wkb_func_name.as_pg_cstr());
-            let mut function_name_list = PgList::new();
-            function_name_list.push(function_name);
+    fn from_wkb_funcoid(schema_name: &str, from_wkb_func_name: &str) -> Oid {
+        Self::funcoid(schema_name, from_wkb_func_name, BYTEAOID)
+    }
 
-            let mut arg_types = vec![BYTEAOID];
+    // the function names are qualified with the extension schema since postgis is not
+    // necessarily on the search path
+    fn funcoid(schema_name: &str, func_name: &str, arg_typoid: Oid) -> Oid {
+        unsafe {
+            let mut function_name_list = PgList::new();
+            function_name_list.push(makeString(schema_name.as_pg_cstr()));
+            function_name_list.push(makeString(func_name.as_pg_cstr()));
+
+            let mut arg_types = vec![arg_typoid];
 
             LookupFuncName(
                 function_name_list.as_ptr(),
