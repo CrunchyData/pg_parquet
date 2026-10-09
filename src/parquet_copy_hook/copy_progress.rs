@@ -60,6 +60,13 @@ pub(crate) fn update_copy_to_progress(tuples_processed: i64, bytes_processed: i6
     }
 }
 
+// update_copy_to_tuples_progress reports only the tuples that our dest receiver collected.
+pub(crate) fn update_copy_to_tuples_progress(tuples_processed: i64) {
+    unsafe {
+        pgstat_progress_update_param(PROGRESS_COPY_TUPLES_PROCESSED as i32, tuples_processed)
+    };
+}
+
 // update_copy_from_bytes_total reports the size of the binary copy stream that our parquet
 // reader feeds to Postgres. Postgres leaves it at 0 for a callback source since only the
 // callback can know how much data is left.

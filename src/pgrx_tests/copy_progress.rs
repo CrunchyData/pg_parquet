@@ -96,6 +96,18 @@ mod tests {
         assert_eq!(0, decreasing_samples);
     }
 
+    // the reported bytes_total is an estimation for a COPY FROM, but the already processed
+    // bytes may never exceed it
+    fn assert_sampled_bytes_processed_within_total() {
+        let overflowing_samples = Spi::get_one::<i64>(
+            "SELECT count(*) FROM copy_progress_samples WHERE bytes_processed > bytes_total",
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(0, overflowing_samples);
+    }
+
     fn assert_copy_progress_ended() {
         let active_copies = Spi::get_one::<i64>(
             "SELECT pg_stat_clear_snapshot();
@@ -228,6 +240,52 @@ mod tests {
 
         assert_eq!(vec!["COPY TO".to_string()], distinct_sampled("command"));
         assert_eq!(vec!["PROGRAM".to_string()], distinct_sampled("copy_type"));
+
+        assert_copy_progress_ended();
+    }
+
+    // the reported bytes_total for a COPY FROM is extrapolated from the rows that are read so
+    // far, so a file whose rows grow in size is the worst case for it
+    #[pg_test]
+    fn test_copy_from_progress_with_varying_row_sizes() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        let total_rows = 2000;
+        let small_rows = 1500;
+
+        // the first rows are 1 byte long and the rest are 1000 bytes long
+        let copy_to_command = format!(
+            "COPY (SELECT CASE WHEN i <= {small_rows} THEN repeat('x', 1) ELSE repeat('x', 1000) END AS a
+                   FROM generate_series(1, {total_rows}) i)
+             TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet, row_group_size 100)"
+        );
+        Spi::run(&copy_to_command).unwrap();
+
+        create_copy_progress_sampler();
+
+        Spi::run(
+            "CREATE TABLE test_result (a text);
+
+             CREATE TRIGGER sample_copy_progress BEFORE INSERT ON test_result
+             FOR EACH ROW EXECUTE FUNCTION sample_copy_progress_trigger();",
+        )
+        .unwrap();
+
+        let copy_from_command =
+            format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet)");
+        Spi::run(&copy_from_command).unwrap();
+
+        assert_eq!(total_rows, sample_count());
+
+        assert_sampled_bytes_processed_within_total();
+        assert_sampled_bytes_never_decrease();
+
+        // the estimation starts off too low but it is corrected after every record batch, so the
+        // last samples are close to the real size of the binary copy stream
+        let real_bytes_total =
+            19 + small_rows * (2 + 4 + 1) + (total_rows - small_rows) * (2 + 4 + 1000);
+        assert!(max_sampled("bytes_total") > real_bytes_total * 9 / 10);
+        assert!(max_sampled("bytes_total") <= real_bytes_total);
 
         assert_copy_progress_ended();
     }

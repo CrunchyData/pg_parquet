@@ -14,11 +14,14 @@ use crate::arrow_parquet::{
 };
 
 use super::{
-    copy_progress::update_copy_to_progress,
+    copy_progress::{update_copy_to_progress, update_copy_to_tuples_progress},
     copy_to_dest_receiver::{create_copy_to_parquet_dest_receiver, CopyToParquetDestReceiver},
 };
 
 pub(crate) const INVALID_FILE_SIZE_BYTES: i64 = 0;
+
+// number of the tuples that are collected before the written bytes are reported again
+const BYTES_PROGRESS_INTERVAL: i64 = 1024;
 
 #[repr(C)]
 struct CopyToParquetSplitDestReceiver {
@@ -127,6 +130,11 @@ impl CopyToParquetSplitDestReceiver {
         self.bytes_written_by_flushed_children + current_child_bytes
     }
 
+    // report_progress reports the tuples and the bytes that the receiver collected so far
+    fn report_progress(&self) {
+        update_copy_to_progress(self.tuples_processed, self.bytes_written());
+    }
+
     fn should_flush_child(&self) -> bool {
         if self.options.file_size_bytes == INVALID_FILE_SIZE_BYTES {
             return false;
@@ -212,12 +220,16 @@ extern "C-unwind" fn copy_split_receive(
 
     if split_parquet_dest.should_flush_child() {
         split_parquet_dest.flush_child();
-    }
 
-    update_copy_to_progress(
-        split_parquet_dest.tuples_processed,
-        split_parquet_dest.bytes_written(),
-    );
+        // the flush changed the written bytes, so they are worth reporting right away
+        split_parquet_dest.report_progress();
+    } else if split_parquet_dest.tuples_processed % BYTES_PROGRESS_INTERVAL == 0 {
+        split_parquet_dest.report_progress();
+    } else {
+        // asking the parquet writer for its size is not free, and the size only changes when a
+        // row group is written anyway, so only the tuples are reported for the tuples in between
+        update_copy_to_tuples_progress(split_parquet_dest.tuples_processed);
+    }
 
     true
 }
@@ -233,10 +245,7 @@ extern "C-unwind" fn copy_split_shutdown(dest: *mut DestReceiver) {
     split_parquet_dest.flush_child();
 
     // the footers are written by now, so the reported bytes are final
-    update_copy_to_progress(
-        split_parquet_dest.tuples_processed,
-        split_parquet_dest.bytes_written(),
-    );
+    split_parquet_dest.report_progress();
 }
 
 #[pg_guard]
