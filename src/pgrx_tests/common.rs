@@ -421,31 +421,3 @@ pub(crate) fn geospatial_crs_by_column() -> HashMap<String, Option<String>> {
 
     crs_by_column
 }
-
-// geospatial_statistics_of_first_column reads the bounding box, as (xmin, xmax, ymin, ymax), and
-// the geospatial types that parquet computed for the first column of the test file.
-#[allow(clippy::type_complexity)]
-pub(crate) fn geospatial_statistics_of_first_column(
-) -> (Option<(f64, f64, f64, f64)>, Option<Vec<i32>>) {
-    let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
-    let parquet_metadata = parquet_metadata_from_uri(&uri_info);
-
-    let column = parquet_metadata.row_group(0).column(0);
-
-    let geo_statistics = column
-        .geo_statistics()
-        .expect("expected geospatial statistics for the column");
-
-    let bbox = geo_statistics.bounding_box().map(|bbox| {
-        (
-            bbox.get_xmin(),
-            bbox.get_xmax(),
-            bbox.get_ymin(),
-            bbox.get_ymax(),
-        )
-    });
-
-    let geospatial_types = geo_statistics.geospatial_types().cloned();
-
-    (bbox, geospatial_types)
-}

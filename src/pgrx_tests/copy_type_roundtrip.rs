@@ -5,8 +5,8 @@ mod tests {
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
         extension_exists, extension_version, geospatial_crs_by_column,
-        geospatial_statistics_of_first_column, timetz_array_to_utc_time_array, timetz_to_utc_time,
-        TestResult, TestTable, LOCAL_TEST_FILE_PATH,
+        timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult, TestTable,
+        LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::fallback_to_text::FallbackToText;
     use crate::type_compat::geometry::{Geography, Geometry};
@@ -1246,25 +1246,53 @@ mod tests {
         Spi::run(query).unwrap();
 
         let copy_to_query = format!(
-            "COPY (SELECT ST_GeomFromText('POINT(1 2)') as a
+            "COPY (SELECT ST_GeomFromText('POINT(1 2)') as a, 1 as b
                    UNION ALL
-                   SELECT ST_GeomFromText('LINESTRING(3 4, 5 6)')
+                   SELECT ST_GeomFromText('LINESTRING(3 4, 5 6)'), 2
                   )
             TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);",
         );
         Spi::run(copy_to_query.as_str()).unwrap();
 
-        // parquet computes the bounding box and the geometry types of a geospatial column itself
-        let (bbox, geospatial_types) = geospatial_statistics_of_first_column();
+        // parquet computes the bounding box of a geospatial column itself, and parquet.metadata()
+        // exposes it as json
+        let bbox_query = format!(
+            "SELECT (stats_geospatial->'bbox')::text
+             FROM parquet.metadata('{LOCAL_TEST_FILE_PATH}')
+             WHERE path_in_schema = 'a';"
+        );
+        let bbox = Spi::get_one::<String>(&bbox_query).unwrap().unwrap();
 
-        assert_eq!(bbox, Some((1.0, 5.0, 2.0, 6.0)));
+        assert_eq!(
+            bbox,
+            "{\"xmax\": 5.0, \"xmin\": 1.0, \"ymax\": 6.0, \"ymin\": 2.0}"
+        );
 
-        let mut geospatial_types = geospatial_types.expect("expected the geometry types");
-        geospatial_types.sort();
+        // parquet also records which geometry types the column contains. 1 is point and 2 is
+        // linestring, see https://github.com/apache/parquet-format/blob/master/Geospatial.md
+        let geospatial_types_query = format!(
+            "SELECT array_agg(geospatial_type::int order by geospatial_type::int)::text
+             FROM parquet.metadata('{LOCAL_TEST_FILE_PATH}'),
+                  jsonb_array_elements_text(stats_geospatial->'geospatial_types') geospatial_type
+             WHERE path_in_schema = 'a';"
+        );
+        let geospatial_types = Spi::get_one::<String>(&geospatial_types_query)
+            .unwrap()
+            .unwrap();
 
-        // 1 is point and 2 is linestring, see
-        // https://github.com/apache/parquet-format/blob/master/Geospatial.md
-        assert_eq!(geospatial_types, vec![1, 2]);
+        assert_eq!(geospatial_types, "{1,2}");
+
+        // columns that are not geospatial have no geospatial statistics
+        let non_geospatial_column_query = format!(
+            "SELECT stats_geospatial IS NULL
+             FROM parquet.metadata('{LOCAL_TEST_FILE_PATH}')
+             WHERE path_in_schema = 'b';"
+        );
+        let stats_geospatial_is_null = Spi::get_one::<bool>(&non_geospatial_column_query)
+            .unwrap()
+            .unwrap();
+
+        assert!(stats_geospatial_is_null);
     }
 
     #[pg_test]

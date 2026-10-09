@@ -192,6 +192,16 @@ SELECT stats_null_count, stats_distinct_count, stats_min, stats_max, compression
 (1 row)
 ```
 
+The `stats_geospatial` column reports the bounding box and the geometry types that Parquet computed for a geospatial column, as `jsonb`. It is `NULL` for the columns that have no geospatial statistics, which are all of the columns except the `geometry` ones. The geometry types are the ISO WKB codes that the [Parquet geospatial specification](https://github.com/apache/parquet-format/blob/master/Geospatial.md) lists, e.g. `1` is a point and `2` is a linestring. The `zmin`, `zmax`, `mmin` and `mmax` bounds are only reported for the geometries that have those dimensions.
+
+```sql
+SELECT path_in_schema, stats_geospatial FROM parquet.metadata('/tmp/geo_example.parquet') WHERE stats_geospatial IS NOT NULL;
+ path_in_schema |                                     stats_geospatial
+----------------+--------------------------------------------------------------------------------------------
+ location       | {"bbox": {"xmax": 5.0, "xmin": 1.0, "ymax": 6.0, "ymin": 2.0}, "geospatial_types": [1, 2]}
+(1 row)
+```
+
 You can call `SELECT * FROM parquet.file_metadata(<uri>)` to discover file level metadata of the Parquet file, such as format version, at given uri.
 
 ```sql
