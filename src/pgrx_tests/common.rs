@@ -384,7 +384,15 @@ pub(crate) fn extension_version(extension_name: &str) -> String {
 }
 
 pub(crate) fn write_record_batch_to_parquet(schema: SchemaRef, record_batch: RecordBatch) {
-    let file = File::create(LOCAL_TEST_FILE_PATH).unwrap();
+    write_record_batch_to_parquet_file(LOCAL_TEST_FILE_PATH, schema, record_batch);
+}
+
+pub(crate) fn write_record_batch_to_parquet_file(
+    path: &str,
+    schema: SchemaRef,
+    record_batch: RecordBatch,
+) {
+    let file = File::create(path).unwrap();
     let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
 
     writer.write(&record_batch).unwrap();

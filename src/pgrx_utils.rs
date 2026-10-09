@@ -2,10 +2,10 @@ use std::{collections::HashSet, ffi::CStr};
 
 use pgrx::{
     pg_sys::{
-        format_type_be, getBaseType, getBaseTypeAndTypmod, get_array_type, get_element_type,
-        get_extension_oid, lookup_rowtype_tupdesc, makeString, makeTypeNameFromNameList,
-        type_is_array, type_is_rowtype, typenameTypeIdAndMod, AsPgCStr, FormData_pg_attribute,
-        InvalidOid, LookupTypeNameOid, Oid,
+        format_type_with_typemod, getBaseType, getBaseTypeAndTypmod, get_array_type,
+        get_element_type, get_extension_oid, lookup_rowtype_tupdesc, makeString,
+        makeTypeNameFromNameList, type_is_array, type_is_rowtype, typenameTypeIdAndMod, AsPgCStr,
+        FormData_pg_attribute, InvalidOid, LookupTypeNameOid, Oid,
     },
     PgList, PgTupleDesc,
 };
@@ -113,8 +113,10 @@ pub(crate) fn extension_exists(extension_name: &str) -> bool {
     extension_oid != InvalidOid
 }
 
-pub(crate) fn get_type_name(typoid: Oid) -> String {
-    let typename = unsafe { format_type_be(typoid) };
+// get_type_name_with_typemod returns the formatted type name, including its
+// type modifier e.g. "numeric(10,2)".
+pub(crate) fn get_type_name_with_typemod(typoid: Oid, typmod: i32) -> String {
+    let typename = unsafe { format_type_with_typemod(typoid, typmod) };
     unsafe {
         CStr::from_ptr(typename)
             .to_str()

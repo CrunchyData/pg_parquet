@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow_cast::can_cast_types;
-use arrow_schema::{DataType, FieldRef, Schema};
+use arrow_schema::{DataType, Field, FieldRef, Schema};
 use pgrx::{
     ereport,
     pg_sys::{
@@ -163,7 +163,7 @@ fn is_coercible(
 
             let (entries_typoid, entries_typmod) = domain_array_base_elem_type(to_typoid);
 
-            is_coercible(
+            is_coercible_map_entries(
                 from_entries_field,
                 to_entries_field,
                 entries_typoid,
@@ -189,6 +189,46 @@ fn is_coercible(
     }
 }
 
+// is_coercible_map_entries checks if the map entries can be cast to the entries of
+// a crunchy_map type. Unlike structs, the key and the value fields are matched by position
+// since their names differ between the parquet writers e.g. "val" vs "value".
+fn is_coercible_map_entries(
+    from_entries_field: &FieldRef,
+    to_entries_field: &FieldRef,
+    to_typoid: Oid,
+    to_typmod: i32,
+) -> bool {
+    let (DataType::Struct(from_fields), DataType::Struct(to_fields)) =
+        (from_entries_field.data_type(), to_entries_field.data_type())
+    else {
+        return false;
+    };
+
+    if from_fields.len() != 2 || to_fields.len() != 2 {
+        return false;
+    }
+
+    let tupledesc = tuple_desc(to_typoid, to_typmod);
+
+    let attributes = collect_attributes_for(CollectAttributesFor::Other, &tupledesc);
+
+    for (from_field, (to_field, to_attribute)) in from_fields
+        .iter()
+        .zip(to_fields.iter().zip(attributes.iter()))
+    {
+        if !is_coercible(
+            from_field,
+            to_field,
+            to_attribute.type_oid().value(),
+            to_attribute.type_mod(),
+        ) {
+            return false;
+        }
+    }
+
+    true
+}
+
 // pg_type_for_arrow_primitive_field returns Postgres type for given
 // primitive arrow field. It returns InvalidOid if the arrow field's type is not recognized.
 pub(crate) fn pg_type_for_arrow_primitive_field(field: &FieldRef) -> (Oid, i32) {
@@ -205,26 +245,38 @@ pub(crate) fn pg_type_for_arrow_primitive_field(field: &FieldRef) -> (Oid, i32) 
         ),
         DataType::Boolean => (BOOLOID, -1),
         DataType::Date32 => (DATEOID, -1),
-        DataType::Time64(_) => (TIMEOID, -1),
+        DataType::Time32(_) | DataType::Time64(_) => (TIMEOID, -1),
         DataType::Timestamp(_, None) => (TIMESTAMPOID, -1),
         DataType::Timestamp(_, Some(_)) => (TIMESTAMPTZOID, -1),
-        DataType::Utf8 | DataType::LargeUtf8 if field.extension_type_name().is_none() => {
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            if field.extension_type_name().is_none() =>
+        {
             (TEXTOID, -1)
         }
-        DataType::Utf8 | DataType::LargeUtf8
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
             if field
                 .try_extension_type::<arrow_schema::extension::Json>()
                 .is_ok() =>
         {
             (JSONOID, -1)
         }
-        DataType::Binary | DataType::LargeBinary => (BYTEAOID, -1),
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => (BYTEAOID, -1),
         DataType::FixedSizeBinary(16)
             if field
                 .try_extension_type::<arrow_schema::extension::Uuid>()
                 .is_ok() =>
         {
             (UUIDOID, -1)
+        }
+        // dictionary encoding is transparent to Postgres, so we map the value type
+        DataType::Dictionary(_, value_type) => {
+            let value_field = Arc::new(Field::new(
+                field.name(),
+                value_type.as_ref().clone(),
+                field.is_nullable(),
+            ));
+
+            pg_type_for_arrow_primitive_field(&value_field)
         }
         _ => (InvalidOid, -1),
     }

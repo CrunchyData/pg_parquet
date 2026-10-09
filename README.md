@@ -144,7 +144,14 @@ SELECT * FROM product_inferred_example;
 
 > [!NOTE]
 > If the inferred column is of composite type, a new type will be created named as `parquet_structs.struct_<hash>`. Hash is determined by
-field types and names of the composite type.
+field types and names of the composite type. The type is created by the user that runs the command, so that user needs `CREATE` privilege
+on the `parquet_structs` schema, which the extension grants to `public`. The generated types are not dropped together with the table.
+
+> [!NOTE]
+> Postgres has no unsigned integers, so an unsigned column is inferred as the next wider type e.g. `uint32` as `bigint` and `uint64`
+> as `numeric(20,0)`. A `map` column requires the [crunchy_map](https://github.com/CrunchyData/postgres-map) extension. The command
+> errors out for a parquet type that has no Postgres counterpart e.g. `Duration` or `Decimal256`, in which case you can create the table
+> with explicit column definitions and then `COPY FROM` the parquet file.
 
 ### COPY from/to Parquet stdin/stdout to/from Postgres tables
 
