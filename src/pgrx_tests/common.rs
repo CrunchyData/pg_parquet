@@ -3,11 +3,13 @@ use std::marker::PhantomData;
 use std::path::Path;
 use std::{collections::HashMap, fmt::Debug};
 
+use crate::arrow_parquet::uri_utils::{parquet_metadata_from_uri, ParsedUriInfo};
 use crate::type_compat::map::Map;
 
 use arrow::array::RecordBatch;
 use arrow_schema::SchemaRef;
 use parquet::arrow::ArrowWriter;
+use parquet::basic::LogicalType;
 use pgrx::spi;
 use pgrx::{
     datum::{Time, TimeWithTimeZone},
@@ -396,4 +398,54 @@ pub(crate) fn create_crunchy_map_type(key_type: &str, val_type: &str) -> String 
 
     let command = format!("SELECT crunchy_map.create('{key_type}','{val_type}')::text;",);
     Spi::get_one(&command).unwrap().unwrap()
+}
+
+// geospatial_crs_by_column reads the crs that the parquet geospatial logical type of each
+// geospatial column of the test file stores. A None crs means that the column uses the default
+// crs of the parquet geospatial types, which is lon/lat on the WGS84 ellipsoid.
+pub(crate) fn geospatial_crs_by_column() -> HashMap<String, Option<String>> {
+    let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
+    let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+
+    let mut crs_by_column = HashMap::new();
+
+    for column in parquet_metadata.file_metadata().schema_descr().columns() {
+        let crs = match column.logical_type_ref() {
+            Some(LogicalType::Geometry(geometry_type)) => geometry_type.crs.clone(),
+            Some(LogicalType::Geography(geography_type)) => geography_type.crs.clone(),
+            _ => continue,
+        };
+
+        crs_by_column.insert(column.name().to_string(), crs);
+    }
+
+    crs_by_column
+}
+
+// geospatial_statistics_of_first_column reads the bounding box, as (xmin, xmax, ymin, ymax), and
+// the geospatial types that parquet computed for the first column of the test file.
+#[allow(clippy::type_complexity)]
+pub(crate) fn geospatial_statistics_of_first_column(
+) -> (Option<(f64, f64, f64, f64)>, Option<Vec<i32>>) {
+    let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
+    let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+
+    let column = parquet_metadata.row_group(0).column(0);
+
+    let geo_statistics = column
+        .geo_statistics()
+        .expect("expected geospatial statistics for the column");
+
+    let bbox = geo_statistics.bounding_box().map(|bbox| {
+        (
+            bbox.get_xmin(),
+            bbox.get_xmax(),
+            bbox.get_ymin(),
+            bbox.get_ymax(),
+        )
+    });
+
+    let geospatial_types = geo_statistics.geospatial_types().cloned();
+
+    (bbox, geospatial_types)
 }

@@ -5,10 +5,7 @@ use arrow_schema::SchemaRef;
 use object_store::buffered::BufWriter;
 use parquet::{
     arrow::AsyncArrowWriter,
-    file::{
-        metadata::KeyValue,
-        properties::{EnabledStatistics, WriterProperties},
-    },
+    file::properties::{EnabledStatistics, WriterProperties},
 };
 use pgrx::{heap_tuple::PgHeapTuple, AllocatedByRust, PgTupleDesc};
 
@@ -25,10 +22,7 @@ use crate::{
     object_store::object_store_error_message,
     parquet_copy_hook::copy_to_split_dest_receiver::CopyToParquetOptions,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
-    type_compat::{
-        geometry::{geoparquet_metadata_json_from_tupledesc, reset_postgis_context},
-        map::reset_map_context,
-    },
+    type_compat::{geometry::reset_postgis_context, map::reset_map_context},
     PG_BACKEND_TOKIO_RUNTIME,
 };
 
@@ -73,7 +67,7 @@ impl ParquetWriterContext {
 
         let schema = Arc::new(schema);
 
-        let writer_props = Self::writer_props(tupledesc, options);
+        let writer_props = Self::writer_props(options);
 
         let parquet_writer = parquet_writer_from_uri(&uri_info, schema.clone(), writer_props);
 
@@ -88,29 +82,19 @@ impl ParquetWriterContext {
         }
     }
 
-    fn writer_props(tupledesc: &PgTupleDesc, options: CopyToParquetOptions) -> WriterProperties {
+    fn writer_props(options: CopyToParquetOptions) -> WriterProperties {
         let compression = PgParquetCompressionWithLevel {
             compression: options.compression,
             compression_level: options.compression_level,
         };
 
-        let mut writer_props_builder = WriterProperties::builder()
+        WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Page)
             .set_compression(compression.into())
             .set_max_row_group_row_count(Some(options.row_group_size as usize))
             .set_writer_version(options.parquet_version.into())
-            .set_created_by("pg_parquet".to_string());
-
-        let geometry_columns_metadata_value = geoparquet_metadata_json_from_tupledesc(tupledesc);
-
-        if geometry_columns_metadata_value.is_some() {
-            let key_value_metadata = KeyValue::new("geo".into(), geometry_columns_metadata_value);
-
-            writer_props_builder =
-                writer_props_builder.set_key_value_metadata(Some(vec![key_value_metadata]));
-        }
-
-        writer_props_builder.build()
+            .set_created_by("pg_parquet".to_string())
+            .build()
     }
 
     // write_tuples writes the tuples to the parquet file. It flushes the in progress rows to a new row group

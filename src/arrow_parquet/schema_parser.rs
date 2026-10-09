@@ -23,7 +23,10 @@ use crate::{
         is_composite_type, is_generated_attribute, tuple_desc, CollectAttributesFor,
     },
     type_compat::{
-        geometry::is_postgis_geometry_type,
+        geometry::{
+            geography_wkb_type, geometry_wkb_type, is_postgis_geography_type,
+            is_postgis_geometry_type,
+        },
         map::is_map_type,
         pg_arrow_type_conversions::{
             extract_precision_and_scale_from_numeric_typmod, should_write_numeric_as_text,
@@ -416,7 +419,13 @@ fn parse_primitive_schema(
         }
         _ => {
             if is_postgis_geometry_type(typoid) {
+                // the GEOMETRY logical type, whose edges are planar like postgis's geometry type
                 Field::new(scalar_name, arrow::datatypes::DataType::Binary, nullable)
+                    .with_extension_type(geometry_wkb_type(typmod))
+            } else if is_postgis_geography_type(typoid) {
+                // the GEOGRAPHY logical type, whose edges are spherical like postgis's geography type
+                Field::new(scalar_name, arrow::datatypes::DataType::Binary, nullable)
+                    .with_extension_type(geography_wkb_type(typmod))
             } else {
                 Field::new(scalar_name, arrow::datatypes::DataType::Utf8, nullable)
             }

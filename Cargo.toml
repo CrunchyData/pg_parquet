@@ -41,7 +41,9 @@ parquet = {version = "60", default-features = false, features = [
     "zstd",
     "object_store",
     "arrow_canonical_extension_types",
+    "geospatial",
 ]}
+parquet-geospatial = "60"
 pgrx = "=0.19.3"
 rust-ini = "0.21"
 serde = "1"
