@@ -34,7 +34,7 @@ CREATE  FUNCTION parquet."metadata"(
 	"uri" TEXT,
 	"row_group_id" BIGINT,
 	"row_group_num_rows" BIGINT,
-	"row_group_num_columns" BIGINT
+	"row_group_num_columns" BIGINT,
 	"row_group_bytes" BIGINT,
 	"column_id" BIGINT,
 	"file_offset" BIGINT,
@@ -45,6 +45,7 @@ CREATE  FUNCTION parquet."metadata"(
 	"stats_distinct_count" BIGINT,
 	"stats_min" TEXT,
 	"stats_max" TEXT,
+	"stats_geospatial" JSONB,
 	"compression" TEXT,
 	"encodings" TEXT,
 	"index_page_offset" BIGINT,
