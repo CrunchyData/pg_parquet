@@ -1,8 +1,9 @@
 use std::ffi::{c_char, CStr};
 
 use pg_sys::{
-    standard_ProcessUtility, AsPgCStr, CommandTag, DestReceiver, ParamListInfoData, PlannedStmt,
-    ProcessUtility_hook, ProcessUtility_hook_type, QueryCompletion, QueryEnvironment,
+    copyObjectImpl, nodeToString, standard_ProcessUtility, AsPgCStr, CommandTag, CreateStmt,
+    DestReceiver, ParamListInfoData, PlannedStmt, ProcessUtility_hook, ProcessUtility_hook_type,
+    QueryCompletion, QueryEnvironment,
 };
 use pgrx::{prelude::*, GucSetting};
 
@@ -27,7 +28,14 @@ use super::{
     copy_utils::{
         copy_to_stmt_bloom_filter, copy_to_stmt_bloom_filter_fpp, copy_to_stmt_compression,
         copy_to_stmt_dictionary, copy_to_stmt_field_ids, copy_to_stmt_file_size_bytes,
-        copy_to_stmt_parquet_version, validate_copy_from_options, validate_copy_to_options,
+        copy_to_stmt_parquet_version, has_option, validate_copy_from_options,
+        validate_copy_to_options,
+    },
+    create_table::{
+        create_copy_from_parquet_stmt_for_table, create_stmt_get_uri,
+        create_stmt_remove_parquet_options, infer_column_definitions,
+        is_create_table_from_parquet_stmt, table_already_exists,
+        validate_create_table_from_parquet_stmt,
     },
 };
 
@@ -143,6 +151,104 @@ fn process_copy_from_parquet(
         .execute()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn call_next_process_utility(
+    p_stmt: *mut PlannedStmt,
+    query_string: &CStr,
+    read_only_tree: bool,
+    context: u32,
+    params: *mut ParamListInfoData,
+    query_env: *mut QueryEnvironment,
+    dest: *mut DestReceiver,
+    completion_tag: *mut QueryCompletion,
+) {
+    unsafe {
+        if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
+            prev_hook(
+                p_stmt,
+                query_string.as_ptr(),
+                read_only_tree,
+                context,
+                params,
+                query_env,
+                dest,
+                completion_tag,
+            )
+        } else {
+            standard_ProcessUtility(
+                p_stmt,
+                query_string.as_ptr(),
+                read_only_tree,
+                context,
+                params,
+                query_env,
+                dest,
+                completion_tag,
+            )
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_create_table_from_parquet(
+    p_stmt: &mut PgBox<PlannedStmt>,
+    query_string: &CStr,
+    context: u32,
+    params: *mut ParamListInfoData,
+    query_env: *mut QueryEnvironment,
+    dest: *mut DestReceiver,
+    completion_tag: *mut QueryCompletion,
+) {
+    let mut create_stmt = unsafe { PgBox::<CreateStmt>::from_pg(p_stmt.utilityStmt as _) };
+
+    validate_create_table_from_parquet_stmt(&create_stmt);
+
+    let load_from = has_option(create_stmt.options, "load_from");
+
+    let uri_info = create_stmt_get_uri(&create_stmt);
+
+    // remove pg_parquet specific options to make PG happy
+    create_stmt_remove_parquet_options(&mut create_stmt);
+
+    // Postgres skips the creation of an already existing table with "IF NOT EXISTS",
+    // so we should neither infer the columns nor load the file in that case.
+    let skip_creation = create_stmt.if_not_exists && table_already_exists(create_stmt.relation);
+
+    if !skip_creation {
+        let column_defs = infer_column_definitions(&uri_info);
+        create_stmt.tableElts = column_defs.into_pg();
+    }
+
+    // the tree is already our own copy, so it is safe to let the next hook reuse it
+    let read_only_tree = false;
+
+    call_next_process_utility(
+        p_stmt.as_ptr(),
+        query_string,
+        read_only_tree,
+        context,
+        params,
+        query_env,
+        dest,
+        completion_tag,
+    );
+
+    if load_from && !skip_creation {
+        let copy_from_stmt =
+            create_copy_from_parquet_stmt_for_table(create_stmt.relation, &uri_info);
+
+        let mut planned_stmt = p_stmt.clone();
+        planned_stmt.utilityStmt = copy_from_stmt.into_pg() as _;
+
+        let query_string = unsafe { nodeToString(planned_stmt.utilityStmt as _) };
+        let query_string = unsafe { CStr::from_ptr(query_string) };
+
+        process_copy_from_parquet(&planned_stmt, query_string, unsafe {
+            &PgBox::from_pg(query_env)
+        });
+    }
+}
+
 #[pg_guard]
 #[allow(clippy::too_many_arguments)]
 extern "C-unwind" fn parquet_copy_hook(
@@ -155,7 +261,7 @@ extern "C-unwind" fn parquet_copy_hook(
     dest: *mut DestReceiver,
     completion_tag: *mut QueryCompletion,
 ) {
-    let p_stmt = unsafe { PgBox::from_pg(p_stmt) };
+    let mut p_stmt = unsafe { PgBox::from_pg(p_stmt) };
     let query_string = unsafe { CStr::from_ptr(query_string) };
     let params = unsafe { PgBox::from_pg(params) };
     let query_env = unsafe { PgBox::from_pg(query_env) };
@@ -177,31 +283,34 @@ extern "C-unwind" fn parquet_copy_hook(
             completion_tag.commandTag = CommandTag::CMDTAG_COPY;
         }
         return;
+    } else if ENABLE_PARQUET_COPY_HOOK.get() && is_create_table_from_parquet_stmt(&p_stmt) {
+        // we rewrite the statement, so we need our own copy of the tree when the
+        // caller owns it. Otherwise, we would corrupt the cached plan of e.g. a
+        // plpgsql function, which would fail at its next execution.
+        if read_only_tree {
+            p_stmt = unsafe { PgBox::from_pg(copyObjectImpl(p_stmt.as_ptr() as _) as _) };
+        }
+
+        process_create_table_from_parquet(
+            &mut p_stmt,
+            query_string,
+            context,
+            params.as_ptr(),
+            query_env.as_ptr(),
+            dest,
+            completion_tag.as_ptr(),
+        );
+        return;
     }
 
-    unsafe {
-        if let Some(prev_hook) = PREV_PROCESS_UTILITY_HOOK {
-            prev_hook(
-                p_stmt.into_pg(),
-                query_string.as_ptr(),
-                read_only_tree,
-                context,
-                params.into_pg(),
-                query_env.into_pg(),
-                dest,
-                completion_tag.into_pg(),
-            )
-        } else {
-            standard_ProcessUtility(
-                p_stmt.into_pg(),
-                query_string.as_ptr(),
-                read_only_tree,
-                context,
-                params.into_pg(),
-                query_env.into_pg(),
-                dest,
-                completion_tag.into_pg(),
-            )
-        }
-    }
+    call_next_process_utility(
+        p_stmt.into_pg(),
+        query_string,
+        read_only_tree,
+        context,
+        params.into_pg(),
+        query_env.into_pg(),
+        dest,
+        completion_tag.into_pg(),
+    );
 }

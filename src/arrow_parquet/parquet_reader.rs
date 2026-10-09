@@ -23,9 +23,14 @@ use crate::{
     arrow_parquet::{
         arrow_to_pg::{context::collect_arrow_to_pg_attribute_contexts, to_pg_datum},
         field_ids::FieldIds,
-        schema_parser::{
-            error_if_copy_from_match_by_position_with_generated_columns,
-            parquet_schema_string_from_attributes,
+        schema::{
+            coerce_schema::{
+                ensure_file_schema_match_tupledesc_schema,
+                error_if_copy_from_match_by_position_with_generated_columns,
+            },
+            parse_schema::{
+                parquet_schema_string_from_attributes, parse_arrow_schema_from_attributes,
+            },
         },
     },
     object_store::object_store_error_message,
@@ -39,9 +44,6 @@ use crate::{
 use super::{
     arrow_to_pg::context::ArrowToPgAttributeContext,
     match_by::MatchBy,
-    schema_parser::{
-        ensure_file_schema_match_tupledesc_schema, parse_arrow_schema_from_attributes,
-    },
     uri_utils::{parquet_reader_from_uri, ParquetObjectStoreReader, ParsedUriInfo},
 };
 
