@@ -1,6 +1,7 @@
 use std::ffi::CStr;
 use std::sync::LazyLock;
 
+use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
 use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
 use pgrx::memcxt::PgMemoryContexts;
@@ -58,6 +59,8 @@ pub extern "C-unwind" fn _PG_init() {
     MarkGUCPrefixReserved("pg_parquet");
 
     init_parquet_copy_hook();
+
+    init_geospatial_stats_accumulator_factory();
 }
 
 /// This module is required by `cargo pgrx test` invocations.

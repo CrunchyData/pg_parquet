@@ -39,7 +39,8 @@ use super::{
     arrow_to_pg::context::ArrowToPgAttributeContext,
     match_by::MatchBy,
     schema_parser::{
-        ensure_file_schema_match_tupledesc_schema, parse_arrow_schema_from_attributes,
+        ensure_file_schema_match_tupledesc_schema, overlay_file_geospatial_crs,
+        parse_arrow_schema_from_attributes,
     },
     uri_utils::{parquet_reader_from_uri, ParquetObjectStoreReader, ParsedUriInfo},
 };
@@ -83,11 +84,17 @@ impl SingleParquetReader {
             match_by,
         );
 
-        let attribute_contexts = collect_arrow_to_pg_attribute_contexts(
+        // the tupledesc schema only knows the crs of the target columns, so the geometry and
+        // geography columns take the crs that the file has for them
+        let fields = overlay_file_geospatial_crs(
+            &reader.schema().clone(),
+            &tupledesc_schema,
             attributes,
-            &tupledesc_schema.fields,
-            Some(cast_to_types),
+            match_by,
         );
+
+        let attribute_contexts =
+            collect_arrow_to_pg_attribute_contexts(attributes, &fields, Some(cast_to_types));
 
         Ok(SingleParquetReader {
             reader,

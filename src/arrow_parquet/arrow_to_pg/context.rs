@@ -1,16 +1,20 @@
 use std::ops::Deref;
 
-use arrow_schema::{DataType, FieldRef, Fields};
+use arrow_schema::{DataType, Field, FieldRef, Fields};
 use pgrx::{
     pg_sys::{FormData_pg_attribute, Oid, NUMERICOID},
     PgTupleDesc,
 };
 
-use crate::type_compat::pg_arrow_type_conversions::extract_precision_and_scale_from_numeric_typmod;
+use crate::type_compat::{
+    geometry::{srid_for_arrow_field, srid_for_typmod},
+    pg_arrow_type_conversions::extract_precision_and_scale_from_numeric_typmod,
+};
 
 use super::{
     array_element_typoid, collect_attributes_for, domain_array_base_elem_type, is_array_type,
-    is_composite_type, is_map_type, is_postgis_geometry_type, tuple_desc, CollectAttributesFor,
+    is_composite_type, is_map_type, is_postgis_geography_type, is_postgis_geometry_type,
+    tuple_desc, CollectAttributesFor,
 };
 
 // ArrowToPgAttributeContext contains the information needed to convert an Arrow array
@@ -52,7 +56,7 @@ impl ArrowToPgAttributeContext {
             field.data_type().clone()
         };
 
-        let type_context = ArrowToPgAttributeTypeContext::new(typoid, typmod, &data_type);
+        let type_context = ArrowToPgAttributeTypeContext::new(typoid, typmod, &data_type, &field);
 
         Self {
             name: name.to_string(),
@@ -100,6 +104,8 @@ impl ArrowToPgAttributeContext {
 pub(crate) enum ArrowToPgAttributeTypeContext {
     Primitive {
         is_geometry: bool,
+        is_geography: bool,
+        srid: Option<i32>,
         precision: Option<u32>,
         scale: Option<u32>,
         timezone: Option<String>,
@@ -118,7 +124,7 @@ pub(crate) enum ArrowToPgAttributeTypeContext {
 
 impl ArrowToPgAttributeTypeContext {
     // constructors
-    fn new(typoid: Oid, typmod: i32, data_type: &DataType) -> Self {
+    fn new(typoid: Oid, typmod: i32, data_type: &DataType, field: &Field) -> Self {
         if is_array_type(typoid) {
             Self::new_array(typoid, typmod, data_type)
         } else if is_composite_type(typoid) {
@@ -126,11 +132,11 @@ impl ArrowToPgAttributeTypeContext {
         } else if is_map_type(typoid) {
             Self::new_map(typoid, data_type)
         } else {
-            Self::new_primitive(typoid, typmod, data_type)
+            Self::new_primitive(typoid, typmod, data_type, field)
         }
     }
 
-    fn new_primitive(typoid: Oid, typmod: i32, data_type: &DataType) -> Self {
+    fn new_primitive(typoid: Oid, typmod: i32, data_type: &DataType, field: &Field) -> Self {
         let (precision, scale) = if typoid == NUMERICOID {
             let (p, s) = extract_precision_and_scale_from_numeric_typmod(typmod);
             (Some(p), Some(s))
@@ -140,6 +146,16 @@ impl ArrowToPgAttributeTypeContext {
 
         let is_geometry = is_postgis_geometry_type(typoid);
 
+        let is_geography = is_postgis_geography_type(typoid);
+
+        // the srid that the geometries read from the file get: the one that the file's crs
+        // resolves to, or the one that the target column's type modifier says they have
+        let srid = if is_geometry || is_geography {
+            srid_for_arrow_field(field).or_else(|| srid_for_typmod(typmod))
+        } else {
+            None
+        };
+
         let timezone = match &data_type {
             DataType::Timestamp(_, Some(timezone)) => Some(timezone.to_string()),
             _ => None,
@@ -147,6 +163,8 @@ impl ArrowToPgAttributeTypeContext {
 
         Self::Primitive {
             is_geometry,
+            is_geography,
+            srid,
             precision,
             scale,
             timezone,
@@ -272,6 +290,20 @@ impl ArrowToPgAttributeTypeContext {
         match &self {
             ArrowToPgAttributeTypeContext::Primitive { is_geometry, .. } => *is_geometry,
             _ => false,
+        }
+    }
+
+    pub(crate) fn is_geography(&self) -> bool {
+        match &self {
+            ArrowToPgAttributeTypeContext::Primitive { is_geography, .. } => *is_geography,
+            _ => false,
+        }
+    }
+
+    pub(crate) fn srid(&self) -> Option<i32> {
+        match &self {
+            ArrowToPgAttributeTypeContext::Primitive { srid, .. } => *srid,
+            _ => None,
         }
     }
 }

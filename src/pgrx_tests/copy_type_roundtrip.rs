@@ -4,13 +4,12 @@ mod tests {
 
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
-        extension_exists, extension_version, timetz_array_to_utc_time_array, timetz_to_utc_time,
-        TestResult, TestTable, LOCAL_TEST_FILE_PATH,
+        extension_exists, extension_version, geospatial_crs_by_column,
+        timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult, TestTable,
+        LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::fallback_to_text::FallbackToText;
-    use crate::type_compat::geometry::{
-        Geometry, GeometryColumnsMetadata, GeometryEncoding, GeometryType,
-    };
+    use crate::type_compat::geometry::{Geography, Geometry};
     use crate::type_compat::map::Map;
     #[cfg(not(pre_pg19))]
     use crate::type_compat::oid8::Oid8;
@@ -1141,7 +1140,40 @@ mod tests {
     }
 
     #[pg_test]
-    fn test_geometry_geoparquet_metadata() {
+    fn test_geography() {
+        // Skip the test if postgis extension is not available
+        if !extension_exists("postgis") || *extension_version("postgis") < *"3.4" {
+            return;
+        }
+
+        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(query).unwrap();
+
+        let test_table = TestTable::<Geography>::new("geography".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (ST_GeogFromText('POINT(1 1)')),
+                                                       (ST_GeogFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')),
+                                                       (ST_GeogFromText('LINESTRING(0 0, 1 1)')),
+                                                       (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_geography_array() {
+        // Skip the test if postgis extension is not available
+        if !extension_exists("postgis") || *extension_version("postgis") < *"3.4" {
+            return;
+        }
+
+        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(query).unwrap();
+
+        let test_table = TestTable::<Vec<Option<Geography>>>::new("geography[]".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES (array[ST_GeogFromText('POINT(1 1)'), ST_GeogFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null), (array[]::geography[]);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_geospatial_logical_types() {
         // Skip the test if postgis extension is not available
         if !extension_exists("postgis") || *extension_version("postgis") < *"3.4" {
             return;
@@ -1151,104 +1183,116 @@ mod tests {
         Spi::run(query).unwrap();
 
         let copy_to_query = format!(
-            "COPY (SELECT ST_GeomFromText('POINT(1 1)')::geometry(point) as a,
-                          ST_GeomFromText('LINESTRING(0 0, 1 1)')::geometry(linestring) as b,
-                          ST_GeomFromText('POLYGON((0 0, 1 1, 2 2, 0 0))')::geometry(polygon) as c,
-                          ST_GeomFromText('MULTIPOINT((0 0), (1 1))')::geometry(multipoint) as d,
-                          ST_GeomFromText('MULTILINESTRING((0 0, 1 1), (2 2, 3 3))')::geometry(multilinestring) as e,
-                          ST_GeomFromText('MULTIPOLYGON(((0 0, 1 1, 2 2, 0 0)), ((3 3, 4 4, 5 5, 3 3)))')::geometry(multipolygon) as f,
-                          ST_GeomFromText('GEOMETRYCOLLECTION(POINT(1 1), LINESTRING(0 0, 1 1))')::geometry(geometrycollection) as g
+            "COPY (SELECT ST_GeomFromText('POINT(1 1)')::geometry(point) as no_srid,
+                          ST_SetSRID(ST_MakePoint(1, 2), 4326)::geometry(point, 4326) as lon_lat,
+                          ST_SetSRID(ST_MakePoint(1, 2), 3857)::geometry(point, 3857) as projected,
+                          ST_SetSRID(ST_MakePoint(1, 2), 990000)::geometry(point, 990000) as unregistered_srid,
+                          ST_GeogFromText('POINT(1 1)')::geography(point) as geog
                   )
             TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);",
         );
         Spi::run(copy_to_query.as_str()).unwrap();
 
-        // Check geoparquet metadata
-        let geoparquet_metadata_query = format!(
-            "select encode(value, 'escape')::jsonb
-            from parquet.kv_metadata('{LOCAL_TEST_FILE_PATH}')
-            where encode(key, 'escape') = 'geo';",
+        // parquet writes postgis geometry columns with its GEOMETRY logical type and postgis
+        // geography columns with its GEOGRAPHY logical type
+        let logical_types_query = format!(
+            "select array_agg(logical_type order by name)
+             from parquet.schema('{LOCAL_TEST_FILE_PATH}')
+             where logical_type is not null;",
         );
-        let geoparquet_metadata_json = Spi::get_one::<JsonB>(geoparquet_metadata_query.as_str())
+        let logical_types = Spi::get_one::<Vec<String>>(logical_types_query.as_str())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            logical_types,
+            vec!["GEOGRAPHY", "GEOMETRY", "GEOMETRY", "GEOMETRY", "GEOMETRY"]
+        );
+
+        // the crs of each column comes from the srid of its postgis type
+        let crs_by_column = geospatial_crs_by_column();
+
+        // a column without an srid gets the unset crs of the parquet geospatial spec
+        assert_eq!(
+            crs_by_column.get("no_srid"),
+            Some(&Some("srid:0".to_string()))
+        );
+
+        // lon/lat is the default crs of the parquet geospatial spec, so it is omitted
+        assert_eq!(crs_by_column.get("lon_lat"), Some(&None));
+
+        assert_eq!(
+            crs_by_column.get("projected"),
+            Some(&Some("EPSG:3857".to_string()))
+        );
+
+        // an srid that spatial_ref_sys does not have cannot be mapped to a crs
+        assert_eq!(
+            crs_by_column.get("unregistered_srid"),
+            Some(&Some("srid:0".to_string()))
+        );
+
+        // postgis geographies are in lon/lat, which is the default crs
+        assert_eq!(crs_by_column.get("geog"), Some(&None));
+    }
+
+    #[pg_test]
+    fn test_geospatial_statistics() {
+        // Skip the test if postgis extension is not available
+        if !extension_exists("postgis") || *extension_version("postgis") < *"3.4" {
+            return;
+        }
+
+        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
+        Spi::run(query).unwrap();
+
+        let copy_to_query = format!(
+            "COPY (SELECT ST_GeomFromText('POINT(1 2)') as a, 1 as b
+                   UNION ALL
+                   SELECT ST_GeomFromText('LINESTRING(3 4, 5 6)'), 2
+                  )
+            TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);",
+        );
+        Spi::run(copy_to_query.as_str()).unwrap();
+
+        // parquet computes the bounding box of a geospatial column itself, and parquet.metadata()
+        // exposes it as json
+        let bbox_query = format!(
+            "SELECT (stats_geospatial->'bbox')::text
+             FROM parquet.metadata('{LOCAL_TEST_FILE_PATH}')
+             WHERE path_in_schema = 'a';"
+        );
+        let bbox = Spi::get_one::<String>(&bbox_query).unwrap().unwrap();
+
+        assert_eq!(
+            bbox,
+            "{\"xmax\": 5.0, \"xmin\": 1.0, \"ymax\": 6.0, \"ymin\": 2.0}"
+        );
+
+        // parquet also records which geometry types the column contains. 1 is point and 2 is
+        // linestring, see https://github.com/apache/parquet-format/blob/master/Geospatial.md
+        let geospatial_types_query = format!(
+            "SELECT array_agg(geospatial_type::int order by geospatial_type::int)::text
+             FROM parquet.metadata('{LOCAL_TEST_FILE_PATH}'),
+                  jsonb_array_elements_text(stats_geospatial->'geospatial_types') geospatial_type
+             WHERE path_in_schema = 'a';"
+        );
+        let geospatial_types = Spi::get_one::<String>(&geospatial_types_query)
             .unwrap()
             .unwrap();
 
-        let geoparquet_metadata: GeometryColumnsMetadata =
-            serde_json::from_value(geoparquet_metadata_json.0).unwrap();
+        assert_eq!(geospatial_types, "{1,2}");
 
-        // assert common metadata
-        assert_eq!(geoparquet_metadata.version, "1.1.0");
-        assert_eq!(geoparquet_metadata.primary_column, "a");
+        // columns that are not geospatial have no geospatial statistics
+        let non_geospatial_column_query = format!(
+            "SELECT stats_geospatial IS NULL
+             FROM parquet.metadata('{LOCAL_TEST_FILE_PATH}')
+             WHERE path_in_schema = 'b';"
+        );
+        let stats_geospatial_is_null = Spi::get_one::<bool>(&non_geospatial_column_query)
+            .unwrap()
+            .unwrap();
 
-        // point
-        assert_eq!(
-            geoparquet_metadata.columns.get("a").unwrap().encoding,
-            GeometryEncoding::WKB
-        );
-        assert_eq!(
-            geoparquet_metadata.columns.get("a").unwrap().geometry_types,
-            vec![GeometryType::Point]
-        );
-
-        // linestring
-        assert_eq!(
-            geoparquet_metadata.columns.get("b").unwrap().encoding,
-            GeometryEncoding::WKB
-        );
-        assert_eq!(
-            geoparquet_metadata.columns.get("b").unwrap().geometry_types,
-            vec![GeometryType::LineString]
-        );
-
-        // polygon
-        assert_eq!(
-            geoparquet_metadata.columns.get("c").unwrap().encoding,
-            GeometryEncoding::WKB
-        );
-        assert_eq!(
-            geoparquet_metadata.columns.get("c").unwrap().geometry_types,
-            vec![GeometryType::Polygon]
-        );
-
-        // multipoint
-        assert_eq!(
-            geoparquet_metadata.columns.get("d").unwrap().encoding,
-            GeometryEncoding::WKB
-        );
-        assert_eq!(
-            geoparquet_metadata.columns.get("d").unwrap().geometry_types,
-            vec![GeometryType::MultiPoint]
-        );
-
-        // multilinestring
-        assert_eq!(
-            geoparquet_metadata.columns.get("e").unwrap().encoding,
-            GeometryEncoding::WKB
-        );
-        assert_eq!(
-            geoparquet_metadata.columns.get("e").unwrap().geometry_types,
-            vec![GeometryType::MultiLineString]
-        );
-
-        // multipolygon
-        assert_eq!(
-            geoparquet_metadata.columns.get("f").unwrap().encoding,
-            GeometryEncoding::WKB
-        );
-        assert_eq!(
-            geoparquet_metadata.columns.get("f").unwrap().geometry_types,
-            vec![GeometryType::MultiPolygon]
-        );
-
-        // geometrycollection
-        assert_eq!(
-            geoparquet_metadata.columns.get("g").unwrap().encoding,
-            GeometryEncoding::WKB
-        );
-        assert_eq!(
-            geoparquet_metadata.columns.get("g").unwrap().geometry_types,
-            vec![GeometryType::GeometryCollection]
-        );
+        assert!(stats_geospatial_is_null);
     }
 
     #[pg_test]

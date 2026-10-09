@@ -192,6 +192,16 @@ SELECT stats_null_count, stats_distinct_count, stats_min, stats_max, compression
 (1 row)
 ```
 
+The `stats_geospatial` column reports the bounding box and the geometry types that Parquet computed for a geospatial column, as `jsonb`. It is `NULL` for the columns that have no geospatial statistics, which are all of the columns except the `geometry` and `geography` ones. The geometry types are the ISO WKB codes that the [Parquet geospatial specification](https://github.com/apache/parquet-format/blob/master/Geospatial.md) lists, e.g. `1` is a point and `2` is a linestring. The `zmin`, `zmax`, `mmin` and `mmax` bounds are only reported for the geometries that have those dimensions. A `geometry` column is also reported as `NULL` when it contains a PostGIS type that the Parquet geospatial specification does not cover, e.g. a curved, triangulated or polyhedral one, since those cannot be bounded. A `geography` column always reports its geometry types, but its bounding box is only reported when all of its geometries are points: the edges of a `geography` are geodesics, which can reach beyond the box that the coordinates of their endpoints give.
+
+```sql
+SELECT path_in_schema, stats_geospatial FROM parquet.metadata('/tmp/geo_example.parquet') WHERE stats_geospatial IS NOT NULL;
+ path_in_schema |                                     stats_geospatial
+----------------+--------------------------------------------------------------------------------------------
+ location       | {"bbox": {"xmax": 5.0, "xmin": 1.0, "ymax": 6.0, "ymin": 2.0}, "geospatial_types": [1, 2]}
+(1 row)
+```
+
 You can call `SELECT * FROM parquet.file_metadata(<uri>)` to discover file level metadata of the Parquet file, such as format version, at given uri.
 
 ```sql
@@ -450,7 +460,8 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 | `timestamptz` (3) | INT64                     | TIMESTAMP_MICROS |
 | `time`            | INT64                     | TIME_MICROS      |
 | `timetz`(3)       | INT64                     | TIME_MICROS      |
-| `geometry`(4)     | BYTE_ARRAY                |                  |
+| `geometry`(4)     | BYTE_ARRAY                | GEOMETRY         |
+| `geography`(4)    | BYTE_ARRAY                | GEOGRAPHY        |
 
 ### Nested Types
 | PostgreSQL Type   | Parquet Physical Type     | Logical Type     |
@@ -468,7 +479,7 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 >    * `numeric` is allowed by Postgres. (precision and scale not specified). These are represented by a default precision (38) and scale (9) instead of writing them as string. You get runtime error if your table tries to read or write a numeric value which is not allowed by the default precision and scale (29 integral digits before decimal point, 9 digits after decimal point).
 > - (2) The `date` type is represented according to `Unix epoch` when writing to Parquet files. It is converted back according to `PostgreSQL epoch` when reading from Parquet files.
 > - (3) The `timestamptz` and `timetz` types are adjusted to `UTC` when writing to Parquet files. They are converted back with `UTC` timezone when reading from Parquet files.
-> - (4) The `geometry` type is represented as `BYTE_ARRAY` encoded as `WKB`, specified by [geoparquet spec](https://geoparquet.org/releases/v1.1.0/), when `postgis` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
+> - (4) The `geometry` and `geography` types are represented as `BYTE_ARRAY` encoded as `WKB` with the `GEOMETRY` and `GEOGRAPHY` logical types, specified by the [parquet geospatial spec](https://github.com/apache/parquet-format/blob/master/Geospatial.md), when `postgis` extension is created. Otherwise, they are represented as `BYTE_ARRAY` with `STRING` logical type. The `crs` of the logical type is taken from the `srid` of the column's type modifier, e.g. `geometry(point, 3857)` is written with the `EPSG:3857` crs. A column whose `srid` is lon/lat on the `WGS84` ellipsoid is written with the default crs of the spec, which is `OGC:CRS84`, and a column without an `srid` is written with the unset crs of the spec, which is `srid:0`. The bounding box and the geometry types of each column are written as geospatial statistics, except for the bounding box of a `geography` column that has edges, as described [above](#inspect-parquet-metadata). On read, the `srid` of the geometries is restored from the `crs` of the logical type, resolving its `authority:code` form through `spatial_ref_sys`, and falls back to the `srid` of the target column's type modifier when the file has no `crs`.
 > - (5) `crunchy_map` is dependent on functionality provided by [Crunchy Bridge](https://www.crunchydata.com/products/crunchy-bridge). The `crunchy_map` type is represented as `GROUP` with `MAP` logical type when `crunchy_map` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
 > - (6) The `oid8` type only exists on PostgreSQL 19 and later. It is written as an unsigned `INT64`, so its whole range round-trips.
 
