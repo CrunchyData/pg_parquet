@@ -29,6 +29,7 @@ use crate::{
         },
     },
     object_store::object_store_error_message,
+    parquet_copy_hook::copy_progress::update_copy_from_bytes_total,
     parquet_udfs::list::list_uri,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
     type_compat::{geometry::reset_postgis_context, map::reset_map_context},
@@ -48,6 +49,7 @@ pub(crate) struct SingleParquetReader {
     reader: ParquetRecordBatchStream<ParquetObjectStoreReader>,
     attribute_contexts: Vec<ArrowToPgAttributeContext>,
     match_by: MatchBy,
+    total_rows: i64,
 }
 
 impl Deref for SingleParquetReader {
@@ -71,7 +73,7 @@ impl SingleParquetReader {
         tupledesc_schema: SchemaRef,
         attributes: &[FormData_pg_attribute],
     ) -> Result<Self, String> {
-        let reader = parquet_reader_from_uri(uri_info)?;
+        let (reader, total_rows) = parquet_reader_from_uri(uri_info)?;
 
         // Ensure that the file schema matches the tupledesc schema.
         // Gets cast_to_types for each attribute if a cast is needed for the attribute's columnar array
@@ -93,6 +95,7 @@ impl SingleParquetReader {
             reader,
             attribute_contexts,
             match_by,
+            total_rows,
         })
     }
 
@@ -124,6 +127,10 @@ impl SingleParquetReader {
                 })
             })
             .collect()
+    }
+
+    fn total_rows(&self) -> i64 {
+        self.total_rows
     }
 
     fn attribute_count(&self) -> usize {
@@ -179,6 +186,10 @@ pub(crate) struct ParquetReaderContext {
     current_parquet_reader_idx: usize,
     binary_out_funcs: Vec<PgBox<FmgrInfo>>,
     per_row_memory_ctx: PgMemoryContexts,
+    total_rows: i64,
+    rows_copied: i64,
+    row_bytes_copied: i64,
+    stream_bytes_copied: i64,
 }
 
 impl ParquetReaderContext {
@@ -232,6 +243,11 @@ impl ParquetReaderContext {
 
         let per_row_memory_ctx = PgMemoryContexts::new("COPY FROM parquet per row memory context");
 
+        let total_rows = parquet_readers
+            .iter()
+            .map(|reader| reader.total_rows())
+            .sum();
+
         ParquetReaderContext {
             buffer: Vec::new(),
             offset: 0,
@@ -241,6 +257,10 @@ impl ParquetReaderContext {
             started: false,
             finished: false,
             per_row_memory_ctx,
+            total_rows,
+            rows_copied: 0,
+            row_bytes_copied: 0,
+            stream_bytes_copied: 0,
         }
     }
 
@@ -328,10 +348,14 @@ impl ParquetReaderContext {
             self.copy_finish();
         }
 
+        self.update_bytes_total();
+
         true
     }
 
     fn copy_row(&mut self, natts: i16, tuple_datums: Vec<Option<Datum>>) {
+        let buffer_len_before_row = self.buffer.len();
+
         unsafe {
             let mut old_ctx = self.per_row_memory_ctx.set_as_current();
 
@@ -364,10 +388,17 @@ impl ParquetReaderContext {
             old_ctx.set_as_current();
             self.per_row_memory_ctx.reset();
         };
+
+        let row_bytes = (self.buffer.len() - buffer_len_before_row) as i64;
+        self.row_bytes_copied += row_bytes;
+        self.stream_bytes_copied += row_bytes;
+        self.rows_copied += 1;
     }
 
     fn copy_start(&mut self) {
         self.started = true;
+
+        let buffer_len_before_header = self.buffer.len();
 
         /* Binary signature */
         let signature_bytes = b"\x50\x47\x43\x4f\x50\x59\x0a\xff\x0d\x0a\x00";
@@ -382,15 +413,44 @@ impl ParquetReaderContext {
         let header_ext_len = 0_i32;
         let header_ext_len_bytes = header_ext_len.to_be_bytes();
         self.buffer.extend_from_slice(&header_ext_len_bytes);
+
+        self.stream_bytes_copied += (self.buffer.len() - buffer_len_before_header) as i64;
     }
 
     fn copy_finish(&mut self) {
         self.finished = true;
 
+        let buffer_len_before_trailer = self.buffer.len();
+
         /* trailer */
         let trailer_len = -1_i16;
         let trailer_len_bytes = trailer_len.to_be_bytes();
         self.buffer.extend_from_slice(&trailer_len_bytes);
+
+        self.stream_bytes_copied += (self.buffer.len() - buffer_len_before_trailer) as i64;
+    }
+
+    // update_bytes_total reports the size of the binary copy stream that PG consumes to
+    // pg_stat_progress_copy. The exact size is only known once the last row is encoded, so it is
+    // extrapolated from the rows encoded so far and corrected after each record batch. It is
+    // already exact after the first batch for the files with fixed size rows.
+    fn update_bytes_total(&self) {
+        if self.finished {
+            update_copy_from_bytes_total(self.stream_bytes_copied);
+            return;
+        }
+
+        if self.rows_copied == 0 {
+            return;
+        }
+
+        let rows_left = (self.total_rows - self.rows_copied).max(0) as i128;
+
+        let bytes_left = self.row_bytes_copied as i128 * rows_left / self.rows_copied as i128;
+
+        let bytes_total = (self.stream_bytes_copied as i128 + bytes_left).min(i64::MAX as i128);
+
+        update_copy_from_bytes_total(bytes_total as i64);
     }
 
     // not_yet_copied_bytes returns the number of the bytes that are not yet consumed

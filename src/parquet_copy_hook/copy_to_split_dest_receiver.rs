@@ -13,11 +13,15 @@ use crate::arrow_parquet::{
     parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
 };
 
-use super::copy_to_dest_receiver::{
-    create_copy_to_parquet_dest_receiver, CopyToParquetDestReceiver,
+use super::{
+    copy_progress::{update_copy_to_progress, update_copy_to_tuples_progress},
+    copy_to_dest_receiver::{create_copy_to_parquet_dest_receiver, CopyToParquetDestReceiver},
 };
 
 pub(crate) const INVALID_FILE_SIZE_BYTES: i64 = 0;
+
+// number of the tuples that are collected before the written bytes are reported again
+const BYTES_PROGRESS_INTERVAL: i64 = 1024;
 
 #[repr(C)]
 struct CopyToParquetSplitDestReceiver {
@@ -30,6 +34,8 @@ struct CopyToParquetSplitDestReceiver {
     options: CopyToParquetOptions,
     current_child_id: i64,
     current_child_receiver: *mut CopyToParquetDestReceiver,
+    tuples_processed: i64,
+    bytes_written_by_flushed_children: i64,
 }
 
 #[repr(C)]
@@ -99,7 +105,34 @@ impl CopyToParquetSplitDestReceiver {
             }
         }
 
+        // the child's writer context is freed by its shutdown, so collect its final size now
+        let child_parquet_dest = unsafe {
+            PgBox::<CopyToParquetDestReceiver>::from_pg(self.current_child_receiver as _)
+        };
+        self.bytes_written_by_flushed_children += child_parquet_dest.total_bytes_written();
+
         self.current_child_receiver = std::ptr::null_mut();
+    }
+
+    // bytes_written returns the total size of the parquet file(s) that the children wrote
+    // so far. The file that the current child writes is still missing its footer.
+    fn bytes_written(&self) -> i64 {
+        let current_child_bytes = if self.current_child_receiver.is_null() {
+            0
+        } else {
+            let child_parquet_dest = unsafe {
+                PgBox::<CopyToParquetDestReceiver>::from_pg(self.current_child_receiver as _)
+            };
+
+            child_parquet_dest.collected_bytes() as i64
+        };
+
+        self.bytes_written_by_flushed_children + current_child_bytes
+    }
+
+    // report_progress reports the tuples and the bytes that the receiver collected so far
+    fn report_progress(&self) {
+        update_copy_to_progress(self.tuples_processed, self.bytes_written());
     }
 
     fn should_flush_child(&self) -> bool {
@@ -183,8 +216,19 @@ extern "C-unwind" fn copy_split_receive(
 
     split_parquet_dest.send_tuple_to_child(slot);
 
+    split_parquet_dest.tuples_processed += 1;
+
     if split_parquet_dest.should_flush_child() {
         split_parquet_dest.flush_child();
+
+        // the flush changed the written bytes, so they are worth reporting right away
+        split_parquet_dest.report_progress();
+    } else if split_parquet_dest.tuples_processed % BYTES_PROGRESS_INTERVAL == 0 {
+        split_parquet_dest.report_progress();
+    } else {
+        // asking the parquet writer for its size is not free, and the size only changes when a
+        // row group is written anyway, so only the tuples are reported for the tuples in between
+        update_copy_to_tuples_progress(split_parquet_dest.tuples_processed);
     }
 
     true
@@ -199,6 +243,9 @@ extern "C-unwind" fn copy_split_shutdown(dest: *mut DestReceiver) {
     };
 
     split_parquet_dest.flush_child();
+
+    // the footers are written by now, so the reported bytes are final
+    split_parquet_dest.report_progress();
 }
 
 #[pg_guard]
@@ -291,6 +338,8 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
     split_dest.operation = -1;
     split_dest.options = options;
     split_dest.current_child_id = 0;
+    split_dest.tuples_processed = 0;
+    split_dest.bytes_written_by_flushed_children = 0;
 
     unsafe { std::mem::transmute(split_dest) }
 }
