@@ -42,6 +42,7 @@ pub(crate) struct CopyToParquetDestReceiver {
     copy_memory_context: MemoryContext,
     row_group_memory_context: MemoryContext,
     parquet_writer_context: *mut ParquetWriterContext,
+    total_bytes_written: i64,
 }
 
 impl CopyToParquetDestReceiver {
@@ -103,6 +104,12 @@ impl CopyToParquetDestReceiver {
         current_parquet_writer_context.bytes_written()
     }
 
+    // total_bytes_written returns the size of the parquet file that the receiver wrote. It is
+    // only known after finish() since the writer context is freed by cleanup().
+    pub(crate) fn total_bytes_written(&self) -> i64 {
+        self.total_bytes_written
+    }
+
     fn write_tuples_to_parquet(&mut self) {
         debug_assert!(!self.tupledesc.is_null());
 
@@ -143,6 +150,8 @@ impl CopyToParquetDestReceiver {
         }
 
         current_parquet_writer_context.finalize();
+
+        self.total_bytes_written = current_parquet_writer_context.bytes_written() as i64;
     }
 
     fn copy_to_stdout(&self) {
@@ -421,6 +430,7 @@ pub(crate) extern "C-unwind" fn create_copy_to_parquet_dest_receiver(
     parquet_dest.copy_options = options;
     parquet_dest.row_group_memory_context = row_group_memory_context;
     parquet_dest.copy_memory_context = copy_memory_context;
+    parquet_dest.total_bytes_written = 0;
 
     parquet_dest.into_pg()
 }

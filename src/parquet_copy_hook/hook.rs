@@ -21,6 +21,7 @@ use crate::{
 
 use super::{
     copy_from::{execute_copy_from, pop_parquet_reader_context},
+    copy_progress::{end_copy_progress, start_copy_to_progress},
     copy_to::execute_copy_to_with_dest_receiver,
     copy_to_split_dest_receiver::free_copy_to_parquet_split_dest_receiver,
     copy_utils::{
@@ -91,6 +92,9 @@ fn process_copy_to_parquet(
     let parquet_split_dest = unsafe { PgBox::from_pg(parquet_split_dest) };
 
     PgTryBuilder::new(|| {
+        // our dest receiver reports the progress of the COPY TO itself
+        start_copy_to_progress(p_stmt);
+
         execute_copy_to_with_dest_receiver(
             p_stmt,
             query_string,
@@ -101,6 +105,8 @@ fn process_copy_to_parquet(
     })
     .catch_others(|cause| cause.rethrow())
     .finally(|| {
+        end_copy_progress();
+
         free_copy_to_parquet_split_dest_receiver(parquet_split_dest.as_ptr());
     })
     .execute()

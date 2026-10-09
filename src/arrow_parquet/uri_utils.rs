@@ -221,7 +221,7 @@ pub(crate) fn object_store_base_uri(uri: &Url) -> String {
 }
 
 pub(crate) fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaDescriptor {
-    let parquet_reader = parquet_reader_from_uri(uri_info).unwrap_or_else(|e| {
+    let (parquet_reader, _) = parquet_reader_from_uri(uri_info).unwrap_or_else(|e| {
         panic!(
             "failed to create parquet reader for uri {}: {}",
             uri_info.uri, e
@@ -265,9 +265,11 @@ pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<Parquet
 // default # of records per batch during arrow-parquet conversions (RecordBatch api)
 pub(crate) const RECORD_BATCH_SIZE: i64 = 1024;
 
+// parquet_reader_from_uri creates a reader for the given uri. It also returns the number of the
+// rows that the file has since the row count is only reachable from the reader's builder.
 pub(crate) fn parquet_reader_from_uri(
     uri_info: &ParsedUriInfo,
-) -> Result<ParquetRecordBatchStream<ParquetObjectStoreReader>, String> {
+) -> Result<(ParquetRecordBatchStream<ParquetObjectStoreReader>, i64), String> {
     let copy_from = true;
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
@@ -291,10 +293,14 @@ pub(crate) fn parquet_reader_from_uri(
 
         let batch_size = calculate_reader_batch_size(builder.metadata());
 
-        Ok(builder
+        let total_rows = builder.metadata().file_metadata().num_rows();
+
+        let reader = builder
             .with_batch_size(batch_size)
             .build()
-            .unwrap_or_else(|e| panic!("{}", e)))
+            .unwrap_or_else(|e| panic!("{}", e));
+
+        Ok((reader, total_rows))
     })
 }
 

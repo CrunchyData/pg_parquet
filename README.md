@@ -25,6 +25,7 @@ COPY table FROM 's3://mybucket/data.parquet' WITH (format 'parquet');
   - [Inspect Parquet metadata](#inspect-parquet-metadata)
   - [Inspect Parquet column statistics](#inspect-parquet-column-statistics)
   - [List and read Parquet files from uri pattern](#list-and-read-parquet-files-from-uri-pattern)
+  - [Monitor COPY progress](#monitor-copy-progress)
 - [Object Store Support](#object-store-support)
 - [Copy Options](#copy-options)
 - [Configuration](#configuration)
@@ -269,6 +270,23 @@ CREATE TABLE
 COPY test FROM 's3://testbucket/some/**/*.parquet';
 COPY 1000000
 ```
+
+### Monitor COPY progress
+
+The progress of an ongoing `COPY TO/FROM` a Parquet file is reported to the [pg_stat_progress_copy](https://www.postgresql.org/docs/current/progress-reporting.html#COPY-PROGRESS-REPORTING) view.
+
+```sql
+SELECT relid::regclass, command, type, bytes_processed, bytes_total, tuples_processed
+FROM pg_stat_progress_copy;
+ relid | command   | type     | bytes_processed | bytes_total | tuples_processed
+-------+-----------+----------+-----------------+-------------+------------------
+ test  | COPY FROM | CALLBACK |       318767104 |   390000021 |         31876709
+(1 row)
+```
+
+The byte counters mean different things for the two directions:
+- For `COPY TO`, `bytes_processed` is the number of the bytes that are already written to the Parquet file(s). `bytes_total` is not reported since the size of a Parquet file is not known before it is written.
+- For `COPY FROM`, `bytes_processed` and `bytes_total` count the bytes of the uncompressed binary stream that `pg_parquet` feeds to Postgres, which is unrelated to the size of the Parquet file. `bytes_total` is extrapolated from the rows that are read so far, so it is an estimation until the last row of the file is read.
 
 ## Object Store Support
 `pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage`, `http(s)` and `Google Cloud Storage` object stores.
