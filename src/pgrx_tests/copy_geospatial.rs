@@ -389,14 +389,16 @@ mod tests {
         );
         Spi::run(&copy_to_query).unwrap();
 
-        let nested_stats = Spi::get_one::<String>(&format!(
-            "SELECT array_agg(path_in_schema || '=' || coalesce(stats_geospatial::text, '-')
-                              order by path_in_schema)::text
-             FROM parquet.metadata('{LOCAL_TEST_FILE_PATH}')"
+        // the geometry inside the composite array keeps its own bounding box
+        let nested_bbox_written = Spi::get_one::<bool>(&format!(
+            "SELECT count(*) = 1
+             FROM parquet.metadata('{LOCAL_TEST_FILE_PATH}')
+             WHERE (stats_geospatial->'bbox'->>'xmin')::float8 = 1
+               AND (stats_geospatial->'bbox'->>'ymin')::float8 = 2"
         ))
         .unwrap()
         .unwrap();
-        pgrx::warning!("array of composite stats: {nested_stats}");
+        assert!(nested_bbox_written);
 
         Spi::run(
             "DROP TABLE IF EXISTS pairs_result;
@@ -601,7 +603,6 @@ mod tests {
         Spi::run(&copy_to_query).unwrap();
 
         let crs_by_column = geospatial_crs_by_column();
-        pgrx::warning!("srid matrix crs: {crs_by_column:?}");
 
         assert_eq!(
             crs_by_column.get("srid0"),
@@ -624,6 +625,9 @@ mod tests {
         assert_eq!(crs_by_column.get("geog_notypmod"), Some(&None));
     }
 
+    // postgis 3.6.4 crashes the backend in GetSysCacheOid for any geography whose srid is not
+    // 4326 when it runs on pg19, so the test cannot run there
+    #[cfg(not(feature = "pg19"))]
     #[pg_test]
     fn test_geo_geography_with_projected_srid() {
         if postgis_missing() {
