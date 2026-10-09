@@ -2,9 +2,11 @@
 mod tests {
     use std::{cmp::Ordering, collections::HashMap, path::Path};
 
+    use parquet::file::metadata::ColumnChunkMetaData;
     use pgrx::{pg_test, Spi};
 
     use crate::{
+        arrow_parquet::uri_utils::{parquet_metadata_from_uri, ParsedUriInfo},
         pgrx_tests::common::{
             create_crunchy_map_type, extension_exists, CopyOptionValue, FileCleanup, TestTable,
             LOCAL_TEST_FILE_PATH,
@@ -1278,5 +1280,200 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert!(lines[0].starts_with('{') && lines[0].contains("hello"));
         assert!(lines[1].starts_with('{'));
+    }
+
+    #[pg_test]
+    fn test_no_bloom_filter() {
+        create_test_table();
+
+        // the default is 'none'
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        assert!(columns_with_bloom_filter().is_empty());
+
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (bloom_filter 'none');");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        assert!(columns_with_bloom_filter().is_empty());
+    }
+
+    #[pg_test]
+    fn test_bloom_filter_for_all_columns() {
+        create_test_table();
+
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (bloom_filter 'all');");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        assert_eq!(
+            columns_with_bloom_filter(),
+            vec!["a", "b", "c.id", "c.name", "d.list.element"]
+        );
+    }
+
+    #[pg_test]
+    fn test_bloom_filter_for_selected_columns() {
+        create_test_table();
+
+        // a nested column expands to all of its leaf columns
+        let selected_columns = "{\"a\": true, \"c\": true, \"b\": false}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (bloom_filter '{selected_columns}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        assert_eq!(columns_with_bloom_filter(), vec!["a", "c.id", "c.name"]);
+    }
+
+    #[pg_test]
+    fn test_bloom_filter_fpp() {
+        create_test_table();
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (bloom_filter 'all', bloom_filter_fpp 0.001);"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        assert_eq!(
+            columns_with_bloom_filter(),
+            vec!["a", "b", "c.id", "c.name", "d.list.element"]
+        );
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "bloom_filter_fpp must be greater than 0 and less than 1")]
+    fn test_invalid_bloom_filter_fpp() {
+        create_test_table();
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (bloom_filter 'all', bloom_filter_fpp 1);"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "invalid value for \"bloom_filter\"")]
+    fn test_invalid_bloom_filter() {
+        create_test_table();
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (bloom_filter 'invalid_bloom_filter');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "column \"e\" in \"bloom_filter\" does not exist")]
+    fn test_bloom_filter_for_nonexistent_column() {
+        create_test_table();
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (bloom_filter '{{\"e\": true}}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    fn test_dictionary() {
+        create_test_table();
+
+        // the default is 'all'
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        assert_eq!(
+            columns_with_dictionary(),
+            vec!["a", "b", "c.id", "c.name", "d.list.element"]
+        );
+
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (dictionary 'none');");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        assert!(columns_with_dictionary().is_empty());
+    }
+
+    #[pg_test]
+    fn test_dictionary_for_selected_columns() {
+        create_test_table();
+
+        // the columns that are not selected keep the default, which is 'all'
+        let selected_columns = "{\"a\": false, \"c\": false}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (dictionary '{selected_columns}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        assert_eq!(columns_with_dictionary(), vec!["b", "d.list.element"]);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "invalid value for \"dictionary\"")]
+    fn test_invalid_dictionary() {
+        create_test_table();
+
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (dictionary 'invalid');");
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    fn test_bloom_filter_and_dictionary_roundtrip() {
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "bloom_filter".to_string(),
+            CopyOptionValue::StringOption("all".to_string()),
+        );
+        copy_options.insert(
+            "dictionary".to_string(),
+            CopyOptionValue::StringOption("none".to_string()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // create_test_table creates a table with a column of a primitive, a struct and a list type,
+    // to be able to tell the leaf columns that a selected column expands to
+    fn create_test_table() {
+        let setup_commands = "create type person as (id int, name text);
+                              create table test_table(a int, b text, c person, d int[]);
+                              insert into test_table
+                              select i, i::text, (i, i::text)::person, array[i, i]
+                              from generate_series(1, 10) i;";
+        Spi::run(setup_commands).unwrap();
+    }
+
+    // columns_with_bloom_filter returns the leaf columns that were written with a bloom filter
+    fn columns_with_bloom_filter() -> Vec<String> {
+        columns_matching(|column| column.bloom_filter_offset().is_some())
+    }
+
+    // columns_with_dictionary returns the leaf columns that were written with a dictionary
+    fn columns_with_dictionary() -> Vec<String> {
+        columns_matching(|column| column.dictionary_page_offset().is_some())
+    }
+
+    fn columns_matching(predicate: fn(&ColumnChunkMetaData) -> bool) -> Vec<String> {
+        let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
+
+        let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+
+        let mut column_paths = parquet_metadata
+            .row_group(0)
+            .columns()
+            .iter()
+            .filter(|column| predicate(column))
+            .map(|column| column.column_path().string())
+            .collect::<Vec<_>>();
+
+        column_paths.sort();
+
+        column_paths
     }
 }

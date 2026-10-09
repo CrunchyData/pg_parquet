@@ -1,5 +1,6 @@
 pub(crate) mod arrow_to_pg;
 pub(crate) mod arrow_utils;
+pub(crate) mod column_selection;
 pub(crate) mod compression;
 pub(crate) mod field_ids;
 pub(crate) mod match_by;

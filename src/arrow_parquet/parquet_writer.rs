@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow_schema::SchemaRef;
+use arrow_schema::{Schema, SchemaRef};
 use object_store::buffered::BufWriter;
 use parquet::{
     arrow::AsyncArrowWriter,
@@ -14,6 +14,7 @@ use pgrx::{heap_tuple::PgHeapTuple, AllocatedByRust, PgTupleDesc};
 
 use crate::{
     arrow_parquet::{
+        column_selection::leaf_column_paths,
         compression::PgParquetCompressionWithLevel,
         field_ids::validate_field_ids,
         pg_to_arrow::context::collect_pg_to_arrow_attribute_contexts,
@@ -33,6 +34,7 @@ use crate::{
 };
 
 use super::{
+    column_selection::ColumnSelection,
     field_ids::FieldIds,
     pg_to_arrow::{context::PgToArrowAttributeContext, to_arrow_array},
     uri_utils::ParsedUriInfo,
@@ -53,6 +55,8 @@ impl ParquetWriterContext {
         uri_info: ParsedUriInfo,
         options: CopyToParquetOptions,
         field_ids: FieldIds,
+        bloom_filter: ColumnSelection,
+        dictionary: ColumnSelection,
         tupledesc: &PgTupleDesc,
     ) -> ParquetWriterContext {
         // Postgis and Map contexts are used throughout writing the parquet file.
@@ -71,9 +75,18 @@ impl ParquetWriterContext {
 
         validate_field_ids(field_ids, &schema).unwrap_or_else(|e| panic!("{e}"));
 
-        let schema = Arc::new(schema);
+        bloom_filter
+            .validate_against_schema(&schema, "bloom_filter")
+            .unwrap_or_else(|e| panic!("{e}"));
 
-        let writer_props = Self::writer_props(tupledesc, options);
+        dictionary
+            .validate_against_schema(&schema, "dictionary")
+            .unwrap_or_else(|e| panic!("{e}"));
+
+        let writer_props =
+            Self::writer_props(tupledesc, &schema, options, &bloom_filter, &dictionary);
+
+        let schema = Arc::new(schema);
 
         let parquet_writer = parquet_writer_from_uri(&uri_info, schema.clone(), writer_props);
 
@@ -88,7 +101,13 @@ impl ParquetWriterContext {
         }
     }
 
-    fn writer_props(tupledesc: &PgTupleDesc, options: CopyToParquetOptions) -> WriterProperties {
+    fn writer_props(
+        tupledesc: &PgTupleDesc,
+        schema: &Schema,
+        options: CopyToParquetOptions,
+        bloom_filter: &ColumnSelection,
+        dictionary: &ColumnSelection,
+    ) -> WriterProperties {
         let compression = PgParquetCompressionWithLevel {
             compression: options.compression,
             compression_level: options.compression_level,
@@ -100,6 +119,29 @@ impl ParquetWriterContext {
             .set_max_row_group_row_count(Some(options.row_group_size as usize))
             .set_writer_version(options.parquet_version.into())
             .set_created_by("pg_parquet".to_string());
+
+        // bloom filters and dictionaries are set per leaf column rather than for all columns
+        // at once, so that a selection can enable them for some of the columns
+        for leaf_column_path in leaf_column_paths(schema) {
+            if let Some(enabled) = bloom_filter.enabled_for(&leaf_column_path) {
+                writer_props_builder = writer_props_builder
+                    .set_column_bloom_filter_enabled(leaf_column_path.clone(), enabled);
+
+                // setting the false positive probability also enables the bloom filter, so it
+                // is only set for the columns that have one
+                if enabled {
+                    writer_props_builder = writer_props_builder.set_column_bloom_filter_fpp(
+                        leaf_column_path.clone(),
+                        options.bloom_filter_fpp,
+                    );
+                }
+            }
+
+            if let Some(enabled) = dictionary.enabled_for(&leaf_column_path) {
+                writer_props_builder =
+                    writer_props_builder.set_column_dictionary_enabled(leaf_column_path, enabled);
+            }
+        }
 
         let geometry_columns_metadata_value = geoparquet_metadata_json_from_tupledesc(tupledesc);
 
