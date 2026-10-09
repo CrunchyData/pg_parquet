@@ -1,15 +1,17 @@
 use std::{ffi::CStr, str::FromStr};
 
+use parquet::file::properties::DEFAULT_BLOOM_FILTER_FPP;
 use pgrx::{
     ereport,
     ffi::c_char,
     is_a,
     pg_sys::{
-        addRangeTableEntryForRelation, defGetInt32, defGetInt64, defGetString, get_namespace_name,
-        get_rel_namespace, makeDefElem, makeString, make_parsestate, quote_qualified_identifier,
-        AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc, DefElem, List, NoLock, Node,
-        NodeTag::T_CopyStmt, Oid, ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment,
-        RangeVar, RangeVarGetRelidExtended, RowExclusiveLock, TupleDescInitEntry,
+        addRangeTableEntryForRelation, defGetInt32, defGetInt64, defGetNumeric, defGetString,
+        get_namespace_name, get_rel_namespace, makeDefElem, makeString, make_parsestate,
+        quote_qualified_identifier, AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc,
+        DefElem, List, NoLock, Node, NodeTag::T_CopyStmt, Oid, ParseNamespaceItem, ParseState,
+        PlannedStmt, QueryEnvironment, RangeVar, RangeVarGetRelidExtended, RowExclusiveLock,
+        TupleDescInitEntry,
     },
     PgBox, PgList, PgLogLevel, PgRelation, PgSqlErrorCode, PgTupleDesc,
 };
@@ -17,6 +19,7 @@ use url::Url;
 
 use crate::{
     arrow_parquet::{
+        column_selection::{ColumnSelection, DEFAULT_BLOOM_FILTER, DEFAULT_DICTIONARY},
         compression::{all_supported_compressions, PgParquetCompression},
         field_ids,
         match_by::MatchBy,
@@ -46,6 +49,9 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
             "compression",
             "compression_level",
             "parquet_version",
+            "bloom_filter",
+            "bloom_filter_fpp",
+            "dictionary",
             "freeze",
         ],
     );
@@ -168,6 +174,44 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
         };
 
         ParquetVersion::from_str(parquet_version).unwrap_or_else(|e| panic!("{}", e));
+    }
+
+    validate_column_selection_option(p_stmt, "bloom_filter");
+
+    validate_column_selection_option(p_stmt, "dictionary");
+
+    let bloom_filter_fpp_option = copy_stmt_get_option(p_stmt, "bloom_filter_fpp");
+
+    if !bloom_filter_fpp_option.is_null() {
+        let bloom_filter_fpp = unsafe { defGetNumeric(bloom_filter_fpp_option.as_ptr()) };
+
+        if bloom_filter_fpp <= 0. || bloom_filter_fpp >= 1. {
+            panic!("bloom_filter_fpp must be greater than 0 and less than 1");
+        }
+    }
+}
+
+fn validate_column_selection_option(p_stmt: &PgBox<PlannedStmt>, option_name: &str) {
+    let column_selection_option = copy_stmt_get_option(p_stmt, option_name);
+
+    if column_selection_option.is_null() {
+        return;
+    }
+
+    let column_selection = unsafe { defGetString(column_selection_option.as_ptr()) };
+
+    let column_selection = unsafe {
+        CStr::from_ptr(column_selection)
+            .to_str()
+            .unwrap_or_else(|_| panic!("{option_name} option is not a valid CString"))
+    };
+
+    if let Err(e) = ColumnSelection::from_str(column_selection) {
+        ereport!(
+            pgrx::PgLogLevel::ERROR,
+            pgrx::PgSqlErrorCode::ERRCODE_INVALID_JSON_TEXT,
+            format!("invalid value for \"{option_name}\": {e}"),
+        );
     }
 }
 
@@ -359,6 +403,38 @@ pub(crate) fn copy_to_stmt_parquet_version(p_stmt: &PgBox<PlannedStmt>) -> Parqu
         };
 
         ParquetVersion::from_str(parquet_version).unwrap_or_else(|e| panic!("{}", e))
+    }
+}
+
+pub(crate) fn copy_to_stmt_bloom_filter(p_stmt: &PgBox<PlannedStmt>) -> *const c_char {
+    copy_to_stmt_column_selection(p_stmt, "bloom_filter", DEFAULT_BLOOM_FILTER)
+}
+
+pub(crate) fn copy_to_stmt_dictionary(p_stmt: &PgBox<PlannedStmt>) -> *const c_char {
+    copy_to_stmt_column_selection(p_stmt, "dictionary", DEFAULT_DICTIONARY)
+}
+
+fn copy_to_stmt_column_selection(
+    p_stmt: &PgBox<PlannedStmt>,
+    option_name: &str,
+    default_column_selection: ColumnSelection,
+) -> *const c_char {
+    let column_selection_option = copy_stmt_get_option(p_stmt, option_name);
+
+    if column_selection_option.is_null() {
+        default_column_selection.to_string().as_pg_cstr()
+    } else {
+        unsafe { defGetString(column_selection_option.as_ptr()) }
+    }
+}
+
+pub(crate) fn copy_to_stmt_bloom_filter_fpp(p_stmt: &PgBox<PlannedStmt>) -> f64 {
+    let bloom_filter_fpp_option = copy_stmt_get_option(p_stmt, "bloom_filter_fpp");
+
+    if bloom_filter_fpp_option.is_null() {
+        DEFAULT_BLOOM_FILTER_FPP
+    } else {
+        unsafe { defGetNumeric(bloom_filter_fpp_option.as_ptr()) }
     }
 }
 

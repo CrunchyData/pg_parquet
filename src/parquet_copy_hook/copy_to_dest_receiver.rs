@@ -14,6 +14,7 @@ use pgrx::{prelude::*, FromDatum, PgList, PgMemoryContexts, PgTupleDesc};
 
 use crate::{
     arrow_parquet::{
+        column_selection::ColumnSelection,
         field_ids::FieldIds,
         parquet_writer::ParquetWriterContext,
         uri_utils::{ParsedUriInfo, RECORD_BATCH_SIZE},
@@ -239,6 +240,10 @@ pub(crate) extern "C-unwind" fn copy_startup(
     let field_ids = FieldIds::from_str(field_ids)
         .unwrap_or_else(|e| panic!("failed to parse field_ids from string '{field_ids}': {e}"));
 
+    let bloom_filter = column_selection(parquet_dest.copy_options.bloom_filter, "bloom_filter");
+
+    let dictionary = column_selection(parquet_dest.copy_options.dictionary, "dictionary");
+
     // leak the parquet writer context since it will be used during the COPY operation
     let mut copy_ctx = PgMemoryContexts::For(parquet_dest.copy_memory_context);
 
@@ -248,11 +253,25 @@ pub(crate) extern "C-unwind" fn copy_startup(
                 uri_info,
                 parquet_dest.copy_options,
                 field_ids,
+                bloom_filter,
+                dictionary,
                 &tupledesc,
             );
             parquet_dest.parquet_writer_context = Box::into_raw(Box::new(parquet_writer_context));
         });
     }
+}
+
+// column_selection parses a column selection option, like bloom_filter or dictionary,
+// that the dest receiver was given as a C string
+fn column_selection(column_selection: *const c_char, option_name: &str) -> ColumnSelection {
+    let column_selection = unsafe { CStr::from_ptr(column_selection) }
+        .to_str()
+        .unwrap_or_else(|_| panic!("{option_name} is not a valid C string"));
+
+    ColumnSelection::from_str(column_selection).unwrap_or_else(|e| {
+        panic!("failed to parse {option_name} from string '{column_selection}': {e}")
+    })
 }
 
 #[pg_guard]

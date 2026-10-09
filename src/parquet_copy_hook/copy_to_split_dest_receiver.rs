@@ -3,10 +3,12 @@ use std::{
     path::Path,
 };
 
+use parquet::file::properties::DEFAULT_BLOOM_FILTER_FPP;
 use pg_sys::{AsPgCStr, CommandDest, DestReceiver, TupleDesc, TupleTableSlot};
 use pgrx::prelude::*;
 
 use crate::arrow_parquet::{
+    column_selection::{DEFAULT_BLOOM_FILTER, DEFAULT_DICTIONARY},
     compression::{PgParquetCompression, INVALID_COMPRESSION_LEVEL},
     field_ids::FieldIds,
     parquet_version::ParquetVersion,
@@ -42,6 +44,9 @@ pub(crate) struct CopyToParquetOptions {
     pub(crate) compression: PgParquetCompression,
     pub(crate) compression_level: i32,
     pub(crate) parquet_version: ParquetVersion,
+    pub(crate) bloom_filter: *const c_char,
+    pub(crate) bloom_filter_fpp: f64,
+    pub(crate) dictionary: *const c_char,
 }
 
 impl CopyToParquetSplitDestReceiver {
@@ -221,6 +226,9 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
     compression: *const PgParquetCompression,
     compression_level: *const i32,
     parquet_version: *const ParquetVersion,
+    bloom_filter: *const c_char,
+    bloom_filter_fpp: *const f64,
+    dictionary: *const c_char,
 ) -> *mut DestReceiver {
     let file_size_bytes = if file_size_bytes.is_null() {
         INVALID_FILE_SIZE_BYTES
@@ -266,6 +274,24 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
         unsafe { *parquet_version }
     };
 
+    let bloom_filter = if bloom_filter.is_null() {
+        DEFAULT_BLOOM_FILTER.to_string().as_pg_cstr()
+    } else {
+        bloom_filter
+    };
+
+    let bloom_filter_fpp = if bloom_filter_fpp.is_null() {
+        DEFAULT_BLOOM_FILTER_FPP
+    } else {
+        unsafe { *bloom_filter_fpp }
+    };
+
+    let dictionary = if dictionary.is_null() {
+        DEFAULT_DICTIONARY.to_string().as_pg_cstr()
+    } else {
+        dictionary
+    };
+
     let options = CopyToParquetOptions {
         file_size_bytes,
         field_ids,
@@ -274,6 +300,9 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
         compression,
         compression_level,
         parquet_version,
+        bloom_filter,
+        bloom_filter_fpp,
+        dictionary,
     };
 
     let mut split_dest =
