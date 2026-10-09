@@ -6,22 +6,22 @@ use super::{ArrowArrayToPgType, ArrowToPgAttributeContext};
 
 // Geography
 impl ArrowArrayToPgType<Geography> for BinaryArray {
-    fn to_pg_type(self, _context: &ArrowToPgAttributeContext) -> Option<Geography> {
+    fn to_pg_type(self, context: &ArrowToPgAttributeContext) -> Option<Geography> {
         if self.is_null(0) {
             None
         } else {
-            Some(self.value(0).to_vec().into())
+            Some(Geography::new(self.value(0).to_vec(), context.srid()))
         }
     }
 }
 
 // Geography[]
 impl ArrowArrayToPgType<Vec<Option<Geography>>> for BinaryArray {
-    fn to_pg_type(self, _context: &ArrowToPgAttributeContext) -> Option<Vec<Option<Geography>>> {
+    fn to_pg_type(self, context: &ArrowToPgAttributeContext) -> Option<Vec<Option<Geography>>> {
         let mut vals = vec![];
         for val in self.iter() {
             if let Some(val) = val {
-                vals.push(Some(val.to_vec().into()));
+                vals.push(Some(Geography::new(val.to_vec(), context.srid())));
             } else {
                 vals.push(None);
             }

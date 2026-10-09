@@ -555,11 +555,12 @@ mod tests {
             "COPY geom_target FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
         ))
         .unwrap();
+        // a geography is lon/lat, so the geometry it is read into gets srid 4326
         assert_eq!(
             Spi::get_one::<String>("SELECT ST_AsEWKT(a) FROM geom_target")
                 .unwrap()
                 .unwrap(),
-            "POINT(1 2)"
+            "SRID=4326;POINT(1 2)"
         );
 
         // bytea target
@@ -625,6 +626,120 @@ mod tests {
         assert_eq!(crs_by_column.get("geog_notypmod"), Some(&None));
     }
 
+    #[pg_test]
+    fn test_geo_srid_restored_on_read() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        let copy_to_query = format!(
+            "COPY (SELECT ST_SetSRID(ST_MakePoint(1, 2), 4326)::geometry(point, 4326) as lonlat,
+                          ST_SetSRID(ST_MakePoint(1, 2), 4269)::geometry(point, 4269) as authority,
+                          ST_SetSRID(ST_MakePoint(1, 2), 998999)::geometry(point, 998999) as unknown_srid,
+                          ST_SetSRID(ST_MakePoint(1, 2), 4326) as no_typmod,
+                          ST_GeogFromText('POINT(1 2)')::geography(point, 4326) as geog
+                  )
+             TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to_query).unwrap();
+
+        Spi::run(
+            "DROP TABLE IF EXISTS srid_restore;
+             CREATE TABLE srid_restore (lonlat geometry, authority geometry,
+                                        unknown_srid geometry, no_typmod geometry,
+                                        geog geography);",
+        )
+        .unwrap();
+        Spi::run(&format!(
+            "COPY srid_restore FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let srids = Spi::get_one::<String>(
+            "SELECT format('%s,%s,%s,%s,%s', ST_SRID(lonlat), ST_SRID(authority),
+                                             ST_SRID(unknown_srid), ST_SRID(no_typmod),
+                                             ST_SRID(geog))
+             FROM srid_restore",
+        )
+        .unwrap()
+        .unwrap();
+
+        // the lon/lat crs is omitted in the file and comes back as "OGC:CRS84", the authority
+        // form resolves through spatial_ref_sys, and an srid that postgis cannot name is written
+        // as an unset crs, which leaves the geometry with the unknown srid
+        assert_eq!(srids, "4326,4269,0,0,4326");
+
+        let wkt = Spi::get_one::<String>("SELECT ST_AsText(authority) FROM srid_restore")
+            .unwrap()
+            .unwrap();
+        assert_eq!(wkt, "POINT(1 2)");
+
+        // the target column's own crs fills in for the columns whose crs the file leaves unset
+        Spi::run(
+            "DROP TABLE IF EXISTS srid_from_typmod;
+             CREATE TABLE srid_from_typmod (lonlat geometry(point, 4326),
+                                            authority geometry(point, 4269),
+                                            unknown_srid geometry(point, 998999),
+                                            no_typmod geometry(point, 3857),
+                                            geog geography(point, 4326));",
+        )
+        .unwrap();
+        Spi::run(&format!(
+            "COPY srid_from_typmod FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let srids = Spi::get_one::<String>(
+            "SELECT format('%s,%s,%s,%s,%s', ST_SRID(lonlat), ST_SRID(authority),
+                                             ST_SRID(unknown_srid), ST_SRID(no_typmod),
+                                             ST_SRID(geog))
+             FROM srid_from_typmod",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(srids, "4326,4269,998999,3857,4326");
+    }
+
+    #[pg_test]
+    fn test_geo_srid_restored_in_nested_types() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        Spi::run(
+            "DROP TYPE IF EXISTS geo_srid_pair CASCADE;
+             CREATE TYPE geo_srid_pair AS (g geometry(point, 3857), gg geography(point, 4326));
+             DROP TABLE IF EXISTS nested_srid;
+             CREATE TABLE nested_srid (gs geometry(point, 4269)[], pair geo_srid_pair);
+             INSERT INTO nested_srid
+             VALUES (array[ST_SetSRID(ST_MakePoint(1, 2), 4269)],
+                     row(ST_SetSRID(ST_MakePoint(3, 4), 3857),
+                         ST_GeogFromText('POINT(5 6)'))::geo_srid_pair);",
+        )
+        .unwrap();
+
+        let copy_to_query =
+            format!("COPY nested_srid TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
+        Spi::run(&copy_to_query).unwrap();
+
+        Spi::run("DELETE FROM nested_srid;").unwrap();
+        Spi::run(&format!(
+            "COPY nested_srid FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        // an array element and a composite field each carry their own crs
+        let srids = Spi::get_one::<String>(
+            "SELECT format('%s,%s,%s', ST_SRID(gs[1]), ST_SRID((pair).g), ST_SRID((pair).gg))
+             FROM nested_srid",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(srids, "4269,3857,4326");
+    }
+
     // postgis 3.6.4 crashes the backend in GetSysCacheOid for any geography whose srid is not
     // 4326 when it runs on pg19, so the test cannot run there
     #[cfg(not(feature = "pg19"))]
@@ -649,6 +764,22 @@ mod tests {
             crs_by_column.get("geog"),
             Some(&Some("EPSG:4269".to_string()))
         );
+
+        Spi::run(
+            "DROP TABLE IF EXISTS projected_geog;
+             CREATE TABLE projected_geog (geog geography);",
+        )
+        .unwrap();
+        Spi::run(&format!(
+            "COPY projected_geog FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        // st_geogfromwkb would have made it lon/lat, so the srid comes back through a geometry
+        let srid = Spi::get_one::<i32>("SELECT ST_SRID(geog) FROM projected_geog")
+            .unwrap()
+            .unwrap();
+        assert_eq!(srid, 4269);
     }
 
     #[pg_test]

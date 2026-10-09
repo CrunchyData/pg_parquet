@@ -6,8 +6,9 @@ use std::{
 
 use arrow::datatypes::{Field, Fields, Schema};
 use arrow_cast::can_cast_types;
-use arrow_schema::{DataType, FieldRef};
+use arrow_schema::{extension::ExtensionType, DataType, FieldRef};
 use parquet::arrow::{ArrowSchemaConverter, PARQUET_FIELD_ID_META_KEY};
+use parquet_geospatial::WkbType;
 use pg_sys::{
     can_coerce_type,
     CoercionContext::{self, COERCION_EXPLICIT},
@@ -589,6 +590,98 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
     }
 
     cast_to_types
+}
+
+// overlay_file_geospatial_crs returns the tupledesc schema fields with the crs that the file
+// reports for the same geometry and geography columns. The tupledesc schema only knows the crs of
+// the target columns, but the read path has to restore the srid that the file was written with.
+pub(crate) fn overlay_file_geospatial_crs(
+    file_schema: &Schema,
+    tupledesc_schema: &Schema,
+    attributes: &[FormData_pg_attribute],
+    match_by: MatchBy,
+) -> Fields {
+    tupledesc_schema
+        .fields()
+        .iter()
+        .zip(attributes.iter())
+        .map(|(tupledesc_schema_field, attribute)| {
+            let file_schema_field = match match_by {
+                MatchBy::Position => file_schema
+                    .fields()
+                    .get(attribute.attnum as usize - 1)
+                    .map(|file_schema_field| file_schema_field.as_ref()),
+                MatchBy::Name => file_schema
+                    .column_with_name(tupledesc_schema_field.name())
+                    .map(|(_, file_schema_field)| file_schema_field),
+            };
+
+            match file_schema_field {
+                Some(file_schema_field) => {
+                    with_file_geospatial_crs(tupledesc_schema_field, file_schema_field)
+                }
+                None => tupledesc_schema_field.clone(),
+            }
+        })
+        .collect()
+}
+
+// with_file_geospatial_crs gives the geometry and geography fields, at any nesting level, the
+// Arrow extension type that the file has for them, which is the one that carries the file's crs
+fn with_file_geospatial_crs(
+    tupledesc_schema_field: &FieldRef,
+    file_schema_field: &Field,
+) -> FieldRef {
+    if file_schema_field.extension_type_name() == Some(WkbType::NAME) {
+        let Ok(wkb_type) = file_schema_field.try_extension_type::<WkbType>() else {
+            return tupledesc_schema_field.clone();
+        };
+
+        let mut field = tupledesc_schema_field.as_ref().clone();
+
+        if field.try_with_extension_type(wkb_type).is_err() {
+            return tupledesc_schema_field.clone();
+        }
+
+        return Arc::new(field);
+    }
+
+    let data_type = match (
+        tupledesc_schema_field.data_type(),
+        file_schema_field.data_type(),
+    ) {
+        (DataType::List(tupledesc_item), DataType::List(file_item)) => {
+            DataType::List(with_file_geospatial_crs(tupledesc_item, file_item))
+        }
+        (DataType::Struct(tupledesc_fields), DataType::Struct(file_fields)) => DataType::Struct(
+            tupledesc_fields
+                .iter()
+                .map(|tupledesc_field| {
+                    match file_fields
+                        .iter()
+                        .find(|file_field| file_field.name() == tupledesc_field.name())
+                    {
+                        Some(file_field) => with_file_geospatial_crs(tupledesc_field, file_field),
+                        None => tupledesc_field.clone(),
+                    }
+                })
+                .collect::<Fields>(),
+        ),
+        (DataType::Map(tupledesc_entries, sorted), DataType::Map(file_entries, _)) => {
+            DataType::Map(
+                with_file_geospatial_crs(tupledesc_entries, file_entries),
+                *sorted,
+            )
+        }
+        _ => return tupledesc_schema_field.clone(),
+    };
+
+    Arc::new(
+        tupledesc_schema_field
+            .as_ref()
+            .clone()
+            .with_data_type(data_type),
+    )
 }
 
 // is_coercible first checks if "from_type" can be cast to "to_type" by arrow-cast.
