@@ -8,9 +8,9 @@ use arrow_schema::{DataType, TimeUnit};
 use context::ArrowToPgAttributeContext;
 use pgrx::{
     datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
-    pg_sys::{Datum, Oid, CHAROID, JSONBOID, JSONOID, TEXTOID, TIMEOID, UUIDOID},
+    pg_sys::{Datum, Oid, CHAROID, TEXTOID, TIMEOID, UUIDOID},
     prelude::PgHeapTuple,
-    AllocatedByRust, AnyNumeric, IntoDatum, Json, JsonB, Uuid,
+    AllocatedByRust, AnyNumeric, IntoDatum, Uuid,
 };
 
 use crate::{
@@ -38,8 +38,6 @@ pub(crate) mod geometry;
 pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
-pub(crate) mod json;
-pub(crate) mod jsonb;
 pub(crate) mod map;
 pub(crate) mod numeric;
 pub(crate) mod oid;
@@ -117,10 +115,6 @@ fn to_pg_nonarray_datum(
                 to_pg_datum!(StringArray, i8, primitive_array, attribute_context)
             } else if attribute_context.typoid() == TEXTOID {
                 to_pg_datum!(StringArray, String, primitive_array, attribute_context)
-            } else if attribute_context.typoid() == JSONOID {
-                to_pg_datum!(StringArray, Json, primitive_array, attribute_context)
-            } else if attribute_context.typoid() == JSONBOID {
-                to_pg_datum!(StringArray, JsonB, primitive_array, attribute_context)
             } else {
                 reset_fallback_to_text_context(
                     attribute_context.typoid(),
@@ -268,10 +262,6 @@ fn to_pg_array_datum(
                     list_array,
                     element_context
                 )
-            } else if element_context.typoid() == JSONOID {
-                to_pg_datum!(StringArray, Vec<Option<Json>>, list_array, element_context)
-            } else if element_context.typoid() == JSONBOID {
-                to_pg_datum!(StringArray, Vec<Option<JsonB>>, list_array, element_context)
             } else {
                 reset_fallback_to_text_context(element_context.typoid(), element_context.typmod());
 
