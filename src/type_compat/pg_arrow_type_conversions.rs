@@ -28,8 +28,35 @@ pub(crate) fn date_to_i32(date: Date) -> i32 {
 }
 
 pub(crate) fn i32_to_date(i32_date: i32) -> Date {
+    // PG's infinite dates are stored as the limits of the underlying i32
+    if i32_date == i32::MAX {
+        return Date::positive_infinity();
+    } else if i32_date == i32::MIN {
+        return Date::negative_infinity();
+    }
+
     // Parquet uses Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
-    unsafe { Date::from_pg_epoch_days(i32_date - 10957) }
+    let pg_epoch_days = i32_date
+        .checked_sub(10957)
+        .unwrap_or_else(|| error_out_of_range_temporal("date", i32_date as i64));
+
+    unsafe { Date::from_pg_epoch_days(pg_epoch_days) }
+}
+
+// Reports a parquet temporal value that Postgres cannot represent. Postgres stores
+// infinity as the limits of the underlying integer, which are handled separately.
+fn error_out_of_range_temporal(pg_type: &str, value: i64) -> ! {
+    ereport!(
+        pgrx::PgLogLevel::ERROR,
+        pgrx::PgSqlErrorCode::ERRCODE_DATETIME_FIELD_OVERFLOW,
+        format!(
+            "{} value {} in the parquet file is out of range for PostgreSQL \"{}\" type",
+            pg_type, value, pg_type
+        ),
+        "Consider excluding the column from the COPY FROM statement.",
+    );
+
+    unreachable!("ereport with ERROR level does not return")
 }
 
 pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> i64 {
@@ -55,7 +82,16 @@ pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> i64 {
 }
 
 pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Timestamp {
-    let timestamp: Timestamp = i64_timestamp.try_into().unwrap_or_else(|e| panic!("{}", e));
+    // PG's infinite timestamps are stored as the limits of the underlying i64
+    if i64_timestamp == i64::MAX {
+        return Timestamp::positive_infinity();
+    } else if i64_timestamp == i64::MIN {
+        return Timestamp::negative_infinity();
+    }
+
+    let timestamp: Timestamp = i64_timestamp
+        .try_into()
+        .unwrap_or_else(|_| error_out_of_range_temporal("timestamp", i64_timestamp));
 
     // Parquet uses Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
     let adjustment_interval = Interval::from_days(10957);
@@ -98,13 +134,20 @@ pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> i64 {
 }
 
 pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64, timezone: &str) -> TimestampWithTimeZone {
+    // PG's infinite timestamptzs are stored as the limits of the underlying i64
+    if i64_timestamptz == i64::MAX {
+        return TimestampWithTimeZone::positive_infinity();
+    } else if i64_timestamptz == i64::MIN {
+        return TimestampWithTimeZone::negative_infinity();
+    }
+
     let timestamp: Timestamp = i64_timestamptz
         .try_into()
-        .unwrap_or_else(|e| panic!("{}", e));
+        .unwrap_or_else(|_| error_out_of_range_temporal("timestamptz", i64_timestamptz));
 
     let timestamptz: TimestampWithTimeZone = (timestamp, timezone)
         .try_into()
-        .unwrap_or_else(|e| panic!("{}", e));
+        .unwrap_or_else(|_| error_out_of_range_temporal("timestamptz", i64_timestamptz));
 
     // Parquet uses Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
     let adjustment_interval = Interval::from_days(10957);
@@ -132,7 +175,9 @@ pub(crate) fn time_to_i64(time: Time) -> i64 {
 }
 
 pub(crate) fn i64_to_time(i64_time: i64) -> Time {
-    i64_time.try_into().unwrap_or_else(|e| panic!("{}", e))
+    i64_time
+        .try_into()
+        .unwrap_or_else(|_| error_out_of_range_temporal("time", i64_time))
 }
 
 pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> i64 {
@@ -172,7 +217,7 @@ pub(crate) fn i64_to_timetz(i64_timetz: i64) -> TimeWithTimeZone {
     let utc_tz = 0;
     (i64_timetz, utc_tz)
         .try_into()
-        .unwrap_or_else(|e| panic!("{}", e))
+        .unwrap_or_else(|_| error_out_of_range_temporal("timetz", i64_timetz))
 }
 
 fn error_if_special_numeric(numeric: AnyNumeric) {
