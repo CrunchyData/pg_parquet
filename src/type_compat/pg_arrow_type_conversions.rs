@@ -22,21 +22,22 @@ pub(crate) fn date_to_i32(date: Date) -> i32 {
         return NEG_INFINITY_DATE;
     }
 
-    // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
-    let adjusted_date: Date = unsafe {
-        direct_function_call(pg_sys::date_pli, &[date.into_datum(), 10957.into_datum()])
-            .expect("cannot adjust PG date to Unix date")
-    };
-
-    let adjusted_date_as_bytes: Vec<u8> = unsafe {
-        direct_function_call(pg_sys::date_send, &[adjusted_date.into_datum()])
+    let date_as_bytes: Vec<u8> = unsafe {
+        direct_function_call(pg_sys::date_send, &[date.into_datum()])
             .expect("cannot convert date to bytes")
     };
-    i32::from_be_bytes(
-        adjusted_date_as_bytes[0..4]
+
+    let pg_epoch_days = i32::from_be_bytes(
+        date_as_bytes[0..4]
             .try_into()
             .unwrap_or_else(|e| panic!("{}", e)),
-    )
+    );
+
+    // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days. The day
+    // count is shifted rather than the date itself, because PG date arithmetic cannot
+    // represent a date within 10957 days of its own maximum, while the day count of every
+    // PG date leaves room for the shift in an i32.
+    pg_epoch_days + 10957
 }
 
 pub(crate) fn i32_to_date(i32_date: i32) -> Date {

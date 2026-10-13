@@ -626,6 +626,17 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_date_limits() {
+        // the epoch shift to parquet's 1970 is a day count away from PG's own date
+        // arithmetic, which cannot represent a date within 10957 days of its maximum
+        let test_table = TestTable::<Date>::new("date".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('5874897-12-31'), ('5874868-01-01'), ('4713-01-01 BC');",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
     fn test_date_infinity() {
         let test_table = TestTable::<Date>::new("date".into());
         test_table.insert(
