@@ -3,6 +3,7 @@ use std::{borrow::BorrowMut, ffi::CStr};
 use once_cell::sync::OnceCell;
 use pgrx::{
     datum::UnboxDatum,
+    ereport,
     pg_sys::{
         fmgr_info, getTypeInputInfo, getTypeOutputInfo, AsPgCStr, Datum, FmgrInfo,
         InputFunctionCall, InvalidOid, Oid, OutputFunctionCall,
@@ -96,6 +97,18 @@ impl From<FallbackToText> for String {
 
 impl IntoDatum for FallbackToText {
     fn into_datum(self) -> Option<Datum> {
+        // the input function is called with a C string, which stops at a null byte. Postgres
+        // cannot store a null byte in a value either, so we reject it instead of silently
+        // truncating the value at it
+        if self.0.contains('\0') {
+            ereport!(
+                pgrx::PgLogLevel::ERROR,
+                pgrx::PgSqlErrorCode::ERRCODE_CHARACTER_NOT_IN_REPERTOIRE,
+                "string value in the parquet file contains a null byte, which PostgreSQL cannot store",
+                "Consider excluding the column from the COPY FROM statement.",
+            );
+        }
+
         let fallback_to_text_context = get_fallback_to_text_context();
 
         let datum = unsafe {
