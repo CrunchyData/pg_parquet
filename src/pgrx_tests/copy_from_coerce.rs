@@ -12,11 +12,12 @@ mod tests {
     };
     use arrow::array::{
         ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int8Array, LargeBinaryArray, LargeListArray,
-        LargeListViewArray, LargeStringArray, ListArray, ListViewArray, MapArray, NullArray,
-        RecordBatch, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
-        Time64MicrosecondArray, TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
+        Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray,
+        FixedSizeListArray, Float32Array, Float64Array, Int16Array, Int32Array, Int8Array,
+        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
+        ListViewArray, MapArray, NullArray, RecordBatch, StringArray, StringViewArray, StructArray,
+        Time32MillisecondArray, Time64MicrosecondArray, TimestampMicrosecondArray, UInt16Array,
+        UInt32Array, UInt64Array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::i256;
@@ -1212,6 +1213,188 @@ mod tests {
 
         let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_dictionary_of_fixed_len_byte_array_types() {
+        // DICTIONARY(INT32, BOOLEAN) => {bool}, DICTIONARY(INT32, FLOAT16) => {real},
+        // DICTIONARY(INT32, DECIMAL128) => {numeric}
+        let keys = || Int32Array::from(vec![Some(0), Some(1), None]);
+
+        let x = DictionaryArray::try_new(keys(), Arc::new(BooleanArray::from(vec![true, false])))
+            .unwrap();
+
+        let float16_values =
+            arrow_cast::cast(&Float32Array::from(vec![1.5_f32, 2.5]), &DataType::Float16).unwrap();
+        let y = DictionaryArray::try_new(keys(), float16_values).unwrap();
+
+        let z = DictionaryArray::try_new(
+            keys(),
+            Arc::new(
+                Decimal128Array::from(vec![1250, 2500])
+                    .with_precision_and_scale(5, 3)
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+
+        let dictionary_type =
+            |value_type| DataType::Dictionary(Box::new(DataType::Int32), Box::new(value_type));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", dictionary_type(DataType::Boolean), true),
+            Field::new("y", dictionary_type(DataType::Float16), true),
+            Field::new("z", dictionary_type(DataType::Decimal128(5, 3)), true),
+        ]));
+
+        let batch =
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(x), Arc::new(y), Arc::new(z)])
+                .unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bool, y real, z numeric)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT array_agg(x) = array[true, false, null]::bool[]
+                    AND array_agg(y) = array[1.5, 2.5, null]::real[]
+                    AND array_agg(z) = array[1.25, 2.5, null]::numeric[]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+    }
+
+    #[pg_test]
+    fn test_coerce_nested_dictionary_of_boolean() {
+        // STRUCT {a: DICTIONARY(INT32, BOOLEAN)} => test_type {a: bool},
+        // LIST(DICTIONARY(INT32, BOOLEAN)) => bool[]
+        let values = || Arc::new(BooleanArray::from(vec![true, false]));
+
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Boolean));
+
+        let a = DictionaryArray::try_new(Int32Array::from(vec![0, 1]), values()).unwrap();
+        let a_field = Arc::new(Field::new("a", dictionary_type.clone(), true));
+        let x = Arc::new(StructArray::new(
+            vec![a_field.clone()].into(),
+            vec![Arc::new(a)],
+            None,
+        ));
+
+        let list_values = DictionaryArray::try_new(Int32Array::from(vec![1, 0]), values()).unwrap();
+        let list_field = Arc::new(Field::new("item", dictionary_type, true));
+        let y = Arc::new(ListArray::new(
+            list_field.clone(),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1, 2])),
+            Arc::new(list_values),
+            None,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Struct(vec![a_field].into()), true),
+            Field::new("y", DataType::List(list_field), true),
+        ]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a bool)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type, y bool[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT array_agg((x).a) = array[true, false]::bool[]
+                    AND array_agg(y) = array[array[false], array[true]]::bool[][]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+
+        Spi::run("DROP TABLE test_table").unwrap();
+        Spi::run("DROP TYPE test_type").unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_list_kinds_of_dictionary() {
+        // LARGE_LIST(DICTIONARY(INT32, BOOLEAN)), FIXED_SIZE_LIST(DICTIONARY(INT32, BOOLEAN)),
+        // LIST_VIEW(DICTIONARY(INT32, BOOLEAN)) and LARGE_LIST_VIEW(DICTIONARY(INT32, BOOLEAN))
+        // => bool[]
+        let values = || Arc::new(BooleanArray::from(vec![true, false]));
+        let dictionary = |keys: Vec<i32>| {
+            Arc::new(DictionaryArray::try_new(Int32Array::from(keys), values()).unwrap())
+                as ArrayRef
+        };
+
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Boolean));
+        let item_field = Arc::new(Field::new("item", dictionary_type, true));
+
+        let x = Arc::new(LargeListArray::new(
+            item_field.clone(),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 1, 2])),
+            dictionary(vec![0, 1]),
+            None,
+        ));
+
+        let y = Arc::new(FixedSizeListArray::new(
+            item_field.clone(),
+            2,
+            dictionary(vec![1, 0, 0, 1]),
+            None,
+        ));
+
+        let z = Arc::new(ListViewArray::new(
+            item_field.clone(),
+            ScalarBuffer::from(vec![1, 0]),
+            ScalarBuffer::from(vec![1, 1]),
+            dictionary(vec![0, 1]),
+            None,
+        ));
+
+        let w = Arc::new(LargeListViewArray::new(
+            item_field.clone(),
+            ScalarBuffer::from(vec![1_i64, 0]),
+            ScalarBuffer::from(vec![1, 1]),
+            dictionary(vec![1, 0]),
+            None,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::LargeList(item_field.clone()), true),
+            Field::new("y", DataType::FixedSizeList(item_field.clone(), 2), true),
+            Field::new("z", DataType::ListView(item_field.clone()), true),
+            Field::new("w", DataType::LargeListView(item_field), true),
+        ]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y, z, w]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bool[], y bool[], z bool[], w bool[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT array_agg(x) = array[array[true], array[false]]::bool[][]
+                    AND array_agg(y) = array[array[false, true], array[true, false]]::bool[][]
+                    AND array_agg(z) = array[array[false], array[true]]::bool[][]
+                    AND array_agg(w) = array[array[true], array[false]]::bool[][]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+
+        Spi::run("DROP TABLE test_table").unwrap();
     }
 
     #[pg_test]
