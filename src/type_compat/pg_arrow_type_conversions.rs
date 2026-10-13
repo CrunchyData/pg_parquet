@@ -15,6 +15,9 @@ use pgrx::{
 const NEG_INFINITY_DATE: i32 = i32::MIN + 1;
 const NEG_INFINITY_TIMESTAMP: i64 = i64::MIN + 1;
 
+// PG epoch (2000-01-01) is 10957 days after the Unix epoch (1970-01-01) parquet counts from
+const MICROS_BETWEEN_UNIX_AND_PG_EPOCH: i64 = 10957 * 24 * 60 * 60 * 1_000_000;
+
 pub(crate) fn date_to_i32(date: Date) -> i32 {
     if date.is_infinity() {
         return i32::MAX;
@@ -72,6 +75,33 @@ fn error_out_of_range_temporal(pg_type: &str, value: i64) -> ! {
     unreachable!("ereport with ERROR level does not return")
 }
 
+// Shifts a Postgres microsecond count to the Unix epoch parquet counts from. i64::MAX is
+// reserved for an infinite timestamp, so the one finite value that lands on it is out of
+// range too.
+fn pg_epoch_micros_to_unix_micros(pg_type: &str, pg_epoch_micros: i64) -> i64 {
+    match pg_epoch_micros.checked_add(MICROS_BETWEEN_UNIX_AND_PG_EPOCH) {
+        Some(unix_micros) if unix_micros != i64::MAX => unix_micros,
+        _ => error_out_of_range_for_parquet(pg_type, pg_epoch_micros),
+    }
+}
+
+// Reports a Postgres temporal value that parquet cannot represent. Parquet counts
+// microseconds from the Unix epoch in an i64, which runs out about 30 years before the
+// latest timestamp Postgres itself can hold.
+fn error_out_of_range_for_parquet(pg_type: &str, pg_epoch_micros: i64) -> ! {
+    ereport!(
+        pgrx::PgLogLevel::ERROR,
+        pgrx::PgSqlErrorCode::ERRCODE_DATETIME_FIELD_OVERFLOW,
+        format!(
+            "{} value {} microseconds after the PostgreSQL epoch is out of range for a parquet \"{}\" column",
+            pg_type, pg_epoch_micros, pg_type
+        ),
+        "Consider excluding the column from the COPY TO statement.",
+    );
+
+    unreachable!("ereport with ERROR level does not return")
+}
+
 pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> i64 {
     if timestamp.is_infinity() {
         return i64::MAX;
@@ -79,25 +109,21 @@ pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> i64 {
         return NEG_INFINITY_TIMESTAMP;
     }
 
-    // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
-    let adjustment_interval = Interval::from_days(10957);
-    let adjusted_timestamp: Timestamp = unsafe {
-        direct_function_call(
-            pg_sys::timestamp_pl_interval,
-            &[timestamp.into_datum(), adjustment_interval.into_datum()],
-        )
-        .expect("cannot adjust PG timestamp to Unix timestamp")
-    };
-
-    let adjusted_timestamp_as_bytes: Vec<u8> = unsafe {
-        direct_function_call(pg_sys::time_send, &[adjusted_timestamp.into_datum()])
+    let timestamp_as_bytes: Vec<u8> = unsafe {
+        direct_function_call(pg_sys::time_send, &[timestamp.into_datum()])
             .expect("cannot convert timestamp to bytes")
     };
-    i64::from_be_bytes(
-        adjusted_timestamp_as_bytes[0..8]
+
+    let pg_epoch_micros = i64::from_be_bytes(
+        timestamp_as_bytes[0..8]
             .try_into()
             .unwrap_or_else(|e| panic!("{}", e)),
-    )
+    );
+
+    // Convert PG epoch to the Unix epoch parquet counts from. The microseconds are shifted
+    // rather than the timestamp itself, because PG timestamp arithmetic cannot represent a
+    // timestamp within 10957 days of its own maximum.
+    pg_epoch_micros_to_unix_micros("timestamp", pg_epoch_micros)
 }
 
 pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Timestamp {
@@ -108,21 +134,14 @@ pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Timestamp {
         return Timestamp::negative_infinity();
     }
 
-    let timestamp: Timestamp = i64_timestamp
+    // Parquet uses Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01).
+    let pg_epoch_micros = i64_timestamp
+        .checked_sub(MICROS_BETWEEN_UNIX_AND_PG_EPOCH)
+        .unwrap_or_else(|| error_out_of_range_temporal("timestamp", i64_timestamp));
+
+    pg_epoch_micros
         .try_into()
-        .unwrap_or_else(|_| error_out_of_range_temporal("timestamp", i64_timestamp));
-
-    // Parquet uses Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
-    let adjustment_interval = Interval::from_days(10957);
-    let adjusted_timestamp: Timestamp = unsafe {
-        direct_function_call(
-            pg_sys::timestamp_mi_interval,
-            &[timestamp.into_datum(), adjustment_interval.into_datum()],
-        )
-        .expect("cannot adjust Unix timestamp to PG timestamp")
-    };
-
-    adjusted_timestamp
+        .unwrap_or_else(|_| error_out_of_range_temporal("timestamp", i64_timestamp))
 }
 
 pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> i64 {
@@ -134,28 +153,22 @@ pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> i64 {
 
     // timestamptz is already adjusted to utc internally by Postgres. Postgres uses
     // local session timezone to display timestamptz values.
-    // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
-    let adjustment_interval = Interval::from_days(10957);
-    let adjusted_timestamptz: TimestampWithTimeZone = unsafe {
-        direct_function_call(
-            pg_sys::timestamptz_pl_interval,
-            &[timestamptz.into_datum(), adjustment_interval.into_datum()],
-        )
-        .expect("cannot adjust PG timestamptz to Unix timestamptz")
+    let timestamptz_as_bytes: Vec<u8> = unsafe {
+        direct_function_call(pg_sys::timestamptz_send, &[timestamptz.into_datum()])
+            .expect("cannot convert timestamptz to bytes")
     };
 
-    let adjusted_timestamptz_as_bytes: Vec<u8> = unsafe {
-        direct_function_call(
-            pg_sys::timestamptz_send,
-            &[adjusted_timestamptz.into_datum()],
-        )
-        .expect("cannot convert timestamptz to bytes")
-    };
-    i64::from_be_bytes(
-        adjusted_timestamptz_as_bytes[0..8]
+    let pg_epoch_micros = i64::from_be_bytes(
+        timestamptz_as_bytes[0..8]
             .try_into()
             .unwrap_or_else(|e| panic!("{}", e)),
-    )
+    );
+
+    // Convert PG epoch to the Unix epoch parquet counts from. The microseconds are shifted
+    // rather than the timestamptz itself, because adding days to a timestamptz is a local
+    // session timezone operation: it adds a day of local wall clock time, which is 23 or 25
+    // hours across a DST boundary. That would move the instant the file records.
+    pg_epoch_micros_to_unix_micros("timestamptz", pg_epoch_micros)
 }
 
 pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64, timezone: &str) -> TimestampWithTimeZone {
@@ -166,25 +179,18 @@ pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64, timezone: &str) -> Timest
         return TimestampWithTimeZone::negative_infinity();
     }
 
-    let timestamp: Timestamp = i64_timestamptz
+    // Parquet uses Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01).
+    let pg_epoch_micros = i64_timestamptz
+        .checked_sub(MICROS_BETWEEN_UNIX_AND_PG_EPOCH)
+        .unwrap_or_else(|| error_out_of_range_temporal("timestamptz", i64_timestamptz));
+
+    let timestamp: Timestamp = pg_epoch_micros
         .try_into()
         .unwrap_or_else(|_| error_out_of_range_temporal("timestamptz", i64_timestamptz));
 
-    let timestamptz: TimestampWithTimeZone = (timestamp, timezone)
+    (timestamp, timezone)
         .try_into()
-        .unwrap_or_else(|_| error_out_of_range_temporal("timestamptz", i64_timestamptz));
-
-    // Parquet uses Unix epoch (1970-01-01). Convert it to PG epoch (2000-01-01). -10957 days
-    let adjustment_interval = Interval::from_days(10957);
-    let adjusted_timestamptz: TimestampWithTimeZone = unsafe {
-        direct_function_call(
-            pg_sys::timestamptz_mi_interval,
-            &[timestamptz.into_datum(), adjustment_interval.into_datum()],
-        )
-        .expect("cannot adjust Unix timestamptz to PG timestamptz")
-    };
-
-    adjusted_timestamptz
+        .unwrap_or_else(|_| error_out_of_range_temporal("timestamptz", i64_timestamptz))
 }
 
 pub(crate) fn time_to_i64(time: Time) -> i64 {

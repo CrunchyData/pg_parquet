@@ -807,6 +807,77 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_timestamp_limits() {
+        // the epoch shift to parquet's 1970 is a microsecond count away from PG timestamp
+        // arithmetic, which cannot represent a timestamp within 10957 days of its maximum.
+        // one microsecond later is the reserved infinity sentinel, i64::MAX.
+        let test_table = TestTable::<Timestamp>::new("timestamp".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('294247-01-10 04:00:54.775806'), ('4713-01-01 BC');",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_timestamptz_limits() {
+        let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('294247-01-10 04:00:54.775806+00'), ('4713-01-01 BC+00');",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // i64::MAX is the infinity sentinel in the file, so the one finite timestamp that lands
+    // on it cannot be written
+    #[pg_test]
+    #[should_panic(expected = "is out of range for a parquet \"timestamp\" column")]
+    fn test_timestamp_at_infinity_sentinel() {
+        let test_table = TestTable::<Timestamp>::new("timestamp".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('294247-01-10 04:00:54.775807');");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // The epoch shift to parquet's 1970 is a microsecond count away from timestamptz
+    // arithmetic, which adds a day of local wall clock time: 23 or 25 hours across a DST
+    // boundary. 1995-04-01 is EST in America/New_York, and 10957 days later is EDT under the
+    // post-2007 DST rule, so shifting the timestamptz itself moves the instant by an hour.
+    #[pg_test]
+    fn test_timestamptz_epoch_shift_ignores_session_timezone() {
+        let instant = "1995-04-01 12:00:00-05";
+
+        // written under a DST observing session timezone, read back under UTC
+        Spi::run("SET TimeZone TO 'America/New_York';").unwrap();
+        Spi::run(&format!(
+            "COPY (SELECT '{instant}'::timestamptz AS a) TO '{LOCAL_TEST_FILE_PATH}';"
+        ))
+        .unwrap();
+
+        Spi::run("SET TimeZone TO 'UTC';").unwrap();
+        Spi::run("CREATE TABLE write_test (a timestamptz);").unwrap();
+        Spi::run(&format!("COPY write_test FROM '{LOCAL_TEST_FILE_PATH}';")).unwrap();
+        assert!(Spi::get_one::<bool>(&format!(
+            "SELECT a = '{instant}'::timestamptz FROM write_test;"
+        ))
+        .unwrap()
+        .expect("no row in write_test"));
+
+        // written under UTC, read back under a DST observing session timezone
+        Spi::run(&format!(
+            "COPY (SELECT '{instant}'::timestamptz AS a) TO '{LOCAL_TEST_FILE_PATH}';"
+        ))
+        .unwrap();
+
+        Spi::run("SET TimeZone TO 'America/New_York';").unwrap();
+        Spi::run("CREATE TABLE read_test (a timestamptz);").unwrap();
+        Spi::run(&format!("COPY read_test FROM '{LOCAL_TEST_FILE_PATH}';")).unwrap();
+        assert!(Spi::get_one::<bool>(&format!(
+            "SELECT a = '{instant}'::timestamptz FROM read_test;"
+        ))
+        .unwrap()
+        .expect("no row in read_test"));
+    }
+
+    #[pg_test]
     fn test_timestamp_array() {
         let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array['2022-05-01 15:00:00','2022-05-02 15:30:12',null]::timestamp[]), (null), (array[]::timestamp[]);");
