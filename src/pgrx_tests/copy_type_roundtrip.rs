@@ -15,8 +15,8 @@ mod tests {
     #[cfg(not(pre_pg19))]
     use crate::type_compat::oid8::Oid8;
     use crate::type_compat::pg_arrow_type_conversions::{
-        i32_to_date, i64_to_timestamp, i64_to_timestamptz, DEFAULT_UNBOUNDED_NUMERIC_PRECISION,
-        DEFAULT_UNBOUNDED_NUMERIC_SCALE,
+        date_to_i32, i32_to_date, i64_to_timestamp, i64_to_timestamptz, timestamp_to_i64,
+        timestamptz_to_i64, DEFAULT_UNBOUNDED_NUMERIC_PRECISION, DEFAULT_UNBOUNDED_NUMERIC_SCALE,
     };
     use pgrx::pg_sys::Oid;
     use pgrx::{
@@ -643,23 +643,53 @@ mod tests {
         test_table.assert_expected_and_result_rows();
     }
 
+    // Postgres writes -infinity as the minimum of the underlying integer, but DuckDB reserves
+    // that value for its NULL and fails to read it back. We write DuckDB's sentinel, one above
+    // the minimum, and read both sentinels back as -infinity.
+    #[pg_test]
+    fn test_infinity_sentinels_in_file() {
+        assert_eq!(date_to_i32(Date::positive_infinity()), i32::MAX);
+        assert_eq!(date_to_i32(Date::negative_infinity()), i32::MIN + 1);
+        assert_eq!(timestamp_to_i64(Timestamp::positive_infinity()), i64::MAX);
+        assert_eq!(
+            timestamp_to_i64(Timestamp::negative_infinity()),
+            i64::MIN + 1
+        );
+        assert_eq!(
+            timestamptz_to_i64(TimestampWithTimeZone::positive_infinity()),
+            i64::MAX
+        );
+        assert_eq!(
+            timestamptz_to_i64(TimestampWithTimeZone::negative_infinity()),
+            i64::MIN + 1
+        );
+
+        for i32_date in [i32::MIN, i32::MIN + 1] {
+            assert!(i32_to_date(i32_date).is_neg_infinity());
+        }
+        for i64_timestamp in [i64::MIN, i64::MIN + 1] {
+            assert!(i64_to_timestamp(i64_timestamp).is_neg_infinity());
+            assert!(i64_to_timestamptz(i64_timestamp, "UTC").is_neg_infinity());
+        }
+    }
+
     // the out of range values below cannot be written by COPY TO, only by another writer
     #[pg_test]
     #[should_panic(expected = "is out of range for PostgreSQL \"date\" type")]
     fn test_date_out_of_range_in_file() {
-        i32_to_date(i32::MIN + 1);
+        i32_to_date(i32::MIN + 2);
     }
 
     #[pg_test]
     #[should_panic(expected = "is out of range for PostgreSQL \"timestamp\" type")]
     fn test_timestamp_out_of_range_in_file() {
-        i64_to_timestamp(i64::MIN + 1);
+        i64_to_timestamp(i64::MIN + 2);
     }
 
     #[pg_test]
     #[should_panic(expected = "is out of range for PostgreSQL \"timestamptz\" type")]
     fn test_timestamptz_out_of_range_in_file() {
-        i64_to_timestamptz(i64::MIN + 1, "UTC");
+        i64_to_timestamptz(i64::MIN + 2, "UTC");
     }
 
     #[pg_test]

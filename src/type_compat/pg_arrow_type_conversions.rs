@@ -9,7 +9,19 @@ use pgrx::{
     AnyNumeric, IntoDatum, Numeric,
 };
 
+// Postgres stores -infinity as the minimum of the underlying integer, but DuckDB reserves
+// that value for its NULL and fails to read it back. We write one above the minimum, which is
+// what DuckDB writes for -infinity, and we read both of them back as -infinity.
+const NEG_INFINITY_DATE: i32 = i32::MIN + 1;
+const NEG_INFINITY_TIMESTAMP: i64 = i64::MIN + 1;
+
 pub(crate) fn date_to_i32(date: Date) -> i32 {
+    if date.is_infinity() {
+        return i32::MAX;
+    } else if date.is_neg_infinity() {
+        return NEG_INFINITY_DATE;
+    }
+
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
     let adjusted_date: Date = unsafe {
         direct_function_call(pg_sys::date_pli, &[date.into_datum(), 10957.into_datum()])
@@ -28,10 +40,10 @@ pub(crate) fn date_to_i32(date: Date) -> i32 {
 }
 
 pub(crate) fn i32_to_date(i32_date: i32) -> Date {
-    // PG's infinite dates are stored as the limits of the underlying i32
+    // an infinite date in the file is one of the limits of the underlying i32
     if i32_date == i32::MAX {
         return Date::positive_infinity();
-    } else if i32_date == i32::MIN {
+    } else if i32_date == i32::MIN || i32_date == NEG_INFINITY_DATE {
         return Date::negative_infinity();
     }
 
@@ -60,6 +72,12 @@ fn error_out_of_range_temporal(pg_type: &str, value: i64) -> ! {
 }
 
 pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> i64 {
+    if timestamp.is_infinity() {
+        return i64::MAX;
+    } else if timestamp.is_neg_infinity() {
+        return NEG_INFINITY_TIMESTAMP;
+    }
+
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
     let adjustment_interval = Interval::from_days(10957);
     let adjusted_timestamp: Timestamp = unsafe {
@@ -82,10 +100,10 @@ pub(crate) fn timestamp_to_i64(timestamp: Timestamp) -> i64 {
 }
 
 pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Timestamp {
-    // PG's infinite timestamps are stored as the limits of the underlying i64
+    // an infinite timestamp in the file is one of the limits of the underlying i64
     if i64_timestamp == i64::MAX {
         return Timestamp::positive_infinity();
-    } else if i64_timestamp == i64::MIN {
+    } else if i64_timestamp == i64::MIN || i64_timestamp == NEG_INFINITY_TIMESTAMP {
         return Timestamp::negative_infinity();
     }
 
@@ -107,6 +125,12 @@ pub(crate) fn i64_to_timestamp(i64_timestamp: i64) -> Timestamp {
 }
 
 pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> i64 {
+    if timestamptz.is_infinity() {
+        return i64::MAX;
+    } else if timestamptz.is_neg_infinity() {
+        return NEG_INFINITY_TIMESTAMP;
+    }
+
     // timestamptz is already adjusted to utc internally by Postgres. Postgres uses
     // local session timezone to display timestamptz values.
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days
@@ -134,10 +158,10 @@ pub(crate) fn timestamptz_to_i64(timestamptz: TimestampWithTimeZone) -> i64 {
 }
 
 pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64, timezone: &str) -> TimestampWithTimeZone {
-    // PG's infinite timestamptzs are stored as the limits of the underlying i64
+    // an infinite timestamptz in the file is one of the limits of the underlying i64
     if i64_timestamptz == i64::MAX {
         return TimestampWithTimeZone::positive_infinity();
-    } else if i64_timestamptz == i64::MIN {
+    } else if i64_timestamptz == i64::MIN || i64_timestamptz == NEG_INFINITY_TIMESTAMP {
         return TimestampWithTimeZone::negative_infinity();
     }
 
