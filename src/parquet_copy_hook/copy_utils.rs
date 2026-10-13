@@ -478,24 +478,50 @@ pub(crate) fn copy_from_stmt_match_by(p_stmt: &PgBox<PlannedStmt>) -> MatchBy {
     }
 }
 
-pub(crate) fn copy_stmt_get_option(
-    p_stmt: &PgBox<PlannedStmt>,
-    option_name: &str,
-) -> PgBox<DefElem> {
+fn copy_stmt_get_option(p_stmt: &PgBox<PlannedStmt>, option_name: &str) -> PgBox<DefElem> {
     let copy_stmt = unsafe { PgBox::<CopyStmt>::from_pg(p_stmt.utilityStmt as _) };
+    get_option(copy_stmt.options, option_name)
+}
 
-    let copy_options = unsafe { PgList::<DefElem>::from_pg(copy_stmt.options) };
+pub(crate) fn has_option(options: *mut List, option_name: &str) -> bool {
+    count_option(options, option_name) > 0
+}
 
-    for current_option in copy_options.iter_ptr() {
+pub(crate) fn count_option(options: *mut List, option_name: &str) -> usize {
+    let options = unsafe { PgList::<DefElem>::from_pg(options) };
+
+    options
+        .iter_ptr()
+        .filter(|option| {
+            let option = unsafe { PgBox::<DefElem>::from_pg(*option) };
+            option_matches(&option, option_name)
+        })
+        .count()
+}
+
+// option_matches returns true if the option is the given one. A namespaced option,
+// e.g. "toast.load_from", belongs to that namespace and not to pg_parquet.
+fn option_matches(option: &PgBox<DefElem>, option_name: &str) -> bool {
+    if !option.defnamespace.is_null() {
+        return false;
+    }
+
+    let current_option_name = unsafe {
+        CStr::from_ptr(option.defname)
+            .to_str()
+            .expect("option name is not a valid CString")
+    };
+
+    current_option_name == option_name
+}
+
+pub(crate) fn get_option(options: *mut List, option_name: &str) -> PgBox<DefElem> {
+    let options = unsafe { PgList::<DefElem>::from_pg(options) };
+
+    for current_option in options.iter_ptr() {
         let current_option = unsafe { PgBox::<DefElem>::from_pg(current_option) };
 
-        let current_option_name = unsafe {
-            CStr::from_ptr(current_option.defname)
-                .to_str()
-                .expect("copy option is not a valid CString")
-        };
-
-        if current_option_name == option_name {
+        if option_matches(&current_option, option_name) {
             return current_option;
         }
     }
@@ -531,7 +557,7 @@ fn is_copy_parquet_stmt(p_stmt: &PgBox<PlannedStmt>, copy_from: bool) -> bool {
     let uri_info = uri_info.unwrap();
 
     // only parquet format is supported
-    if !is_parquet_format_option(p_stmt) && !is_parquet_uri(uri_info.uri.clone()) {
+    if !has_parquet_format_option(p_stmt) && !is_parquet_uri(uri_info.uri.clone()) {
         return false;
     }
 
@@ -568,7 +594,7 @@ pub(crate) fn is_copy_from_parquet_stmt(p_stmt: &PgBox<PlannedStmt>) -> bool {
     is_copy_parquet_stmt(p_stmt, copy_from)
 }
 
-fn is_parquet_format_option(p_stmt: &PgBox<PlannedStmt>) -> bool {
+fn has_parquet_format_option(p_stmt: &PgBox<PlannedStmt>) -> bool {
     let format_option = copy_stmt_get_option(p_stmt, "format");
 
     if format_option.is_null() {

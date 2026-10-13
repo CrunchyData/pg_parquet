@@ -6,7 +6,7 @@ mod tests {
 
     use crate::pgrx_tests::common::{
         extension_exists, int96_timestamp, write_int96_timestamps_to_parquet,
-        write_record_batch_to_parquet, LOCAL_TEST_FILE_PATH,
+        write_record_batch_to_parquet, write_record_batch_to_parquet_file, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::pg_arrow_type_conversions::{
         date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
@@ -502,6 +502,76 @@ mod tests {
 
         let drop_table = "DROP TABLE test_table";
         Spi::run(drop_table).unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_unsigned_types_into_types_not_castable_from_oid() {
+        // the tests run concurrently, so each of them needs its own file
+        let test_file = "/tmp/pg_parquet_test_coerce_unsigned.parquet";
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::UInt32, true),
+            Field::new("b", DataType::UInt32, true),
+            Field::new("c", DataType::UInt32, true),
+            Field::new("d", DataType::UInt32, true),
+            Field::new("e", DataType::UInt32, true),
+            Field::new("f", DataType::UInt64, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(UInt32Array::from(vec![u32::MAX])),
+                Arc::new(UInt32Array::from(vec![u32::MAX])),
+                Arc::new(UInt32Array::from(vec![u32::MAX])),
+                Arc::new(UInt32Array::from(vec![u32::MAX])),
+                Arc::new(UInt32Array::from(vec![1])),
+                Arc::new(UInt64Array::from(vec![u64::MAX])),
+            ],
+        )
+        .unwrap();
+        write_record_batch_to_parquet_file(test_file, schema, batch);
+
+        // "oid" cannot be cast to any of these types, so it must not stand in for
+        // uint32 while the file's schema is checked against the table's schema
+        let create_table = "CREATE TABLE test_table (a numeric, b double precision, c real,
+                                                     d money, e boolean, f numeric)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{test_file}'");
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT a = 4294967295 AND b = 4294967295::float8 AND c = 4294967295::float4
+             AND d::numeric = 4294967295 AND e AND f = 18446744073709551615
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "Can't cast value 4294967295 to type Int32")]
+    fn test_coerce_unsigned_type_into_a_narrower_type() {
+        // the tests run concurrently, so each of them needs its own file
+        let test_file = "/tmp/pg_parquet_test_coerce_unsigned_narrower.parquet";
+
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::UInt32, true)]));
+
+        let x = Arc::new(UInt32Array::from(vec![u32::MAX]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet_file(test_file, schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x int)";
+        Spi::run(create_table).unwrap();
+
+        // the cast is allowed by the schema check, but the value does not fit
+        let copy_from = format!("COPY test_table FROM '{test_file}'");
+        Spi::run(&copy_from).unwrap();
     }
 
     #[pg_test]
