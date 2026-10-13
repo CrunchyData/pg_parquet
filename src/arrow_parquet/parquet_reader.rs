@@ -42,7 +42,7 @@ use super::{
     schema_parser::{
         ensure_file_schema_match_tupledesc_schema, parse_arrow_schema_from_attributes,
     },
-    uri_utils::{parquet_reader_from_uri, ParquetObjectStoreReader, ParsedUriInfo},
+    uri_utils::{parquet_reader_from_uri, uri_as_string, ParquetObjectStoreReader, ParsedUriInfo},
 };
 
 pub(crate) struct SingleParquetReader {
@@ -236,7 +236,12 @@ impl ParquetReaderContext {
                 });
 
         if parquet_readers.is_empty() {
-            panic!("no files found that match the pattern {}", uri_info.path);
+            // object_store's Path strips the leading "/" from a local path, so report the
+            // pattern as the user wrote it rather than a relative path that does not exist
+            panic!(
+                "no files found that match the pattern {}",
+                uri_as_string(&uri_info.uri)
+            );
         }
 
         let binary_out_funcs = Self::collect_binary_out_funcs(&attributes);

@@ -64,7 +64,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "no files found that match the pattern")]
+    #[should_panic(expected = "no files found that match the pattern /tmp/pg_parquet_test/**")]
     fn test_with_nonexistent_pattern_path() {
         let filename = "/tmp/pg_parquet_test/**";
         let _file = FileCleanup::new(filename);
