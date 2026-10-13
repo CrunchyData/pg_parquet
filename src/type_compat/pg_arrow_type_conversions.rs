@@ -338,7 +338,7 @@ fn rescale_unbounded_numeric_or_error(
         .unwrap_or_else(|e| panic!("{}", e))
 }
 
-const MAX_NUMERIC_PRECISION: u32 = 38;
+pub(crate) const MAX_NUMERIC_PRECISION: u32 = 38;
 pub(crate) const DEFAULT_UNBOUNDED_NUMERIC_PRECISION: u32 = MAX_NUMERIC_PRECISION;
 pub(crate) const DEFAULT_UNBOUNDED_NUMERIC_SCALE: u32 = 9;
 pub(crate) const DEFAULT_UNBOUNDED_NUMERIC_MAX_INTEGRAL_DIGITS: u32 =
@@ -407,6 +407,6 @@ pub(crate) fn make_numeric_typmod(precision: i32, scale: i32) -> i32 {
     ((precision << 16) | (scale & 0x7ff)) + pg_sys::VARHDRSZ as i32
 }
 
-fn is_unbounded_numeric_typmod(typmod: i32) -> bool {
+pub(crate) fn is_unbounded_numeric_typmod(typmod: i32) -> bool {
     typmod == -1
 }

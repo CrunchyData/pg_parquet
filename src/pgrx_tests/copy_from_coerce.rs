@@ -21,7 +21,7 @@ mod tests {
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::i256;
     use arrow::datatypes::{Int32Type, UInt16Type};
-    use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
     use pgrx::pg_test;
     use pgrx::{
         datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
@@ -1314,6 +1314,95 @@ mod tests {
 
         let result = Spi::get_two::<Date, Time>("SELECT x, y FROM test_table LIMIT 1").unwrap();
         assert_eq!(result, (Some(date), Some(Time::new(0, 15, 0.0).unwrap())));
+    }
+
+    #[pg_test]
+    fn test_coerce_decimal_into_unbounded_numeric() {
+        // an unbounded "numeric" adopts the file's decimal type instead of rescaling the value
+        // to the default "numeric(38,9)", which would lose the digits Postgres is able to store
+        let struct_fields = Fields::from(vec![Field::new("s", DataType::Decimal128(38, 18), true)]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Decimal128(38, 18), true),
+            Field::new(
+                "b",
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::Decimal128(18, 12),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new("c", DataType::Struct(struct_fields.clone()), true),
+            Field::new("d", DataType::Decimal128(38, 0), true),
+            Field::new("e", DataType::Decimal128(10, 2), true),
+        ]));
+
+        let decimal = |precision: u8, scale: i8, digits: &str| {
+            Arc::new(
+                Decimal128Array::from(vec![digits.parse::<i128>().expect("invalid decimal")])
+                    .with_precision_and_scale(precision, scale)
+                    .unwrap(),
+            )
+        };
+
+        let a = decimal(38, 18, "1234567890123456789");
+
+        let b_values = Decimal128Array::from(vec![123456789012_i128, 9876543210000])
+            .with_precision_and_scale(18, 12)
+            .unwrap();
+        let b = Arc::new(ListArray::new(
+            Arc::new(Field::new("element", DataType::Decimal128(18, 12), true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2])),
+            Arc::new(b_values),
+            None,
+        ));
+
+        let c = Arc::new(StructArray::new(
+            struct_fields,
+            vec![decimal(38, 18, "111111111111111111")],
+            None,
+        ));
+
+        let d = decimal(38, 0, &"1".repeat(38));
+        let e = decimal(10, 2, "123");
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![a, b, c, d, e]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        Spi::run("CREATE TYPE unbounded_numeric_struct AS (s numeric)").unwrap();
+
+        let create_table = "CREATE TABLE test_table (a numeric, b numeric[], c unbounded_numeric_struct, d numeric, e numeric)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT a::text = '1.234567890123456789'
+                AND b::text = '{0.123456789012,9.876543210000}'
+                AND (c).s::text = '0.111111111111111111'
+                AND d::text = repeat('1', 38)
+                -- a decimal that the default unbounded numeric represents exactly is rescaled to it
+                AND e::text = '1.230000000' FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+
+        // a numeric with a precision and scale keeps the Postgres assignment semantics
+        let create_table = "CREATE TABLE test_table_bounded (a numeric(38,9), b numeric(38,9)[], c unbounded_numeric_struct, d numeric(38,0), e numeric(38,9))";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table_bounded FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT a::text = '1.234567890'
+                AND b::text = '{0.123456789,9.876543210}'
+                AND e::text = '1.230000000' FROM test_table_bounded",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
     }
 
     #[pg_test]
