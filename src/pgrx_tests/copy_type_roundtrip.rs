@@ -787,6 +787,82 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_json_text_fidelity() {
+        Spi::run("CREATE TABLE json_fidelity (id int, j json, b jsonb);").unwrap();
+
+        let insert_command = r#"
+            INSERT INTO json_fidelity VALUES
+             (1, '{"b":1,"a":2}', '{"b":1,"a":2}'),
+             (2, '{"a":1,"a":2}', '{"a":1,"a":2}'),
+             (3, '{"x":1.000}', '{"x":1.000}'),
+             (4, '{"big":12345678901234567890123}', '{"big":12345678901234567890123}'),
+             (5, '{ "k" :  [1,  2] }', '{ "k" :  [1,  2] }'),
+             (6, '{"e":1E400}', '{"e":1E400}'),
+             (7, '[{"n":null},true,"é"]', '[{"n":null},true,"é"]'),
+             (8, null, null);
+        "#;
+        Spi::run(insert_command).unwrap();
+
+        let copy_commands = "
+            COPY json_fidelity TO '/tmp/pg_parquet_json_fidelity.parquet';
+            CREATE TABLE json_fidelity_result (LIKE json_fidelity);
+            COPY json_fidelity_result FROM '/tmp/pg_parquet_json_fidelity.parquet';
+        ";
+        Spi::run(copy_commands).unwrap();
+
+        // json is stored as text by Postgres, so it must come back byte by byte
+        let same = Spi::get_one::<bool>(
+            "SELECT bool_and(expected.j::text IS NOT DISTINCT FROM result.j::text
+                             AND expected.b::text IS NOT DISTINCT FROM result.b::text)
+             FROM json_fidelity expected JOIN json_fidelity_result result USING (id);",
+        )
+        .unwrap();
+        assert_eq!(Some(true), same);
+    }
+
+    #[pg_test]
+    fn test_json_array_text_fidelity() {
+        Spi::run("CREATE TABLE json_array_fidelity (id int, j json[], b jsonb[]);").unwrap();
+
+        let insert_command = r#"
+            INSERT INTO json_array_fidelity VALUES
+             (1, array['{"b":1,"a":2}','{"x":1.000}',null]::json[],
+                 array['{"b":1,"a":2}','{"e":1E400}',null]::jsonb[]),
+             (2, null, null);
+        "#;
+        Spi::run(insert_command).unwrap();
+
+        let copy_commands = "
+            COPY json_array_fidelity TO '/tmp/pg_parquet_json_array_fidelity.parquet';
+            CREATE TABLE json_array_fidelity_result (LIKE json_array_fidelity);
+            COPY json_array_fidelity_result FROM '/tmp/pg_parquet_json_array_fidelity.parquet';
+        ";
+        Spi::run(copy_commands).unwrap();
+
+        let same = Spi::get_one::<bool>(
+            "SELECT bool_and(expected.j::text IS NOT DISTINCT FROM result.j::text
+                             AND expected.b::text IS NOT DISTINCT FROM result.b::text)
+             FROM json_array_fidelity expected JOIN json_array_fidelity_result result USING (id);",
+        )
+        .unwrap();
+        assert_eq!(Some(true), same);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "invalid input syntax for type json")]
+    fn test_invalid_json_in_file() {
+        let copy_commands = "
+            CREATE TABLE json_invalid_text (j text);
+            INSERT INTO json_invalid_text VALUES ('not json');
+            COPY json_invalid_text TO '/tmp/pg_parquet_json_invalid.parquet';
+
+            CREATE TABLE json_invalid (j json);
+            COPY json_invalid FROM '/tmp/pg_parquet_json_invalid.parquet';
+        ";
+        Spi::run(copy_commands).unwrap();
+    }
+
+    #[pg_test]
     fn test_json_array() {
         let test_table = TestTable::<Vec<Option<Json>>>::new("json[]".into())
             .with_order_by_col("a::text[]".into());

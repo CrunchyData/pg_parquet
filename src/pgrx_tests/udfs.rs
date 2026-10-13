@@ -990,8 +990,9 @@ mod tests {
             (
                 27,
                 29,
-                Some("{\"key\":10}".into()),
-                Some("{\"key\":89}".into()),
+                // jsonb statistics carry Postgres' normalized jsonb text
+                Some("{\"key\": 10}".into()),
+                Some("{\"key\": 89}".into()),
                 Some(2),
                 None,
             ),

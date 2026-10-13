@@ -8,10 +8,9 @@ use pgrx::{
     heap_tuple::PgHeapTuple,
     pg_sys::{
         Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID, INT8OID,
-        JSONBOID, JSONOID, NUMERICOID, OIDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID,
-        TIMETZOID, UUIDOID,
+        NUMERICOID, OIDOID, TEXTOID, TIMEOID, TIMESTAMPOID, TIMESTAMPTZOID, TIMETZOID, UUIDOID,
     },
-    AllocatedByRust, AnyNumeric, FromDatum, Json, JsonB, Uuid,
+    AllocatedByRust, AnyNumeric, FromDatum, Uuid,
 };
 
 use crate::{
@@ -45,8 +44,6 @@ pub(crate) mod geometry;
 pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
-pub(crate) mod json;
-pub(crate) mod jsonb;
 pub(crate) mod map;
 pub(crate) mod numeric;
 pub(crate) mod oid;
@@ -164,8 +161,6 @@ fn to_arrow_primitive_array(
         }
         CHAROID => to_arrow_primitive_array!(i8, tuples, attribute_context),
         TEXTOID => to_arrow_primitive_array!(String, tuples, attribute_context),
-        JSONOID => to_arrow_primitive_array!(Json, tuples, attribute_context),
-        JSONBOID => to_arrow_primitive_array!(JsonB, tuples, attribute_context),
         BYTEAOID => to_arrow_primitive_array!(&[u8], tuples, attribute_context),
         OIDOID => to_arrow_primitive_array!(Oid, tuples, attribute_context),
         #[cfg(not(pre_pg19))]
@@ -264,8 +259,6 @@ fn to_arrow_list_array(
         }
         CHAROID => to_arrow_list_array!(pgrx::Array<i8>, tuples, element_context),
         TEXTOID => to_arrow_list_array!(pgrx::Array<String>, tuples, element_context),
-        JSONOID => to_arrow_list_array!(pgrx::Array<Json>, tuples, element_context),
-        JSONBOID => to_arrow_list_array!(pgrx::Array<JsonB>, tuples, element_context),
         BYTEAOID => to_arrow_list_array!(pgrx::Array<&[u8]>, tuples, element_context),
         OIDOID => to_arrow_list_array!(pgrx::Array<Oid>, tuples, element_context),
         #[cfg(not(pre_pg19))]
