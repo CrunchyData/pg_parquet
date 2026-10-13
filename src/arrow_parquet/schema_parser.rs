@@ -750,19 +750,21 @@ fn unbounded_numeric_target(
         // limit reads through the text path too. Parsing the text keeps every digit, while
         // casting it to the default decimal type would not
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => return Some(DataType::Utf8),
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
-            (*precision as u32, *scale)
+        // a negative scale has no Postgres representation to preserve, so such a decimal is
+        // read as the default unbounded numeric type like before
+        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale)
+            if *scale >= 0 =>
+        {
+            (*precision as u32, *scale as u32)
         }
         _ => return None,
     };
 
-    // a negative scale has no Postgres representation to preserve, and a wider precision than
-    // Postgres' decimal limit is read as text instead
-    if scale < 0 || precision > MAX_NUMERIC_PRECISION {
-        return None;
+    // a precision wider than Postgres' decimal limit has no decimal type to read into, so the
+    // value is formatted as text and parsed, which also keeps every digit
+    if precision > MAX_NUMERIC_PRECISION {
+        return Some(DataType::Utf8);
     }
-
-    let scale = scale as u32;
 
     let fits_default_unbounded_numeric = scale <= DEFAULT_UNBOUNDED_NUMERIC_SCALE
         && precision - scale <= MAX_NUMERIC_PRECISION - DEFAULT_UNBOUNDED_NUMERIC_SCALE;

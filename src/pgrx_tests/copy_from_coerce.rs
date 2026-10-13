@@ -1412,6 +1412,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new("x", DataType::Utf8, true),
             Field::new("y", DataType::LargeUtf8, true),
+            Field::new("z", DataType::Utf8View, true),
         ]));
 
         let x = Arc::new(StringArray::from(vec!["1".repeat(30)]));
@@ -1419,6 +1420,47 @@ mod tests {
             "2.{}",
             "1".repeat(20)
         )]));
+        let z = Arc::new(StringViewArray::from(vec![format!("3.{}", "1".repeat(20))]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y, z]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x numeric, y numeric, z numeric)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT x::text = repeat('1', 30)
+                AND y::text = '2.' || repeat('1', 20)
+                AND z::text = '3.' || repeat('1', 20) FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+    }
+
+    #[pg_test]
+    fn test_coerce_decimal256_into_unbounded_numeric() {
+        // DECIMAL256 => {numeric}
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Decimal256(38, 20), true),
+            Field::new("y", DataType::Decimal256(45, 5), true),
+        ]));
+
+        let x = Arc::new(
+            Decimal256Array::from(vec![i256::from_string("1".repeat(38).as_str()).unwrap()])
+                .with_precision_and_scale(38, 20)
+                .unwrap(),
+        );
+
+        // a precision above Postgres' decimal limit has no decimal type to read into, so the
+        // column is read through the text path
+        let y = Arc::new(
+            Decimal256Array::from(vec![i256::from_string("2".repeat(45).as_str()).unwrap()])
+                .with_precision_and_scale(45, 5)
+                .unwrap(),
+        );
 
         let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
         write_record_batch_to_parquet(schema, batch);
@@ -1430,8 +1472,8 @@ mod tests {
         Spi::run(&copy_from).unwrap();
 
         let result = Spi::get_one::<bool>(
-            "SELECT x::text = repeat('1', 30)
-                AND y::text = '2.' || repeat('1', 20) FROM test_table",
+            "SELECT x::text = repeat('1', 18) || '.' || repeat('1', 20)
+                AND y::text = repeat('2', 40) || '.' || repeat('2', 5) FROM test_table",
         )
         .unwrap();
         assert_eq!(result, Some(true));
