@@ -1406,6 +1406,38 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_coerce_text_into_unbounded_numeric() {
+        // a numeric with a precision above Postgres' decimal limit is written as text, which an
+        // unbounded "numeric" parses instead of casting it to the default "numeric(38,9)"
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Utf8, true),
+            Field::new("y", DataType::LargeUtf8, true),
+        ]));
+
+        let x = Arc::new(StringArray::from(vec!["1".repeat(30)]));
+        let y = Arc::new(LargeStringArray::from(vec![format!(
+            "2.{}",
+            "1".repeat(20)
+        )]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x numeric, y numeric)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT x::text = repeat('1', 30)
+                AND y::text = '2.' || repeat('1', 20) FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+    }
+
+    #[pg_test]
     fn test_coerce_decimal256() {
         // DECIMAL256 => {numeric}
         let schema = Arc::new(Schema::new(vec![

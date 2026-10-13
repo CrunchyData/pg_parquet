@@ -732,10 +732,10 @@ fn coercion_target(
     }
 }
 
-// unbounded_numeric_target returns the decimal type to read into an unbounded "numeric" column
-// when the default unbounded numeric type, "numeric(38,9)", cannot represent the file's decimal
-// without losing digits. Postgres stores an unbounded numeric at any scale, so rescaling it to
-// the default scale would silently truncate the value.
+// unbounded_numeric_target returns the type to read into an unbounded "numeric" column when the
+// default unbounded numeric type, "numeric(38,9)", cannot represent the file's value without
+// losing digits. Postgres stores an unbounded numeric at any precision and scale, so rescaling
+// it to the default ones would silently truncate the value.
 fn unbounded_numeric_target(
     from_type: &DataType,
     to_typoid: Oid,
@@ -746,6 +746,10 @@ fn unbounded_numeric_target(
     }
 
     let (precision, scale) = match from_type {
+        // a numeric written as text, which a numeric with a precision above Postgres' decimal
+        // limit reads through the text path too. Parsing the text keeps every digit, while
+        // casting it to the default decimal type would not
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => return Some(DataType::Utf8),
         DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
             (*precision as u32, *scale)
         }
