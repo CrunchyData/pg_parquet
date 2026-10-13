@@ -602,6 +602,8 @@ fn is_coercible(
     to_typmod: i32,
 ) -> bool {
     match (from_field.data_type(), to_field.data_type()) {
+        // a column with no type at all contains only nulls, which any type can represent
+        (DataType::Null, _) => true,
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
             if from_fields.len() != to_fields.len() {
                 return false;
@@ -633,7 +635,9 @@ fn is_coercible(
         }
         (DataType::List(from_field), DataType::List(to_field))
         | (DataType::FixedSizeList(from_field, _), DataType::List(to_field))
-        | (DataType::LargeList(from_field), DataType::List(to_field)) => {
+        | (DataType::LargeList(from_field), DataType::List(to_field))
+        | (DataType::ListView(from_field), DataType::List(to_field))
+        | (DataType::LargeListView(from_field), DataType::List(to_field)) => {
             let element_oid = array_element_typoid(to_typoid);
             let element_typmod = to_typmod;
 
@@ -692,26 +696,44 @@ fn can_pg_coerce_types(from_typoid: Oid, to_typoid: Oid, ccontext: CoercionConte
 // primitive arrow field. It returns InvalidOid if the arrow field's type is not recognized.
 fn pg_type_for_arrow_primitive_field(field: &FieldRef) -> Oid {
     match field.data_type() {
+        // a dictionary encoded field is represented by the type of its values
+        DataType::Dictionary(_, value_type) => {
+            let value_field = Field::new(
+                field.name(),
+                value_type.as_ref().clone(),
+                field.is_nullable(),
+            )
+            .with_metadata(field.metadata().clone());
+
+            pg_type_for_arrow_primitive_field(&Arc::new(value_field))
+        }
         DataType::Float32 | DataType::Float16 => FLOAT4OID,
         DataType::Float64 => FLOAT8OID,
         DataType::Int16 | DataType::UInt16 | DataType::Int8 | DataType::UInt8 => INT2OID,
         DataType::Int32 | DataType::UInt32 => INT4OID,
         DataType::Int64 | DataType::UInt64 => INT8OID,
-        DataType::Decimal128(_, _) => NUMERICOID,
+        DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => NUMERICOID,
         DataType::Boolean => BOOLOID,
-        DataType::Date32 => DATEOID,
-        DataType::Time64(_) => TIMEOID,
+        DataType::Date32 | DataType::Date64 => DATEOID,
+        DataType::Time32(_) | DataType::Time64(_) => TIMEOID,
         DataType::Timestamp(_, None) => TIMESTAMPOID,
         DataType::Timestamp(_, Some(_)) => TIMESTAMPTZOID,
-        DataType::Utf8 | DataType::LargeUtf8 if field.extension_type_name().is_none() => TEXTOID,
-        DataType::Utf8 | DataType::LargeUtf8
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            if field.extension_type_name().is_none() =>
+        {
+            TEXTOID
+        }
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
             if field
                 .try_extension_type::<arrow_schema::extension::Json>()
                 .is_ok() =>
         {
             JSONOID
         }
-        DataType::Binary | DataType::LargeBinary => BYTEAOID,
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => BYTEAOID,
         DataType::FixedSizeBinary(16)
             if field
                 .try_extension_type::<arrow_schema::extension::Uuid>()
@@ -719,6 +741,7 @@ fn pg_type_for_arrow_primitive_field(field: &FieldRef) -> Oid {
         {
             UUIDOID
         }
+        DataType::FixedSizeBinary(_) => BYTEAOID,
         _ => InvalidOid,
     }
 }

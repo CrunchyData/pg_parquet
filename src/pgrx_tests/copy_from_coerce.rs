@@ -11,13 +11,16 @@ mod tests {
         date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
     };
     use arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+        ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+        Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float32Array,
         Float64Array, Int16Array, Int32Array, Int8Array, LargeBinaryArray, LargeListArray,
-        LargeStringArray, ListArray, MapArray, RecordBatch, StringArray, StructArray,
+        LargeListViewArray, LargeStringArray, ListArray, ListViewArray, MapArray, NullArray,
+        RecordBatch, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
         Time64MicrosecondArray, TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-    use arrow::datatypes::UInt16Type;
+    use arrow::datatypes::i256;
+    use arrow::datatypes::{Int32Type, UInt16Type};
     use arrow_schema::{DataType, Field, Schema, TimeUnit};
     use pgrx::pg_test;
     use pgrx::{
@@ -608,6 +611,66 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_coerce_list_view() {
+        // LISTVIEW[UINT16] => int[], LARGELISTVIEW[UTF8] => text[]
+        let field_x = Field::new(
+            "x",
+            DataType::ListView(Field::new("item", DataType::UInt16, true).into()),
+            true,
+        );
+
+        let x_values = Arc::new(UInt16Array::from(vec![Some(1), Some(2)]));
+        let x = Arc::new(ListViewArray::new(
+            Arc::new(Field::new("item", DataType::UInt16, true)),
+            ScalarBuffer::from(vec![0, 2]),
+            ScalarBuffer::from(vec![2, 0]),
+            x_values,
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let field_y = Field::new(
+            "y",
+            DataType::LargeListView(Field::new("item", DataType::Utf8, true).into()),
+            true,
+        );
+
+        let y_values = Arc::new(StringArray::from(vec![Some("a"), Some("b")]));
+        let y = Arc::new(LargeListViewArray::new(
+            Arc::new(Field::new("item", DataType::Utf8, true)),
+            ScalarBuffer::from(vec![0, 2]),
+            ScalarBuffer::from(vec![2, 0]),
+            y_values,
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let schema = Arc::new(Schema::new(vec![field_x, field_y]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x int[], y text[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT x = array[1, 2] AND y = array['a', 'b'] FROM test_table \
+             WHERE x IS NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+
+        let nulls =
+            Spi::get_one::<i64>("SELECT count(*) FROM test_table WHERE x IS NULL AND y IS NULL")
+                .unwrap();
+        assert_eq!(nulls, Some(1));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+    }
+
+    #[pg_test]
     fn test_coerce_struct_types() {
         // STRUCT {a: UINT16, b: UINT16} => test_type {a: int, b: bigint}
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1093,5 +1156,210 @@ mod tests {
 
         let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_dictionary_types() {
+        // DICTIONARY(INT32, UTF8) => {text}, LIST(DICTIONARY(INT32, UTF8)) => {text[]}
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", dictionary_type.clone(), true),
+            Field::new(
+                "y",
+                DataType::List(Field::new("item", dictionary_type.clone(), true).into()),
+                true,
+            ),
+        ]));
+
+        let x: DictionaryArray<Int32Type> = vec![Some("apple"), None].into_iter().collect();
+        let x = Arc::new(x);
+
+        let y_values: DictionaryArray<Int32Type> =
+            vec![Some("apple"), Some("apple")].into_iter().collect();
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 2]));
+        let y = Arc::new(ListArray::new(
+            Arc::new(Field::new("item", dictionary_type, true)),
+            offsets,
+            Arc::new(y_values),
+            None,
+        ));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x text, y text[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT array_agg(x) = array['apple', null]::text[]
+                    AND array_agg(y::text) = array['{apple,apple}', '{}']::text[]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+    }
+
+    #[pg_test]
+    fn test_coerce_view_types() {
+        // UTF8_VIEW => {text}, BINARY_VIEW => {bytea}
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Utf8View, true),
+            Field::new("y", DataType::BinaryView, true),
+        ]));
+
+        let x = Arc::new(StringViewArray::from(vec![Some("hello"), None]));
+        let y = Arc::new(BinaryViewArray::from(vec![Some("world".as_bytes()), None]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x text, y bytea)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_two::<&str, &str>(
+            "SELECT x, encode(y, 'escape') FROM test_table ORDER BY x LIMIT 1",
+        )
+        .unwrap();
+        assert_eq!(result, (Some("hello"), Some("world")));
+    }
+
+    #[pg_test]
+    fn test_coerce_date64_and_time32() {
+        // DATE64 => {date}, TIME32(MILLIS) => {time}
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Date64, true),
+            Field::new("y", DataType::Time32(TimeUnit::Millisecond), true),
+        ]));
+
+        let date = Date::new(2022, 5, 1).unwrap();
+        let millis_per_day = 24 * 60 * 60 * 1000;
+        let x = Arc::new(Date64Array::from(vec![
+            date_to_i32(date) as i64 * millis_per_day,
+        ]));
+
+        let y = Arc::new(Time32MillisecondArray::from(vec![15 * 60 * 1000]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x date, y time)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_two::<Date, Time>("SELECT x, y FROM test_table LIMIT 1").unwrap();
+        assert_eq!(result, (Some(date), Some(Time::new(0, 15, 0.0).unwrap())));
+    }
+
+    #[pg_test]
+    fn test_coerce_decimal256() {
+        // DECIMAL256 => {numeric}
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Decimal256(45, 5), true),
+            Field::new("y", DataType::Decimal256(10, 2), true),
+        ]));
+
+        let x = Arc::new(
+            Decimal256Array::from(vec![i256::from_string("1".repeat(45).as_str()).unwrap()])
+                .with_precision_and_scale(45, 5)
+                .unwrap(),
+        );
+
+        let y = Arc::new(
+            Decimal256Array::from(vec![i256::from_i128(1234)])
+                .with_precision_and_scale(10, 2)
+                .unwrap(),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        // numeric with precision greater than 38 is read as text by pg_parquet
+        let create_table = "CREATE TABLE test_table (x numeric(45,5), y numeric(10,2))";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result =
+            Spi::get_two::<&str, &str>("SELECT x::text, y::text FROM test_table LIMIT 1").unwrap();
+        assert_eq!(
+            result,
+            (
+                Some(format!("{}.{}", "1".repeat(40), "1".repeat(5)).as_str()),
+                Some("12.34")
+            )
+        );
+    }
+
+    #[pg_test]
+    fn test_coerce_fixed_size_binary() {
+        // FIXED_SIZE_BINARY => {bytea}
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::FixedSizeBinary(4),
+            true,
+        )]));
+
+        let x = Arc::new(
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+                vec![Some(b"abcd"), None].into_iter(),
+                4,
+            )
+            .unwrap(),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bytea)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT array_agg(encode(x, 'escape')) = array['abcd', null]::text[] FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+    }
+
+    #[pg_test]
+    fn test_coerce_null_type() {
+        // NULL => any type
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Null, true),
+            Field::new("y", DataType::Null, true),
+            Field::new("z", DataType::Null, true),
+        ]));
+
+        let x = Arc::new(NullArray::new(2));
+        let y = Arc::new(NullArray::new(2));
+        let z = Arc::new(NullArray::new(2));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y, z]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x text, y timestamptz, z int[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<i64>(
+            "SELECT count(*) FROM test_table WHERE x IS NULL AND y IS NULL AND z IS NULL",
+        )
+        .unwrap();
+        assert_eq!(result, Some(2));
     }
 }
