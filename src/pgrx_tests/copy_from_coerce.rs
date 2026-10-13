@@ -1764,4 +1764,48 @@ mod tests {
         .unwrap();
         assert_eq!(result, Some(2));
     }
+
+    #[pg_test]
+    fn test_coerce_duckdb_infinity_sentinels() {
+        // DuckDB writes -infinity as one above the minimum of the underlying integer and
+        // infinity as its maximum
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Date32, true),
+            Field::new("y", DataType::Timestamp(TimeUnit::Microsecond, None), true),
+            Field::new(
+                "z",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+        ]));
+
+        let x = Arc::new(Date32Array::from(vec![i32::MAX, i32::MIN + 1]));
+        let y = Arc::new(TimestampMicrosecondArray::from(vec![
+            i64::MAX,
+            i64::MIN + 1,
+        ]));
+        let z = Arc::new(
+            TimestampMicrosecondArray::from(vec![i64::MAX, i64::MIN + 1]).with_timezone("UTC"),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y, z]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x date, y timestamp, z timestamptz)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT array_agg(x) = array['infinity','-infinity']::date[]
+                    AND array_agg(y) = array['infinity','-infinity']::timestamp[]
+                    AND array_agg(z) = array['infinity','-infinity']::timestamptz[]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+
+        Spi::run("DROP TABLE test_table").unwrap();
+    }
 }
