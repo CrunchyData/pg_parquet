@@ -1104,6 +1104,68 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_coerce_map_with_spec_value_field_name() {
+        // Skip the test if crunchy_map extension is not available
+        if !extension_exists("crunchy_map") {
+            return;
+        }
+
+        // the parquet format names the value field of a map "value", which is what the
+        // writers other than pg_parquet write. pg_parquet names it "val" after the
+        // crunchy_map entry type, and the two must still match each other
+        let entries_field = Arc::new(Field::new(
+            "key_value",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::UInt16, false),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Map(entries_field.clone(), false),
+            false,
+        )]));
+
+        let keys: ArrayRef = Arc::new(StringArray::from(vec![Some("aa"), Some("bb")]));
+        let values: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1), Some(2)]));
+
+        let entries = StructArray::try_from(vec![("key", keys), ("value", values)]).unwrap();
+
+        let map_offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 2]));
+
+        let map_nulls = NullBuffer::from(vec![true]);
+
+        let x = Arc::new(MapArray::new(
+            entries_field,
+            map_offsets,
+            entries,
+            Some(map_nulls),
+            false,
+        ));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        Spi::run("DROP EXTENSION IF EXISTS crunchy_map; CREATE EXTENSION crunchy_map;").unwrap();
+
+        Spi::run("SELECT crunchy_map.create('text','bigint');").unwrap();
+
+        let create_table = "CREATE TABLE test_table (x crunchy_map.key_text_val_bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>("select x = array[('aa',1),('bb',2)]::crunchy_map.key_text_val_bigint from test_table LIMIT 1;").unwrap().unwrap();
+        assert!(value);
+    }
+
+    #[pg_test]
     fn test_coerce_list_of_map() {
         // Skip the test if crunchy_map extension is not available
         if !extension_exists("crunchy_map") {
