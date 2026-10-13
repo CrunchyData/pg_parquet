@@ -1766,6 +1766,27 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(
+        expected = "string value in the parquet file contains a null byte, which PostgreSQL cannot store"
+    )]
+    fn test_coerce_string_with_null_byte() {
+        // a string with a null byte is rejected instead of being truncated at it, which is what
+        // the input function of a type read through the text path would do
+        let schema = Arc::new(Schema::new(vec![Field::new("x", DataType::Utf8, true)]));
+
+        let x = Arc::new(StringArray::from(vec!["a\0b"]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x varchar(10))";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+    }
+
+    #[pg_test]
     fn test_coerce_decimal256() {
         // DECIMAL256 => {numeric}
         let schema = Arc::new(Schema::new(vec![
