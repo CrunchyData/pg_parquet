@@ -677,8 +677,10 @@ fn is_coercible(
             let (entries_typoid, entries_typmod) = domain_array_base_elem_type(to_typoid);
 
             // arrow-cast casts the key and the value of a map by position, never by name
+            let from_entries_field = entries_field_renamed_as(from_entries_field, to_entries_field);
+
             is_coercible(
-                from_entries_field,
+                &from_entries_field,
                 to_entries_field,
                 entries_typoid,
                 entries_typmod,
@@ -702,6 +704,39 @@ fn is_coercible(
             can_pg_coerce_types(from_typoid, to_typoid, COERCION_EXPLICIT)
         }
     }
+}
+
+// The parquet format names a map's entries "key" and "value", while a crunchy_map
+// entry names them "key" and "val", so the names do not agree across writers. Both
+// the format and arrow-cast address the two by position, so give the file's entries
+// the table's names and let the positional comparison see past them. The entries are
+// left alone when they are not comparable, so that is_coercible still rejects them.
+fn entries_field_renamed_as(
+    from_entries_field: &FieldRef,
+    to_entries_field: &FieldRef,
+) -> FieldRef {
+    let (DataType::Struct(from_fields), DataType::Struct(to_fields)) =
+        (from_entries_field.data_type(), to_entries_field.data_type())
+    else {
+        return from_entries_field.clone();
+    };
+
+    if from_fields.len() != to_fields.len() {
+        return from_entries_field.clone();
+    }
+
+    let renamed_fields: Vec<Field> = from_fields
+        .iter()
+        .zip(to_fields.iter())
+        .map(|(from_field, to_field)| from_field.as_ref().clone().with_name(to_field.name()))
+        .collect();
+
+    Arc::new(
+        from_entries_field
+            .as_ref()
+            .clone()
+            .with_data_type(DataType::Struct(Fields::from(renamed_fields))),
+    )
 }
 
 fn can_pg_coerce_types(from_typoid: Oid, to_typoid: Oid, ccontext: CoercionContext::Type) -> bool {
