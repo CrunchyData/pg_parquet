@@ -26,7 +26,8 @@ use crate::{
         geometry::is_postgis_geometry_type,
         map::is_map_type,
         pg_arrow_type_conversions::{
-            extract_precision_and_scale_from_numeric_typmod, should_write_numeric_as_text,
+            extract_precision_and_scale_from_numeric_typmod, is_unbounded_numeric_typmod,
+            should_write_numeric_as_text, DEFAULT_UNBOUNDED_NUMERIC_SCALE, MAX_NUMERIC_PRECISION,
         },
     },
 };
@@ -612,59 +613,70 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
             continue;
         }
 
-        if !is_coercible(
+        let target_type = coercion_target(
             &file_schema_field,
             tupledesc_schema_field,
             attribute.atttypid,
             attribute.atttypmod,
             match_by,
-        ) {
+        )
+        .unwrap_or_else(|| {
             panic!(
                 "type mismatch for column \"{field_name}\" between table and parquet file.\n\n\
                  table has \"{to_type}\"\n\nparquet file has \"{from_type}\""
-            );
-        }
+            )
+        });
 
         pgrx::debug2!(
             "column \"{}\" is being cast from \"{}\" to \"{}\"",
             field_name,
             from_type,
-            to_type
+            target_type
         );
 
-        cast_to_types.push(Some(to_type.clone()));
+        cast_to_types.push(Some(target_type));
     }
 
     cast_to_types
 }
 
-// is_coercible first checks if "from_type" can be cast to "to_type" by arrow-cast.
+// coercion_target returns the type that the file's field should be cast to, or None if the
+// file's field cannot be coerced to the table's type at all.
+//
+// It first checks if "from_type" can be cast to "to_type" by arrow-cast.
 // Then, it checks if the cast is meaningful at Postgres by seeing if there is
 // an explicit coercion from "from_typoid" to "to_typoid".
+//
+// The returned type is the table's type except for an unbounded "numeric", which adopts the
+// file's decimal type to avoid losing digits that Postgres is able to store.
 //
 // Additionaly, we need to be careful about struct rules for the cast:
 // Arrow supports casting struct fields by field position instead of field name,
 // which is not the intended behavior for pg_parquet. Hence, struct fields are matched
 // the same way as the top level columns, by position or by name.
-fn is_coercible(
+fn coercion_target(
     from_field: &FieldRef,
     to_field: &FieldRef,
     to_typoid: Oid,
     to_typmod: i32,
     match_by: MatchBy,
-) -> bool {
-    match (from_field.data_type(), to_field.data_type()) {
+) -> Option<DataType> {
+    let to_type = to_field.data_type();
+
+    match (from_field.data_type(), to_type) {
         // a column with no type at all contains only nulls, which any type can represent
-        (DataType::Null, _) => true,
+        (DataType::Null, _) => Some(to_type.clone()),
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
             // arrow-cast refuses a struct cast that changes the number of fields
             if from_fields.len() != to_fields.len() {
-                return false;
+                return None;
             }
 
             let tupledesc = tuple_desc(to_typoid, to_typmod);
 
             let attributes = collect_attributes_for(CollectAttributesFor::Other, &tupledesc);
+
+            let mut target_fields = Vec::with_capacity(to_fields.len());
 
             for (field_idx, (to_field, to_attribute)) in
                 to_fields.iter().zip(attributes.iter()).enumerate()
@@ -676,7 +688,7 @@ fn is_coercible(
                         // arrow-cast casts the struct fields by position, so the names
                         // must match to avoid casting a field to an unrelated one
                         if from_field.name() != to_field.name() {
-                            return false;
+                            return None;
                         }
 
                         from_field
@@ -684,29 +696,23 @@ fn is_coercible(
 
                     // arrow-cast reorders the struct fields by name as long as all
                     // target fields are found in the file's struct
-                    MatchBy::Name => {
-                        match from_fields
-                            .iter()
-                            .find(|from_field| from_field.name() == to_field.name())
-                        {
-                            Some(from_field) => from_field,
-                            None => return false,
-                        }
-                    }
+                    MatchBy::Name => from_fields
+                        .iter()
+                        .find(|from_field| from_field.name() == to_field.name())?,
                 };
 
-                if !is_coercible(
+                let target_type = coercion_target(
                     from_field,
                     to_field,
                     to_attribute.type_oid().value(),
                     to_attribute.type_mod(),
                     match_by,
-                ) {
-                    return false;
-                }
+                )?;
+
+                target_fields.push(to_field.as_ref().clone().with_data_type(target_type));
             }
 
-            true
+            Some(DataType::Struct(target_fields.into()))
         }
         (DataType::List(from_field), DataType::List(to_field))
         | (DataType::FixedSizeList(from_field, _), DataType::List(to_field))
@@ -716,42 +722,108 @@ fn is_coercible(
             let element_oid = array_element_typoid(to_typoid);
             let element_typmod = to_typmod;
 
-            is_coercible(from_field, to_field, element_oid, element_typmod, match_by)
+            let target_type =
+                coercion_target(from_field, to_field, element_oid, element_typmod, match_by)?;
+
+            Some(DataType::List(Arc::new(
+                to_field.as_ref().clone().with_data_type(target_type),
+            )))
         }
-        (DataType::Map(from_entries_field, _), DataType::Map(to_entries_field, _)) => {
+        (DataType::Map(from_entries_field, _), DataType::Map(to_entries_field, sorted)) => {
             // entries field cannot be null
             if from_entries_field.is_nullable() {
-                return false;
+                return None;
             }
 
             let (entries_typoid, entries_typmod) = domain_array_base_elem_type(to_typoid);
 
             // arrow-cast casts the key and the value of a map by position, never by name
-            is_coercible(
+            let target_type = coercion_target(
                 from_entries_field,
                 to_entries_field,
                 entries_typoid,
                 entries_typmod,
                 MatchBy::Position,
-            )
+            )?;
+
+            Some(DataType::Map(
+                Arc::new(
+                    to_entries_field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(target_type),
+                ),
+                *sorted,
+            ))
         }
         _ => {
             // check if arrow-cast can cast the types
-            if !can_cast_types(from_field.data_type(), to_field.data_type()) {
-                return false;
+            if !can_cast_types(from_field.data_type(), to_type) {
+                return None;
             }
 
             let from_typoid = pg_type_for_arrow_primitive_field(from_field);
 
             // pg_parquet could not recognize that arrow type
             if from_typoid == InvalidOid {
-                return false;
+                return None;
             }
 
             // check if coercion is meaningful at Postgres (it has a coercion path)
-            can_pg_coerce_types(from_typoid, to_typoid, COERCION_EXPLICIT)
+            if !can_pg_coerce_types(from_typoid, to_typoid, COERCION_EXPLICIT) {
+                return None;
+            }
+
+            Some(
+                unbounded_numeric_target(from_field.data_type(), to_typoid, to_typmod)
+                    .unwrap_or_else(|| to_type.clone()),
+            )
         }
     }
+}
+
+// unbounded_numeric_target returns the type to read into an unbounded "numeric" column when the
+// default unbounded numeric type, "numeric(38,9)", cannot represent the file's value without
+// losing digits. Postgres stores an unbounded numeric at any precision and scale, so rescaling
+// it to the default ones would silently truncate the value.
+fn unbounded_numeric_target(
+    from_type: &DataType,
+    to_typoid: Oid,
+    to_typmod: i32,
+) -> Option<DataType> {
+    if to_typoid != NUMERICOID || !is_unbounded_numeric_typmod(to_typmod) {
+        return None;
+    }
+
+    let (precision, scale) = match from_type {
+        // a numeric written as text, which a numeric with a precision above Postgres' decimal
+        // limit reads through the text path too. Parsing the text keeps every digit, while
+        // casting it to the default decimal type would not
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => return Some(DataType::Utf8),
+        // a negative scale has no Postgres representation to preserve, so such a decimal is
+        // read as the default unbounded numeric type like before
+        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale)
+            if *scale >= 0 =>
+        {
+            (*precision as u32, *scale as u32)
+        }
+        _ => return None,
+    };
+
+    // a precision wider than Postgres' decimal limit has no decimal type to read into, so the
+    // value is formatted as text and parsed, which also keeps every digit
+    if precision > MAX_NUMERIC_PRECISION {
+        return Some(DataType::Utf8);
+    }
+
+    let fits_default_unbounded_numeric = scale <= DEFAULT_UNBOUNDED_NUMERIC_SCALE
+        && precision - scale <= MAX_NUMERIC_PRECISION - DEFAULT_UNBOUNDED_NUMERIC_SCALE;
+
+    if fits_default_unbounded_numeric {
+        return None;
+    }
+
+    Some(DataType::Decimal128(precision as _, scale as _))
 }
 
 fn can_pg_coerce_types(from_typoid: Oid, to_typoid: Oid, ccontext: CoercionContext::Type) -> bool {

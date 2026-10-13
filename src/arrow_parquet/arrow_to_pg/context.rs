@@ -132,8 +132,17 @@ impl ArrowToPgAttributeTypeContext {
 
     fn new_primitive(typoid: Oid, typmod: i32, data_type: &DataType) -> Self {
         let (precision, scale) = if typoid == NUMERICOID {
-            let (p, s) = extract_precision_and_scale_from_numeric_typmod(typmod);
-            (Some(p), Some(s))
+            // the array's own decimal type is what the values are encoded with, which can differ
+            // from the typmod's for an unbounded numeric that adopted the file's decimal type
+            match data_type {
+                DataType::Decimal128(precision, scale) if *scale >= 0 => {
+                    (Some(*precision as u32), Some(*scale as u32))
+                }
+                _ => {
+                    let (p, s) = extract_precision_and_scale_from_numeric_typmod(typmod);
+                    (Some(p), Some(s))
+                }
+            }
         } else {
             (None, None)
         };
