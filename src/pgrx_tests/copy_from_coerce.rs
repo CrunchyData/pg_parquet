@@ -14,9 +14,9 @@ mod tests {
         ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray, Float32Array,
         Float64Array, Int16Array, Int32Array, Int8Array, LargeBinaryArray, LargeListArray,
-        LargeStringArray, ListArray, MapArray, NullArray, RecordBatch, StringArray,
-        StringViewArray, StructArray, Time32MillisecondArray, Time64MicrosecondArray,
-        TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
+        LargeListViewArray, LargeStringArray, ListArray, ListViewArray, MapArray, NullArray,
+        RecordBatch, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
+        Time64MicrosecondArray, TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::i256;
@@ -605,6 +605,66 @@ mod tests {
             value,
             (Some(vec![Some(1), Some(2)]), Some(vec![Some(3), Some(4)]))
         );
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_list_view() {
+        // LISTVIEW[UINT16] => int[], LARGELISTVIEW[UTF8] => text[]
+        let field_x = Field::new(
+            "x",
+            DataType::ListView(Field::new("item", DataType::UInt16, true).into()),
+            true,
+        );
+
+        let x_values = Arc::new(UInt16Array::from(vec![Some(1), Some(2)]));
+        let x = Arc::new(ListViewArray::new(
+            Arc::new(Field::new("item", DataType::UInt16, true)),
+            ScalarBuffer::from(vec![0, 2]),
+            ScalarBuffer::from(vec![2, 0]),
+            x_values,
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let field_y = Field::new(
+            "y",
+            DataType::LargeListView(Field::new("item", DataType::Utf8, true).into()),
+            true,
+        );
+
+        let y_values = Arc::new(StringArray::from(vec![Some("a"), Some("b")]));
+        let y = Arc::new(LargeListViewArray::new(
+            Arc::new(Field::new("item", DataType::Utf8, true)),
+            ScalarBuffer::from(vec![0, 2]),
+            ScalarBuffer::from(vec![2, 0]),
+            y_values,
+            Some(NullBuffer::from(vec![true, false])),
+        ));
+
+        let schema = Arc::new(Schema::new(vec![field_x, field_y]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x int[], y text[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT x = array[1, 2] AND y = array['a', 'b'] FROM test_table \
+             WHERE x IS NOT NULL",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+
+        let nulls =
+            Spi::get_one::<i64>("SELECT count(*) FROM test_table WHERE x IS NULL AND y IS NULL")
+                .unwrap();
+        assert_eq!(nulls, Some(1));
 
         let drop_table = "DROP TABLE test_table";
         Spi::run(drop_table).unwrap();

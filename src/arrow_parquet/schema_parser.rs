@@ -630,7 +630,9 @@ fn is_coercible(
         }
         (DataType::List(from_field), DataType::List(to_field))
         | (DataType::FixedSizeList(from_field, _), DataType::List(to_field))
-        | (DataType::LargeList(from_field), DataType::List(to_field)) => {
+        | (DataType::LargeList(from_field), DataType::List(to_field))
+        | (DataType::ListView(from_field), DataType::List(to_field))
+        | (DataType::LargeListView(from_field), DataType::List(to_field)) => {
             let element_oid = array_element_typoid(to_typoid);
             let element_typmod = to_typmod;
 
