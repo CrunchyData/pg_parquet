@@ -900,6 +900,46 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_coerce_struct_fields_by_position() {
+        // no other writer names a struct's fields after the Postgres composite type's
+        // attributes, so match_by 'position' has to see past the names
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("first", DataType::UInt16, false),
+                    Field::new("second", DataType::Utf8, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let first: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1)]));
+        let second: ArrayRef = Arc::new(StringArray::from(vec![Some("p")]));
+
+        let x =
+            Arc::new(StructArray::try_from(vec![("first", first), ("second", second)]).unwrap());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int, b text)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'position')");
+        Spi::run(&copy_from).unwrap();
+
+        let result =
+            Spi::get_one::<bool>("SELECT (x).a = 1 AND (x).b = 'p' FROM test_table").unwrap();
+        assert_eq!(result, Some(true));
+    }
+
+    #[pg_test]
     #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
     fn test_coerce_struct_type_with_different_field_name() {
         let schema = Arc::new(Schema::new(vec![Field::new(
