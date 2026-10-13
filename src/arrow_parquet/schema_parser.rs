@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use arrow::datatypes::{Field, Fields, Schema};
+use arrow::datatypes::{Field, Fields, Schema, SchemaRef};
 use arrow_cast::can_cast_types;
 use arrow_schema::{DataType, FieldRef};
 use parquet::arrow::{ArrowSchemaConverter, PARQUET_FIELD_ID_META_KEY};
@@ -501,6 +501,56 @@ pub(crate) fn error_if_copy_from_match_by_position_with_generated_columns(
             );
         }
     }
+}
+
+// schema_without_dictionaries returns the schema with its dictionary encoded fields replaced
+// by their value types. It returns None if the schema has no dictionary encoded field. We read
+// those columns as their value types since the Parquet dictionary decoder cannot build a
+// dictionary of all value types e.g. of boolean or of decimal.
+pub(crate) fn schema_without_dictionaries(schema: &Schema) -> Option<SchemaRef> {
+    let fields = fields_without_dictionaries(schema.fields())?;
+
+    Some(Arc::new(Schema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    )))
+}
+
+fn fields_without_dictionaries(fields: &Fields) -> Option<Fields> {
+    let mut new_fields = Vec::with_capacity(fields.len());
+    let mut found_dictionary = false;
+
+    for field in fields {
+        match field_without_dictionary(field) {
+            Some(new_field) => {
+                found_dictionary = true;
+                new_fields.push(new_field);
+            }
+            None => new_fields.push(field.clone()),
+        }
+    }
+
+    found_dictionary.then(|| new_fields.into())
+}
+
+fn field_without_dictionary(field: &FieldRef) -> Option<FieldRef> {
+    let data_type = match field.data_type() {
+        DataType::Dictionary(_, value_type) => value_type.as_ref().clone(),
+        DataType::List(field) => DataType::List(field_without_dictionary(field)?),
+        DataType::LargeList(field) => DataType::LargeList(field_without_dictionary(field)?),
+        DataType::ListView(field) => DataType::ListView(field_without_dictionary(field)?),
+        DataType::LargeListView(field) => DataType::LargeListView(field_without_dictionary(field)?),
+        DataType::FixedSizeList(field, size) => {
+            DataType::FixedSizeList(field_without_dictionary(field)?, *size)
+        }
+        DataType::Struct(fields) => DataType::Struct(fields_without_dictionaries(fields)?),
+        DataType::Map(entries_field, sorted) => {
+            DataType::Map(field_without_dictionary(entries_field)?, *sorted)
+        }
+        _ => return None,
+    };
+
+    Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
 }
 
 // ensure_file_schema_match_tupledesc_schema throws an error if the file's schema does not match the table schema.

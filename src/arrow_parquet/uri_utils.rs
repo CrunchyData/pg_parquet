@@ -8,7 +8,7 @@ use object_store::{
 };
 use parquet::{
     arrow::{
-        arrow_reader::ArrowReaderOptions,
+        arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions},
         async_reader::{AsyncFileReader, ParquetRecordBatchStream},
         ArrowSchemaConverter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
     },
@@ -29,6 +29,7 @@ use pgrx::{
 use url::Url;
 
 use crate::{
+    arrow_parquet::schema_parser::schema_without_dictionaries,
     object_store::{
         aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
         http::parse_http_base_uri, object_store_cache::get_or_create_object_store,
@@ -282,12 +283,45 @@ pub(crate) fn parquet_reader_from_uri(
             )
         })?;
 
-        let parquet_object_reader =
-            ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
+        let parquet_object_reader = ParquetObjectStoreReader::new(
+            parquet_object_store.clone(),
+            location.clone(),
+            object_store_meta.size,
+        );
 
         let builder = ParquetRecordBatchStreamBuilder::new(parquet_object_reader)
             .await
             .unwrap_or_else(|e| panic!("{}", e));
+
+        // read the dictionary encoded columns as their value types since the Parquet
+        // dictionary decoder cannot build a dictionary of all value types
+        let builder = match schema_without_dictionaries(builder.schema()) {
+            Some(schema) => {
+                let options = ArrowReaderOptions::new().with_schema(schema);
+
+                match ArrowReaderMetadata::try_new(builder.metadata().clone(), options) {
+                    Ok(reader_metadata) => {
+                        let parquet_object_reader = ParquetObjectStoreReader::new(
+                            parquet_object_store,
+                            location,
+                            object_store_meta.size,
+                        );
+
+                        ParquetRecordBatchStreamBuilder::new_with_metadata(
+                            parquet_object_reader,
+                            reader_metadata,
+                        )
+                    }
+                    // keep the reader's own schema if it rejects the dictionary free one
+                    Err(e) => {
+                        pgrx::debug2!("Dictionary free schema is rejected: {}", e);
+
+                        builder
+                    }
+                }
+            }
+            None => builder,
+        };
 
         pgrx::debug2!("Converted arrow schema is: {}", builder.schema());
 
