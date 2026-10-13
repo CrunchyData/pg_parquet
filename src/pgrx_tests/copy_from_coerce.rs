@@ -645,6 +645,62 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_coerce_struct_fields_by_name() {
+        // match_by 'name' matches the struct fields by name at any nesting level
+        let inner_fields = vec![
+            Field::new("d", DataType::UInt16, false),
+            Field::new("c", DataType::UInt16, false),
+        ];
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("y", DataType::Struct(inner_fields.clone().into()), false),
+                    Field::new("b", DataType::UInt16, false),
+                    Field::new("a", DataType::UInt16, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let c: ArrayRef = Arc::new(UInt16Array::from(vec![Some(3)]));
+        let d: ArrayRef = Arc::new(UInt16Array::from(vec![Some(4)]));
+        let y: ArrayRef = Arc::new(StructArray::try_from(vec![("d", d), ("c", c)]).unwrap());
+
+        let a: ArrayRef = Arc::new(UInt16Array::from(vec![Some(1)]));
+        let b: ArrayRef = Arc::new(UInt16Array::from(vec![Some(2)]));
+
+        let x = Arc::new(StructArray::try_from(vec![("y", y), ("b", b), ("a", a)]).unwrap());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_inner_type = "CREATE TYPE test_inner_type AS (c int, d bigint)";
+        Spi::run(create_inner_type).unwrap();
+
+        let create_type = "CREATE TYPE test_type AS (a int, b bigint, y test_inner_type)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+
+        let value =
+            Spi::get_two::<i32, i64>("SELECT (x).a, (x).b FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(1), Some(2)));
+
+        let inner_value =
+            Spi::get_two::<i32, i64>("SELECT ((x).y).c, ((x).y).d FROM test_table LIMIT 1")
+                .unwrap();
+        assert_eq!(inner_value, (Some(3), Some(4)));
+    }
+
+    #[pg_test]
     fn test_coerce_list_of_struct() {
         // [STRUCT {a: UINT16, b: UINT16}] => test_type {a: int, b: bigint}[]
         let schema = Arc::new(Schema::new(vec![Field::new(
