@@ -184,6 +184,41 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_with_dropped_attribute_in_composite_type() {
+        Spi::run("DROP TABLE IF EXISTS test_table;").unwrap();
+        Spi::run("DROP TYPE IF EXISTS dropped_attr_type;").unwrap();
+
+        Spi::run("CREATE TYPE dropped_attr_type AS (a int, b text, c int);").unwrap();
+
+        Spi::run("ALTER TYPE dropped_attr_type DROP ATTRIBUTE b;").unwrap();
+
+        Spi::run("CREATE TABLE test_table (x dropped_attr_type, y dropped_attr_type[]);").unwrap();
+
+        Spi::run(
+            "INSERT INTO test_table VALUES (row(1, 3)::dropped_attr_type, \
+             array[row(4, 6)::dropped_attr_type]);",
+        )
+        .unwrap();
+
+        let copy_to_query =
+            format!("COPY test_table TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
+        Spi::run(&copy_to_query).unwrap();
+
+        Spi::run("TRUNCATE test_table;").unwrap();
+
+        let copy_from_query =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
+        Spi::run(&copy_from_query).unwrap();
+
+        let result =
+            Spi::get_two::<String, String>("SELECT x::text, y::text FROM test_table").unwrap();
+        assert_eq!(
+            result,
+            (Some("(1,3)".to_string()), Some("{\"(4,6)\"}".to_string()))
+        );
+    }
+
+    #[pg_test]
     fn test_with_column_names() {
         let create_table = "create table test_table(id int, name text);";
         Spi::run(create_table).unwrap();
