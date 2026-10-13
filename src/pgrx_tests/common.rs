@@ -1,13 +1,20 @@
 use std::fs::File;
 use std::marker::PhantomData;
 use std::path::Path;
+use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug};
 
 use crate::type_compat::map::Map;
 
 use arrow::array::RecordBatch;
-use arrow_schema::SchemaRef;
+use arrow_schema::{Schema, SchemaRef};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::{encode_arrow_schema, ARROW_SCHEMA_META_KEY};
+use parquet::data_type::{Int96, Int96Type};
+use parquet::file::metadata::KeyValue;
+use parquet::file::properties::WriterProperties;
+use parquet::file::writer::SerializedFileWriter;
+use parquet::schema::parser::parse_message_type;
 use pgrx::spi;
 use pgrx::{
     datum::{Time, TimeWithTimeZone},
@@ -389,6 +396,53 @@ pub(crate) fn write_record_batch_to_parquet(schema: SchemaRef, record_batch: Rec
 
     writer.write(&record_batch).unwrap();
     writer.close().unwrap();
+}
+
+// arrow-rs cannot write INT96, which Hive, Impala and Spark write their timestamps as, so
+// such a file is written here with the low level parquet writer. message_type must describe
+// a single INT96 leaf, and def_levels must carry one entry per value, max_def_level for a
+// value that is present. rep_levels is needed only for a leaf under a repeated group.
+pub(crate) fn write_int96_timestamps_to_parquet(
+    message_type: &str,
+    timestamps: &[Int96],
+    def_levels: &[i16],
+    rep_levels: Option<&[i16]>,
+    arrow_schema: Option<&Schema>,
+) {
+    let properties = match arrow_schema {
+        Some(arrow_schema) => WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![KeyValue::new(
+                ARROW_SCHEMA_META_KEY.to_string(),
+                encode_arrow_schema(arrow_schema),
+            )]))
+            .build(),
+        None => WriterProperties::default(),
+    };
+
+    let schema = Arc::new(parse_message_type(message_type).unwrap());
+    let file = File::create(LOCAL_TEST_FILE_PATH).unwrap();
+
+    let mut writer = SerializedFileWriter::new(file, schema, Arc::new(properties)).unwrap();
+    let mut row_group = writer.next_row_group().unwrap();
+    let mut column = row_group.next_column().unwrap().unwrap();
+
+    column
+        .typed::<Int96Type>()
+        .write_batch(timestamps, Some(def_levels), rep_levels)
+        .unwrap();
+
+    column.close().unwrap();
+    row_group.close().unwrap();
+    writer.close().unwrap();
+}
+
+// an INT96 timestamp is a julian day and the nanoseconds elapsed in that day
+pub(crate) fn int96_timestamp(julian_day: u32, nanos_of_day: u64) -> Int96 {
+    let mut timestamp = Int96::new();
+
+    timestamp.set_data(nanos_of_day as u32, (nanos_of_day >> 32) as u32, julian_day);
+
+    timestamp
 }
 
 pub(crate) fn create_crunchy_map_type(key_type: &str, val_type: &str) -> String {

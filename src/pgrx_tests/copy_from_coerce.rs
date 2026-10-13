@@ -5,7 +5,8 @@ mod tests {
     use std::vec;
 
     use crate::pgrx_tests::common::{
-        extension_exists, write_record_batch_to_parquet, LOCAL_TEST_FILE_PATH,
+        extension_exists, int96_timestamp, write_int96_timestamps_to_parquet,
+        write_record_batch_to_parquet, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::pg_arrow_type_conversions::{
         date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
@@ -1847,5 +1848,210 @@ mod tests {
         assert_eq!(result, Some(true));
 
         Spi::run("DROP TABLE test_table").unwrap();
+    }
+
+    #[pg_test]
+    fn test_coerce_int96_timestamps() {
+        // an INT96 column carries no logical type to record its resolution, so parquet-rs reads
+        // it as nanoseconds, which wraps around outside 1677..2262. the resolution is hinted as
+        // microseconds, which covers the whole range Postgres can store.
+        let message_type = "message schema { OPTIONAL INT96 x; }";
+
+        let timestamps = [
+            int96_timestamp(2086303, 0),                  // 1000-01-01 00:00:00
+            int96_timestamp(2440588, 0),                  // 1970-01-01 00:00:00
+            int96_timestamp(2634531, 86_399_000_000_000), // 2500-12-31 23:59:59
+        ];
+
+        let def_levels = [1, 1, 1];
+
+        write_int96_timestamps_to_parquet(message_type, &timestamps, &def_levels, None, None);
+
+        // INT96 => {timestamp}
+        let create_table = "CREATE TABLE test_table (x timestamp)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT array_agg(x ORDER BY x) =
+             ARRAY['1000-01-01', '1970-01-01', '2500-12-31 23:59:59']::timestamp[]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // INT96 => {timestamptz}
+        let create_table = "CREATE TABLE test_table (x timestamptz)";
+        Spi::run(create_table).unwrap();
+
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT array_agg(x ORDER BY x) =
+             ARRAY['1000-01-01+00', '1970-01-01+00', '2500-12-31 23:59:59+00']::timestamptz[]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // the resolution is hinted at any nesting level
+        let message_type = "message schema { OPTIONAL group x { OPTIONAL INT96 ts; } }";
+
+        let timestamps = [int96_timestamp(2305448, 0)]; // 1600-01-01 00:00:00
+
+        let def_levels = [2];
+
+        write_int96_timestamps_to_parquet(message_type, &timestamps, &def_levels, None, None);
+
+        let create_type = "CREATE TYPE test_type AS (ts timestamp)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<Timestamp>("SELECT (x).ts FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, Timestamp::new(1600, 1, 1, 0, 0, 0.0).unwrap());
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // a list keeps its leaf two levels down, under the repeated group
+        let message_type =
+            "message schema { OPTIONAL group x (LIST) { REPEATED group list { OPTIONAL INT96 element; } } }";
+
+        let timestamps = [
+            int96_timestamp(2086303, 0), // 1000-01-01 00:00:00
+            int96_timestamp(2634531, 0), // 2500-12-31 00:00:00
+        ];
+
+        let def_levels = [3, 3];
+        let rep_levels = [0, 1];
+
+        write_int96_timestamps_to_parquet(
+            message_type,
+            &timestamps,
+            &def_levels,
+            Some(&rep_levels),
+            None,
+        );
+
+        let create_table = "CREATE TABLE test_table (x timestamp[])";
+        Spi::run(create_table).unwrap();
+
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT x = ARRAY['1000-01-01', '2500-12-31']::timestamp[] FROM test_table LIMIT 1",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // the legacy two level encoding, where the repeated level is the leaf itself
+        let message_type = "message schema { OPTIONAL group x (LIST) { REPEATED INT96 array; } }";
+
+        let def_levels = [2, 2];
+
+        write_int96_timestamps_to_parquet(
+            message_type,
+            &timestamps,
+            &def_levels,
+            Some(&rep_levels),
+            None,
+        );
+
+        let create_table = "CREATE TABLE test_table (x timestamp[])";
+        Spi::run(create_table).unwrap();
+
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT x = ARRAY['1000-01-01', '2500-12-31']::timestamp[] FROM test_table LIMIT 1",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // a file that records an Arrow schema declares the resolution itself, which is kept
+        let message_type = "message schema { OPTIONAL INT96 x; }";
+
+        // 2026-01-02 03:04:05.123456789
+        let timestamps = [int96_timestamp(2461043, 11_045_123_456_789)];
+
+        let def_levels = [1];
+
+        let arrow_schema = Schema::new(vec![Field::new(
+            "x",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]);
+
+        write_int96_timestamps_to_parquet(
+            message_type,
+            &timestamps,
+            &def_levels,
+            None,
+            Some(&arrow_schema),
+        );
+
+        let create_table = "CREATE TABLE test_table (x text)";
+        Spi::run(create_table).unwrap();
+
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<String>("SELECT x FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, Some("2026-01-02T03:04:05.123456789".into()));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // the declared resolution is not necessarily nanoseconds: pyarrow writes an INT96
+        // column for a seconds, milliseconds or microseconds timestamp and records that
+        // resolution, which parquet-rs applies, so such a file is already read correctly
+        let message_type = "message schema { OPTIONAL INT96 x; }";
+
+        let timestamps = [int96_timestamp(2086303, 0)]; // 1000-01-01 00:00:00
+
+        let def_levels = [1];
+
+        let arrow_schema = Schema::new(vec![Field::new(
+            "x",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]);
+
+        write_int96_timestamps_to_parquet(
+            message_type,
+            &timestamps,
+            &def_levels,
+            None,
+            Some(&arrow_schema),
+        );
+
+        let create_table = "CREATE TABLE test_table (x timestamp)";
+        Spi::run(create_table).unwrap();
+
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<Timestamp>("SELECT x FROM test_table LIMIT 1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(value, Timestamp::new(1000, 1, 1, 0, 0, 0.0).unwrap());
     }
 }

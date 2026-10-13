@@ -4,10 +4,15 @@ use std::{
     sync::Arc,
 };
 
-use arrow::datatypes::{Field, Fields, Schema, SchemaRef};
+use arrow::datatypes::{Field, Fields, Schema, SchemaRef, TimeUnit};
 use arrow_cast::can_cast_types;
 use arrow_schema::{DataType, FieldRef};
-use parquet::arrow::{ArrowSchemaConverter, PARQUET_FIELD_ID_META_KEY};
+use parquet::{
+    arrow::{ArrowSchemaConverter, ARROW_SCHEMA_META_KEY, PARQUET_FIELD_ID_META_KEY},
+    basic::Type as PhysicalType,
+    file::metadata::FileMetaData,
+    schema::types::Type as ParquetType,
+};
 use pg_sys::{
     can_coerce_type,
     CoercionContext::{self, COERCION_EXPLICIT},
@@ -552,6 +557,109 @@ fn field_without_dictionary(field: &FieldRef) -> Option<FieldRef> {
     };
 
     Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
+}
+
+// An INT96 column has no logical type to tell parquet-rs its resolution, so parquet-rs
+// defaults it to nanoseconds, and Int96::to_nanos wraps around for anything outside
+// 1677..2262. Hive, Impala and Spark write their timestamps as INT96 and record no Arrow
+// schema that would hint the resolution, so the wrapped value would be read as a real
+// timestamp. Microseconds is what Postgres stores anyway and an i64 of microseconds covers
+// its whole timestamp range, so the resolution is hinted to parquet-rs instead.
+pub(crate) fn schema_with_int96_as_micros(
+    schema: &Schema,
+    file_metadata: &FileMetaData,
+) -> Option<SchemaRef> {
+    // a file that records an Arrow schema declares the resolution of its timestamps, down to
+    // an INT96 column - pyarrow records seconds, milliseconds or microseconds for one - and
+    // parquet-rs applies what it finds, so there is no default to correct.
+    if arrow_schema_recorded(file_metadata) {
+        return None;
+    }
+
+    let fields =
+        fields_with_int96_as_micros(schema.fields(), file_metadata.schema_descr().root_schema())?;
+
+    Some(Arc::new(Schema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    )))
+}
+
+fn arrow_schema_recorded(file_metadata: &FileMetaData) -> bool {
+    file_metadata
+        .key_value_metadata()
+        .iter()
+        .flat_map(|key_values| key_values.iter())
+        .any(|key_value| key_value.key == ARROW_SCHEMA_META_KEY)
+}
+
+fn fields_with_int96_as_micros(fields: &Fields, parquet_type: &ParquetType) -> Option<Fields> {
+    // the arrow schema is derived from the parquet schema, so the fields are in the same order
+    let parquet_fields = parquet_type.get_fields();
+
+    if parquet_fields.len() != fields.len() {
+        return None;
+    }
+
+    let mut new_fields = Vec::with_capacity(fields.len());
+    let mut found_int96 = false;
+
+    for (field, parquet_field) in fields.iter().zip(parquet_fields.iter()) {
+        match field_with_int96_as_micros(field, parquet_field) {
+            Some(new_field) => {
+                found_int96 = true;
+                new_fields.push(new_field);
+            }
+            None => new_fields.push(field.clone()),
+        }
+    }
+
+    found_int96.then(|| new_fields.into())
+}
+
+fn field_with_int96_as_micros(field: &FieldRef, parquet_type: &ParquetType) -> Option<FieldRef> {
+    let data_type = match field.data_type() {
+        DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            if !parquet_type.is_primitive()
+                || parquet_type.get_physical_type() != PhysicalType::INT96
+            {
+                return None;
+            }
+
+            DataType::Timestamp(TimeUnit::Microsecond, None)
+        }
+        DataType::Struct(fields) => {
+            DataType::Struct(fields_with_int96_as_micros(fields, parquet_type)?)
+        }
+        // the large, view and fixed size list variants are not derived from a parquet schema,
+        // they only come from a recorded arrow schema, which returns above
+        DataType::List(field) => DataType::List(field_with_int96_as_micros(
+            field,
+            parquet_list_element(parquet_type)?,
+        )?),
+        DataType::Map(entries_field, sorted) => DataType::Map(
+            field_with_int96_as_micros(entries_field, parquet_type.get_fields().first()?)?,
+            *sorted,
+        ),
+        _ => return None,
+    };
+
+    Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
+}
+
+// A list is three levels - group(List) { repeated group list { element } } - unless the
+// repeated level is the element itself, which is the legacy two level encoding.
+fn parquet_list_element(parquet_type: &ParquetType) -> Option<&ParquetType> {
+    let repeated_type = parquet_type.get_fields().first()?;
+
+    if repeated_type.is_primitive() || repeated_type.get_fields().len() != 1 {
+        return Some(repeated_type.as_ref());
+    }
+
+    repeated_type
+        .get_fields()
+        .first()
+        .map(|field| field.as_ref())
 }
 
 // ensure_file_schema_match_tupledesc_schema throws an error if the file's schema does not match the table schema.

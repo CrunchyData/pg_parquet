@@ -29,7 +29,7 @@ use pgrx::{
 use url::Url;
 
 use crate::{
-    arrow_parquet::schema_parser::schema_without_dictionaries,
+    arrow_parquet::schema_parser::{schema_with_int96_as_micros, schema_without_dictionaries},
     object_store::{
         aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
         http::parse_http_base_uri, object_store_cache::get_or_create_object_store,
@@ -293,9 +293,20 @@ pub(crate) fn parquet_reader_from_uri(
             .await
             .unwrap_or_else(|e| panic!("{}", e));
 
-        // read the dictionary encoded columns as their value types since the Parquet
-        // dictionary decoder cannot build a dictionary of all value types
-        let builder = match schema_without_dictionaries(builder.schema()) {
+        // the reader's own schema is not always the one to read the file with: the Parquet
+        // dictionary decoder cannot build a dictionary of all value types, and an INT96
+        // column needs its resolution hinted
+        let schema_hint = {
+            let file_schema = builder.schema();
+            let file_metadata = builder.metadata().file_metadata();
+
+            let without_dictionaries = schema_without_dictionaries(file_schema);
+            let hint_base = without_dictionaries.as_deref().unwrap_or(file_schema);
+
+            schema_with_int96_as_micros(hint_base, file_metadata).or(without_dictionaries)
+        };
+
+        let builder = match schema_hint {
             Some(schema) => {
                 let options = ArrowReaderOptions::new().with_schema(schema);
 
@@ -312,9 +323,9 @@ pub(crate) fn parquet_reader_from_uri(
                             reader_metadata,
                         )
                     }
-                    // keep the reader's own schema if it rejects the dictionary free one
+                    // keep the reader's own schema if it rejects the hinted one
                     Err(e) => {
-                        pgrx::debug2!("Dictionary free schema is rejected: {}", e);
+                        pgrx::debug2!("Schema hint is rejected: {}", e);
 
                         builder
                     }
