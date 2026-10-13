@@ -15,7 +15,8 @@ mod tests {
     #[cfg(not(pre_pg19))]
     use crate::type_compat::oid8::Oid8;
     use crate::type_compat::pg_arrow_type_conversions::{
-        DEFAULT_UNBOUNDED_NUMERIC_PRECISION, DEFAULT_UNBOUNDED_NUMERIC_SCALE,
+        i32_to_date, i64_to_timestamp, i64_to_timestamptz, DEFAULT_UNBOUNDED_NUMERIC_PRECISION,
+        DEFAULT_UNBOUNDED_NUMERIC_SCALE,
     };
     use pgrx::pg_sys::Oid;
     use pgrx::{
@@ -625,6 +626,43 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_date_infinity() {
+        let test_table = TestTable::<Date>::new("date".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('infinity'), ('-infinity'), ('2022-05-01'), (null);",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_date_array_infinity() {
+        let test_table = TestTable::<Vec<Option<Date>>>::new("date[]".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['infinity','-infinity',null]::date[]), (null);",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // the out of range values below cannot be written by COPY TO, only by another writer
+    #[pg_test]
+    #[should_panic(expected = "is out of range for PostgreSQL \"date\" type")]
+    fn test_date_out_of_range_in_file() {
+        i32_to_date(i32::MIN + 1);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "is out of range for PostgreSQL \"timestamp\" type")]
+    fn test_timestamp_out_of_range_in_file() {
+        i64_to_timestamp(i64::MIN + 1);
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "is out of range for PostgreSQL \"timestamptz\" type")]
+    fn test_timestamptz_out_of_range_in_file() {
+        i64_to_timestamptz(i64::MIN + 1, "UTC");
+    }
+
+    #[pg_test]
     fn test_date_array() {
         let test_table = TestTable::<Vec<Option<Date>>>::new("date[]".into());
         test_table.insert(
@@ -710,6 +748,24 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_timestamp_infinity() {
+        let test_table = TestTable::<Timestamp>::new("timestamp".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('infinity'), ('-infinity'), ('2022-05-01 15:00:00'), (null);",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_timestamp_array_infinity() {
+        let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['infinity','-infinity',null]::timestamp[]), (null);",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
     fn test_timestamp_array() {
         let test_table = TestTable::<Vec<Option<Timestamp>>>::new("timestamp[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array['2022-05-01 15:00:00','2022-05-02 15:30:12',null]::timestamp[]), (null), (array[]::timestamp[]);");
@@ -720,6 +776,25 @@ mod tests {
     fn test_timestamptz() {
         let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES ('2022-05-01 15:00:00+03'), ('2022-05-02 15:30:12-03'), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_timestamptz_infinity() {
+        let test_table = TestTable::<TimestampWithTimeZone>::new("timestamptz".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES ('infinity'), ('-infinity'), ('2022-05-01 15:00:00+03'), (null);",
+        );
+        test_table.assert_expected_and_result_rows();
+    }
+
+    #[pg_test]
+    fn test_timestamptz_array_infinity() {
+        let test_table =
+            TestTable::<Vec<Option<TimestampWithTimeZone>>>::new("timestamptz[]".into());
+        test_table.insert(
+            "INSERT INTO test_expected (a) VALUES (array['infinity','-infinity',null]::timestamptz[]), (null);",
+        );
         test_table.assert_expected_and_result_rows();
     }
 

@@ -496,6 +496,9 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 > - (5) `crunchy_map` is dependent on functionality provided by [Crunchy Bridge](https://www.crunchydata.com/products/crunchy-bridge). The `crunchy_map` type is represented as `GROUP` with `MAP` logical type when `crunchy_map` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
 > - (6) The `oid8` type only exists on PostgreSQL 19 and later. It is written as an unsigned `INT64`, so its whole range round-trips.
 
+> [!NOTE]
+> `infinity` and `-infinity` values of the `date`, `timestamp` and `timestamptz` types are written as the limits of the underlying `INT32`/`INT64`, which is how `COPY FROM` reads them back. A temporal value in the Parquet file that `PostgreSQL` cannot represent is rejected with an out of range error.
+
 > [!WARNING]
 > Any type that does not have a corresponding Parquet type will be represented, as a fallback mechanism, as `BYTE_ARRAY` with `STRING` logical type. e.g. `enum`
 
