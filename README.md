@@ -503,7 +503,7 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 > Any type that does not have a corresponding Parquet type will be represented, as a fallback mechanism, as `BYTE_ARRAY` with `STRING` logical type. e.g. `enum`
 
 > [!NOTE]
-> `COPY FROM` does not need an exact type match: a file's column is cast to the table's column type whenever `PostgreSQL` has a cast between them. That is what makes the files of the other writers readable, e.g. the `TIME_MILLIS`, `FIXED_LEN_BYTE_ARRAY` or wider than `DECIMAL(38)` columns of `Spark`, and the dictionary encoded (`pandas` categorical), view or null typed columns that the `Arrow` based writers record in their schema.
+> `COPY FROM` does not need an exact type match: a file's column is cast to the table's column type whenever `PostgreSQL` has a cast between them. That is what makes the files of the other writers readable, e.g. the `TIME_MILLIS`, `FIXED_LEN_BYTE_ARRAY` or wider than `DECIMAL(38)` columns of `Spark`, and the dictionary encoded (`pandas` categorical), view or null typed columns that the `Arrow` based writers record in their schema. An `INT96` timestamp column, which `Hive`, `Impala` and `Spark` write, records no resolution of its own, so it is read as microseconds, which is the resolution `PostgreSQL` stores and covers its whole timestamp range.
 
 ## Postgres Support Matrix
 `pg_parquet` supports the following PostgreSQL versions:
