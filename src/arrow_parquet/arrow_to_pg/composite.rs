@@ -13,9 +13,27 @@ impl<'a> ArrowArrayToPgType<PgHeapTuple<'a, AllocatedByRust>> for StructArray {
             return None;
         }
 
-        let mut datums = vec![];
+        let tupledesc = context.tupledesc();
+        let attribute_contexts = context.attribute_contexts();
 
-        for attribute_context in context.attribute_contexts() {
+        // the heap tuple needs one datum per tuple descriptor attribute, and the
+        // descriptor still keeps the dropped attributes as null placeholders
+        let mut datums = Vec::with_capacity(tupledesc.len());
+        let mut attribute_context_idx = 0;
+
+        for attribute_idx in 0..tupledesc.len() {
+            let attribute = tupledesc
+                .get(attribute_idx)
+                .expect("failed to get attribute");
+
+            if attribute.is_dropped() {
+                datums.push(None);
+                continue;
+            }
+
+            let attribute_context = &attribute_contexts[attribute_context_idx];
+            attribute_context_idx += 1;
+
             let column_data = self
                 .column_by_name(attribute_context.name())
                 .unwrap_or_else(|| panic!("column {} not found", attribute_context.name()));
@@ -24,8 +42,6 @@ impl<'a> ArrowArrayToPgType<PgHeapTuple<'a, AllocatedByRust>> for StructArray {
 
             datums.push(datum);
         }
-
-        let tupledesc = context.tupledesc();
 
         Some(
             unsafe { PgHeapTuple::from_datums(tupledesc.clone(), datums) }.unwrap_or_else(|e| {
