@@ -525,13 +525,18 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
         );
     }
 
-    for (tupledesc_schema_field, attribute) in
-        tupledesc_schema.fields().iter().zip(attributes.iter())
+    for (field_idx, (tupledesc_schema_field, attribute)) in tupledesc_schema
+        .fields()
+        .iter()
+        .zip(attributes.iter())
+        .enumerate()
     {
         let field_name = tupledesc_schema_field.name();
 
         let file_schema_field = match match_by {
-            MatchBy::Position => file_schema.field(attribute.attnum as usize - 1),
+            // the attnums of the table can have gaps, e.g. after a column is dropped,
+            // so the position of the attribute is not its attnum
+            MatchBy::Position => file_schema.field(field_idx),
 
             MatchBy::Name => {
                 let file_schema_field = file_schema.column_with_name(field_name);

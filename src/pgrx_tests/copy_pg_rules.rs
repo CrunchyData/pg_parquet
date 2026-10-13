@@ -160,6 +160,30 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_by_position_with_dropped_column() {
+        Spi::run("DROP TABLE IF EXISTS test_table;").unwrap();
+
+        Spi::run("CREATE TABLE test_table (a int, b text, c int);").unwrap();
+
+        Spi::run("ALTER TABLE test_table DROP COLUMN b;").unwrap();
+
+        Spi::run("INSERT INTO test_table (a, c) VALUES (1, 3);").unwrap();
+
+        let copy_to_query =
+            format!("COPY test_table TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
+        Spi::run(&copy_to_query).unwrap();
+
+        Spi::run("TRUNCATE test_table;").unwrap();
+
+        let copy_from_query =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
+        Spi::run(&copy_from_query).unwrap();
+
+        let result = Spi::get_two::<i32, i32>("SELECT a, c FROM test_table").unwrap();
+        assert_eq!(result, (Some(1), Some(3)));
+    }
+
+    #[pg_test]
     fn test_with_column_names() {
         let create_table = "create table test_table(id int, name text);";
         Spi::run(create_table).unwrap();
