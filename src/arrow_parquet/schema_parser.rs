@@ -654,6 +654,28 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
 // Arrow supports casting struct fields by field position instead of field name,
 // which is not the intended behavior for pg_parquet. Hence, struct fields are matched
 // the same way as the top level columns, by position or by name.
+// arrow-cast casts a struct's fields by position in two cases: when the names already
+// agree pairwise, and when it cannot find every target field by name, which is
+// cast_struct_to_struct's fallback. In between — every target name present but in another
+// order — it reorders the fields by name instead, which would quietly contradict
+// match_by 'position', so such a struct is not coercible under it.
+fn arrow_cast_casts_struct_by_position(from_fields: &Fields, to_fields: &Fields) -> bool {
+    let names_agree_in_order = from_fields
+        .iter()
+        .zip(to_fields.iter())
+        .all(|(from_field, to_field)| from_field.name() == to_field.name());
+
+    if names_agree_in_order {
+        return true;
+    }
+
+    !to_fields.iter().all(|to_field| {
+        from_fields
+            .iter()
+            .any(|from_field| from_field.name() == to_field.name())
+    })
+}
+
 fn coercion_target(
     from_field: &FieldRef,
     to_field: &FieldRef,
@@ -672,6 +694,12 @@ fn coercion_target(
                 return None;
             }
 
+            if match_by == MatchBy::Position
+                && !arrow_cast_casts_struct_by_position(from_fields, to_fields)
+            {
+                return None;
+            }
+
             let tupledesc = tuple_desc(to_typoid, to_typmod);
 
             let attributes = collect_attributes_for(CollectAttributesFor::Other, &tupledesc);
@@ -682,17 +710,7 @@ fn coercion_target(
                 to_fields.iter().zip(attributes.iter()).enumerate()
             {
                 let from_field = match match_by {
-                    MatchBy::Position => {
-                        let from_field = &from_fields[field_idx];
-
-                        // arrow-cast casts the struct fields by position, so the names
-                        // must match to avoid casting a field to an unrelated one
-                        if from_field.name() != to_field.name() {
-                            return None;
-                        }
-
-                        from_field
-                    }
+                    MatchBy::Position => &from_fields[field_idx],
 
                     // arrow-cast reorders the struct fields by name as long as all
                     // target fields are found in the file's struct
