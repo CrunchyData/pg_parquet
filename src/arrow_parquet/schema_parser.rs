@@ -567,6 +567,7 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
             tupledesc_schema_field,
             attribute.atttypid,
             attribute.atttypmod,
+            match_by,
         ) {
             panic!(
                 "type mismatch for column \"{field_name}\" between table and parquet file.\n\n\
@@ -593,18 +594,20 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
 //
 // Additionaly, we need to be careful about struct rules for the cast:
 // Arrow supports casting struct fields by field position instead of field name,
-// which is not the intended behavior for pg_parquet. Hence, we make sure the field names
-// match for structs.
+// which is not the intended behavior for pg_parquet. Hence, struct fields are matched
+// the same way as the top level columns, by position or by name.
 fn is_coercible(
     from_field: &FieldRef,
     to_field: &FieldRef,
     to_typoid: Oid,
     to_typmod: i32,
+    match_by: MatchBy,
 ) -> bool {
     match (from_field.data_type(), to_field.data_type()) {
         // a column with no type at all contains only nulls, which any type can represent
         (DataType::Null, _) => true,
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
+            // arrow-cast refuses a struct cast that changes the number of fields
             if from_fields.len() != to_fields.len() {
                 return false;
             }
@@ -613,19 +616,41 @@ fn is_coercible(
 
             let attributes = collect_attributes_for(CollectAttributesFor::Other, &tupledesc);
 
-            for (from_field, (to_field, to_attribute)) in from_fields
-                .iter()
-                .zip(to_fields.iter().zip(attributes.iter()))
+            for (field_idx, (to_field, to_attribute)) in
+                to_fields.iter().zip(attributes.iter()).enumerate()
             {
-                if from_field.name() != to_field.name() {
-                    return false;
-                }
+                let from_field = match match_by {
+                    MatchBy::Position => {
+                        let from_field = &from_fields[field_idx];
+
+                        // arrow-cast casts the struct fields by position, so the names
+                        // must match to avoid casting a field to an unrelated one
+                        if from_field.name() != to_field.name() {
+                            return false;
+                        }
+
+                        from_field
+                    }
+
+                    // arrow-cast reorders the struct fields by name as long as all
+                    // target fields are found in the file's struct
+                    MatchBy::Name => {
+                        match from_fields
+                            .iter()
+                            .find(|from_field| from_field.name() == to_field.name())
+                        {
+                            Some(from_field) => from_field,
+                            None => return false,
+                        }
+                    }
+                };
 
                 if !is_coercible(
                     from_field,
                     to_field,
                     to_attribute.type_oid().value(),
                     to_attribute.type_mod(),
+                    match_by,
                 ) {
                     return false;
                 }
@@ -641,7 +666,7 @@ fn is_coercible(
             let element_oid = array_element_typoid(to_typoid);
             let element_typmod = to_typmod;
 
-            is_coercible(from_field, to_field, element_oid, element_typmod)
+            is_coercible(from_field, to_field, element_oid, element_typmod, match_by)
         }
         (DataType::Map(from_entries_field, _), DataType::Map(to_entries_field, _)) => {
             // entries field cannot be null
@@ -651,11 +676,13 @@ fn is_coercible(
 
             let (entries_typoid, entries_typmod) = domain_array_base_elem_type(to_typoid);
 
+            // arrow-cast casts the key and the value of a map by position, never by name
             is_coercible(
                 from_entries_field,
                 to_entries_field,
                 entries_typoid,
                 entries_typmod,
+                MatchBy::Position,
             )
         }
         _ => {
