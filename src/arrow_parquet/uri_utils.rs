@@ -29,7 +29,9 @@ use pgrx::{
 use url::Url;
 
 use crate::{
-    arrow_parquet::schema_parser::{schema_with_int96_as_micros, schema_without_dictionaries},
+    arrow_parquet::schema::parse_schema::{
+        schema_with_int96_as_micros, schema_without_dictionaries,
+    },
     object_store::{
         aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
         http::parse_http_base_uri, object_store_cache::get_or_create_object_store,
