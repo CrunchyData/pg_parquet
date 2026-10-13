@@ -143,7 +143,10 @@ impl TryFrom<Url> for PgParquetCompression {
         } else if path.ends_with(".parquet.gz") {
             Ok(PgParquetCompression::Gzip)
         } else if path.ends_with(".parquet.lz4") {
-            Ok(PgParquetCompression::Lz4)
+            // the file extension does not name one of the two lz4 codecs, and the plain "lz4"
+            // one is deprecated by the parquet format, so the readers do not have to support
+            // it. DuckDB, for one, refuses such a file
+            Ok(PgParquetCompression::Lz4raw)
         } else if path.ends_with(".parquet.br") {
             Ok(PgParquetCompression::Brotli)
         } else if path.ends_with(".parquet.zst") {

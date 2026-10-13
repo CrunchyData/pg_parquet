@@ -86,7 +86,9 @@ mod tests {
             "SNAPPY",
             "GZIP(GzipLevel(6))",
             "BROTLI(BrotliLevel(1))",
-            "LZ4",
+            // the ".lz4" extension writes the lz4_raw codec, since the deprecated "lz4" one
+            // is not guaranteed to be readable
+            "LZ4_RAW",
             "ZSTD(ZstdLevel(1))",
         ];
 
