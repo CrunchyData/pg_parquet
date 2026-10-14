@@ -12,7 +12,9 @@ use arrow_schema::{Schema, SchemaRef};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::{encode_arrow_schema, ARROW_SCHEMA_META_KEY};
 use parquet::basic::LogicalType;
-use parquet::data_type::{Int96, Int96Type};
+use parquet::data_type::{
+    ByteArray, FixedLenByteArray, FixedLenByteArrayType, Int32Type, Int96, Int96Type,
+};
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
@@ -444,6 +446,62 @@ pub(crate) fn write_int96_timestamps_to_parquet(
     column.close().unwrap();
     row_group.close().unwrap();
     writer.close().unwrap();
+}
+
+// arrow-rs writes an interval as the days and the milliseconds of it only, so a file with all
+// three parts of one is written here with the low level parquet writer. message_type must
+// describe its interval leaf as a FIXED_LEN_BYTE_ARRAY(12) INTERVAL, and def_levels must carry one
+// entry per value, max_def_level for a value that is present. rep_levels is needed only for a leaf
+// under a repeated group.
+pub(crate) fn write_intervals_to_parquet(
+    message_type: &str,
+    intervals: &[FixedLenByteArray],
+    def_levels: &[i16],
+    rep_levels: Option<&[i16]>,
+    ints: Option<&[i32]>,
+) {
+    let schema = Arc::new(parse_message_type(message_type).unwrap());
+    let file = File::create(LOCAL_TEST_FILE_PATH).unwrap();
+
+    let properties = Arc::new(WriterProperties::default());
+    let mut writer = SerializedFileWriter::new(file, schema, properties).unwrap();
+    let mut row_group = writer.next_row_group().unwrap();
+    let mut column = row_group.next_column().unwrap().unwrap();
+
+    column
+        .typed::<FixedLenByteArrayType>()
+        .write_batch(intervals, Some(def_levels), rep_levels)
+        .unwrap();
+
+    column.close().unwrap();
+
+    // ints makes the file one that has another column besides its interval one, which
+    // message_type must then describe as a trailing REQUIRED INT32 leaf
+    if let Some(ints) = ints {
+        let mut column = row_group.next_column().unwrap().unwrap();
+
+        column
+            .typed::<Int32Type>()
+            .write_batch(ints, None, None)
+            .unwrap();
+
+        column.close().unwrap();
+    }
+
+    row_group.close().unwrap();
+    writer.close().unwrap();
+}
+
+// a parquet interval is the months, the days and the milliseconds of it, each a little endian
+// 4 byte integer
+pub(crate) fn parquet_interval(months: i32, days: i32, millis: i32) -> FixedLenByteArray {
+    let mut bytes = Vec::with_capacity(12);
+
+    for part in [months, days, millis] {
+        bytes.extend_from_slice(&part.to_le_bytes());
+    }
+
+    FixedLenByteArray::from(ByteArray::from(bytes))
 }
 
 // an INT96 timestamp is a julian day and the nanoseconds elapsed in that day
