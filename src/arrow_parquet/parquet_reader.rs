@@ -5,7 +5,7 @@ use std::{
 
 use arrow::array::RecordBatch;
 use arrow_cast::{cast_with_options, CastOptions};
-use arrow_schema::SchemaRef;
+use arrow_schema::{Schema, SchemaRef};
 use futures::StreamExt;
 use glob::Pattern;
 use parquet::arrow::async_reader::ParquetRecordBatchStream;
@@ -27,6 +27,7 @@ use crate::{
             coerce_schema::{
                 ensure_file_schema_match_tupledesc_schema,
                 error_if_copy_from_match_by_position_with_generated_columns,
+                overlay_file_geospatial_crs,
             },
             parse_schema::{
                 parquet_schema_string_from_attributes, parse_arrow_schema_from_attributes,
@@ -77,6 +78,15 @@ impl SingleParquetReader {
     ) -> Result<Self, String> {
         let (reader, total_rows) = parquet_reader_from_uri(uri_info)?;
 
+        // the tupledesc schema only knows the crs of the target columns, so the geometry and
+        // geography columns take the crs that the file has for them. This happens before the
+        // coercion below, which builds its cast targets from the tupledesc schema and would
+        // otherwise drop the crs of a geospatial field nested in a struct, list or map.
+        let tupledesc_schema = Arc::new(Schema::new_with_metadata(
+            overlay_file_geospatial_crs(reader.schema(), &tupledesc_schema, match_by),
+            tupledesc_schema.metadata().clone(),
+        ));
+
         // Ensure that the file schema matches the tupledesc schema.
         // Gets cast_to_types for each attribute if a cast is needed for the attribute's columnar array
         // to match the expected columnar array for its tupledesc type.
@@ -89,7 +99,7 @@ impl SingleParquetReader {
 
         let attribute_contexts = collect_arrow_to_pg_attribute_contexts(
             attributes,
-            &tupledesc_schema.fields,
+            tupledesc_schema.fields(),
             Some(cast_to_types),
         );
 

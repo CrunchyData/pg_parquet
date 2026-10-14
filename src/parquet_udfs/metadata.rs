@@ -1,4 +1,6 @@
-use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
+use ::parquet::geospatial::statistics::GeospatialStatistics;
+use pgrx::{iter::TableIterator, name, pg_extern, pg_schema, JsonB};
+use serde_json::{json, Map, Value};
 
 use crate::{
     arrow_parquet::uri_utils::{
@@ -32,6 +34,7 @@ mod parquet {
             name!(stats_distinct_count, Option<i64>),
             name!(stats_min, Option<String>),
             name!(stats_max, Option<String>),
+            name!(stats_geospatial, Option<JsonB>),
             name!(compression, String),
             name!(encodings, String),
             name!(index_page_offset, Option<i64>),
@@ -81,6 +84,11 @@ mod parquet {
                     stats_distinct_count = statistics.distinct_count_opt().map(|v| v as i64);
                 }
 
+                // geospatial statistics are only written for the geometry and geography types
+                let stats_geospatial = column
+                    .geo_statistics()
+                    .map(|statistics| JsonB(geospatial_statistics_to_json(statistics)));
+
                 let compression = column.compression().to_string();
 
                 let encodings = column
@@ -114,6 +122,7 @@ mod parquet {
                     stats_distinct_count,
                     stats_min,
                     stats_max,
+                    stats_geospatial,
                     compression,
                     encodings,
                     index_page_offset,
@@ -211,4 +220,36 @@ mod parquet {
 
         TableIterator::new(rows)
     }
+}
+
+// serializes the bounding box and the geospatial types of a column chunk as a json object. the
+// geospatial types are the iso wkb codes of the geometries that the column chunk contains.
+fn geospatial_statistics_to_json(statistics: &GeospatialStatistics) -> Value {
+    let bbox = statistics.bounding_box().map(|bbox| {
+        let mut bbox_json = Map::new();
+
+        bbox_json.insert("xmin".into(), json!(bbox.get_xmin()));
+        bbox_json.insert("xmax".into(), json!(bbox.get_xmax()));
+        bbox_json.insert("ymin".into(), json!(bbox.get_ymin()));
+        bbox_json.insert("ymax".into(), json!(bbox.get_ymax()));
+
+        // the z and m ranges are only set when the geometries have those dimensions
+        for (key, value) in [
+            ("zmin", bbox.get_zmin()),
+            ("zmax", bbox.get_zmax()),
+            ("mmin", bbox.get_mmin()),
+            ("mmax", bbox.get_mmax()),
+        ] {
+            if let Some(value) = value {
+                bbox_json.insert(key.into(), json!(value));
+            }
+        }
+
+        Value::Object(bbox_json)
+    });
+
+    json!({
+        "bbox": bbox,
+        "geospatial_types": statistics.geospatial_types(),
+    })
 }

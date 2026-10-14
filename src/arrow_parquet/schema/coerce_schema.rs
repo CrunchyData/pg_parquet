@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use arrow_cast::can_cast_types;
-use arrow_schema::{DataType, Field, FieldRef, Fields, Schema};
+use arrow_schema::{extension::ExtensionType, DataType, Field, FieldRef, Fields, Schema};
+use parquet_geospatial::WkbType;
 use pgrx::{
     ereport,
     pg_sys::{
@@ -136,6 +137,112 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
     }
 
     cast_to_types
+}
+
+// overlay_file_geospatial_crs returns the tupledesc schema fields with the crs that the file
+// reports for the same geometry and geography columns. The tupledesc schema only knows the crs of
+// the target columns, but the read path has to restore the srid that the file was written with.
+pub(crate) fn overlay_file_geospatial_crs(
+    file_schema: &Schema,
+    tupledesc_schema: &Schema,
+    match_by: MatchBy,
+) -> Fields {
+    tupledesc_schema
+        .fields()
+        .iter()
+        .enumerate()
+        .map(|(field_idx, tupledesc_schema_field)| {
+            let file_schema_field = match match_by {
+                // the attnums of the table can have gaps, e.g. after a column is dropped,
+                // so the position of the attribute is not its attnum
+                MatchBy::Position => file_schema
+                    .fields()
+                    .get(field_idx)
+                    .map(|file_schema_field| file_schema_field.as_ref()),
+                MatchBy::Name => file_schema
+                    .column_with_name(tupledesc_schema_field.name())
+                    .map(|(_, file_schema_field)| file_schema_field),
+            };
+
+            match file_schema_field {
+                Some(file_schema_field) => {
+                    with_file_geospatial_crs(tupledesc_schema_field, file_schema_field, match_by)
+                }
+                None => tupledesc_schema_field.clone(),
+            }
+        })
+        .collect()
+}
+
+// with_file_geospatial_crs gives the geometry and geography fields, at any nesting level, the
+// Arrow extension type that the file has for them, which is the one that carries the file's crs.
+//
+// The nested fields are matched the same way coercion_target matches them, so that a field takes
+// the crs of the very field whose data is cast into it.
+fn with_file_geospatial_crs(
+    tupledesc_schema_field: &FieldRef,
+    file_schema_field: &Field,
+    match_by: MatchBy,
+) -> FieldRef {
+    if file_schema_field.extension_type_name() == Some(WkbType::NAME) {
+        let Ok(wkb_type) = file_schema_field.try_extension_type::<WkbType>() else {
+            return tupledesc_schema_field.clone();
+        };
+
+        let mut field = tupledesc_schema_field.as_ref().clone();
+
+        if field.try_with_extension_type(wkb_type).is_err() {
+            return tupledesc_schema_field.clone();
+        }
+
+        return Arc::new(field);
+    }
+
+    let data_type = match (
+        tupledesc_schema_field.data_type(),
+        file_schema_field.data_type(),
+    ) {
+        (DataType::List(tupledesc_item), DataType::List(file_item)) => DataType::List(
+            with_file_geospatial_crs(tupledesc_item, file_item, match_by),
+        ),
+        (DataType::Struct(tupledesc_fields), DataType::Struct(file_fields)) => DataType::Struct(
+            tupledesc_fields
+                .iter()
+                .enumerate()
+                .map(|(field_idx, tupledesc_field)| {
+                    let file_field = match match_by {
+                        MatchBy::Position => file_fields.get(field_idx),
+                        MatchBy::Name => file_fields.iter().find(|file_field| {
+                            truncate_identifier_like_postgres(file_field.name(), false)
+                                == *tupledesc_field.name()
+                        }),
+                    };
+
+                    match file_field {
+                        Some(file_field) => {
+                            with_file_geospatial_crs(tupledesc_field, file_field, match_by)
+                        }
+                        None => tupledesc_field.clone(),
+                    }
+                })
+                .collect::<Fields>(),
+        ),
+        (DataType::Map(tupledesc_entries, sorted), DataType::Map(file_entries, _)) => {
+            // arrow-cast casts the key and the value of a map by position, never by name
+            DataType::Map(
+                with_file_geospatial_crs(tupledesc_entries, file_entries, MatchBy::Position),
+                *sorted,
+            )
+        }
+        _ => return tupledesc_schema_field.clone(),
+    };
+
+    Arc::new(
+        tupledesc_schema_field
+            .as_ref()
+            .clone()
+            .with_data_type(data_type),
+    )
 }
 
 // coercion_target returns the type that the file's field should be cast to, or None if the

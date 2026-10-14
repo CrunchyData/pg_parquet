@@ -3,6 +3,7 @@ pub(crate) mod arrow_utils;
 pub(crate) mod column_selection;
 pub(crate) mod compression;
 pub(crate) mod field_ids;
+pub(crate) mod geospatial_stats;
 pub(crate) mod match_by;
 pub(crate) mod parquet_reader;
 pub(crate) mod parquet_version;
