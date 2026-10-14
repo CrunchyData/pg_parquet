@@ -69,7 +69,12 @@ pub(crate) fn tuple_desc(typoid: Oid, typmod: i32) -> PgTupleDesc<'static> {
 }
 
 pub(crate) fn is_composite_type(typoid: Oid) -> bool {
-    unsafe { type_is_rowtype(typoid) }
+    // type_is_rowtype also says yes for a domain over a composite type, but a domain is not
+    // handled as a row type anywhere else: the row type lookup rejects it with "type ... is not
+    // composite", so a domain is left to the text fallback like any other domain
+    let is_domain = unsafe { getBaseType(typoid) } != typoid;
+
+    unsafe { type_is_rowtype(typoid) && !is_domain }
 }
 
 // is_standalone_composite_type returns true for a composite type that was created by
