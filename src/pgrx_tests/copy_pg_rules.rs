@@ -1,8 +1,8 @@
 #[pgrx::pg_schema]
 mod tests {
-    use pgrx::{pg_test, Spi};
+    use pgrx::{datum::UnboxDatum, pg_sys, pg_test, IntoDatum, Spi};
 
-    use crate::pgrx_tests::common::LOCAL_TEST_FILE_PATH;
+    use crate::{pgrx_tests::common::LOCAL_TEST_FILE_PATH, pgrx_utils::AnyArrayDatum};
 
     #[pg_test]
     fn test_nested_copy_to_stmts() {
@@ -640,5 +640,67 @@ mod tests {
 
         let copy_from_parquet = format!("copy test_table from '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_from_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "column \"a\" has a 2-dimensional array value")]
+    fn test_copy_to_multi_dimensional_array() {
+        let create_table = "create table test_table(a int[]);";
+        Spi::run(create_table).unwrap();
+
+        let insert_data = "insert into test_table values ('{{1,2},{3,4}}');";
+        Spi::run(insert_data).unwrap();
+
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "column \"a\" has a 3-dimensional array value")]
+    fn test_copy_to_multi_dimensional_array_in_composite() {
+        let create_type = "create type dim_comp as (a int[]);";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "create table test_table(c dim_comp);";
+        Spi::run(create_table).unwrap();
+
+        let insert_data = "insert into test_table values (row('{{{1},{2}},{{3},{4}}}'::int[]));";
+        Spi::run(insert_data).unwrap();
+
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    fn test_copy_one_dimensional_and_empty_arrays() {
+        let create_table = "create table test_table(a int[]);";
+        Spi::run(create_table).unwrap();
+
+        let insert_data = "insert into test_table values ('{1,2,3}'), ('{}'), (null);";
+        Spi::run(insert_data).unwrap();
+
+        let copy_to_parquet = format!("copy test_table to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let truncate = "truncate test_table;";
+        Spi::run(truncate).unwrap();
+
+        let copy_from_parquet = format!("copy test_table from '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from_parquet).unwrap();
+
+        let result = Spi::get_one::<String>(
+            "select string_agg(coalesce(a::text, 'null'), ',' order by a nulls last) from test_table;",
+        )
+        .unwrap();
+        assert_eq!(result, Some("{},{1,2,3},null".into()));
+    }
+
+    #[pg_test]
+    fn test_any_array_datum_is_the_datum_it_was_unboxed_from() {
+        // the multi-dimensional array check reads an attribute through FromDatum, so UnboxDatum,
+        // which get_by_index asks for, has no other caller to exercise it
+        let array = unsafe { <AnyArrayDatum as UnboxDatum>::unbox(pgrx::datum::Datum::null()) };
+
+        assert_eq!(array.into_datum(), Some(pg_sys::Datum::null()));
     }
 }

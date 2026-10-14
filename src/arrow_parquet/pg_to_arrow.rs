@@ -16,7 +16,7 @@ use pgrx::{
 use crate::{
     pgrx_utils::{
         array_element_typoid, collect_attributes_for, domain_array_base_elem_type, is_array_type,
-        is_composite_type, tuple_desc, CollectAttributesFor,
+        is_composite_type, tuple_desc, AnyArrayDatum, CollectAttributesFor,
     },
     type_compat::{
         fallback_to_text::{reset_fallback_to_text_context, FallbackToText},
@@ -127,6 +127,38 @@ macro_rules! to_arrow_list_array {
     }};
 }
 
+// reject_multi_dimensional_arrays panics for an array value with more than one dimension. A
+// parquet list is one dimensional, so writing such a value would flatten it and lose its shape.
+fn reject_multi_dimensional_arrays(
+    tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+    attribute_context: &PgToArrowAttributeContext,
+) {
+    for tuple in tuples {
+        check_for_interrupts!();
+
+        let Some(tuple) = tuple else {
+            continue;
+        };
+
+        let array: Option<AnyArrayDatum> = tuple
+            .get_by_index(
+                NonZeroUsize::new(attribute_context.attnum() as usize).expect("invalid attnum"),
+            )
+            .unwrap_or_else(|e| panic!("failed to get attribute: {}", e));
+
+        // a null value has no dimensions
+        let ndim = array.map(|array| array.ndim()).unwrap_or(1);
+
+        if ndim > 1 {
+            panic!(
+                "column \"{}\" has a {}-dimensional array value, but a parquet list is one-dimensional",
+                attribute_context.field().name(),
+                ndim
+            );
+        }
+    }
+}
+
 fn to_arrow_primitive_array(
     tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     attribute_context: &PgToArrowAttributeContext,
@@ -226,6 +258,8 @@ fn to_arrow_list_array(
     tuples: &Vec<Option<PgHeapTuple<AllocatedByRust>>>,
     attribute_context: &PgToArrowAttributeContext,
 ) -> ArrayRef {
+    reject_multi_dimensional_arrays(tuples, attribute_context);
+
     let element_context = attribute_context.element_context();
     let element_typoid = element_context.typoid();
     let element_typmod = element_context.typmod();
