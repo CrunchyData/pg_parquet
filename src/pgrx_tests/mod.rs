@@ -1,5 +1,6 @@
 mod common;
 mod copy_from_coerce;
+mod copy_geospatial;
 mod copy_options;
 mod copy_pattern;
 mod copy_pg_rules;

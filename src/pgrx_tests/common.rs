@@ -4,12 +4,14 @@ use std::path::Path;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug};
 
+use crate::arrow_parquet::uri_utils::{parquet_metadata_from_uri, ParsedUriInfo};
 use crate::type_compat::map::Map;
 
 use arrow::array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::{encode_arrow_schema, ARROW_SCHEMA_META_KEY};
+use parquet::basic::LogicalType;
 use parquet::data_type::{Int96, Int96Type};
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
@@ -532,4 +534,26 @@ pub(crate) fn copy_to_helper(uri: &str) {
                                             row(1, row(10)::child, array[row(10), null]::child[])::parent AS y,
                                             array[row(1, row(10)::child, array[row(10), null]::child[])::parent, null] AS y_array) TO '{}'", uri);
     Spi::run(&copy_to).unwrap();
+}
+
+// geospatial_crs_by_column reads the crs that the parquet geospatial logical type of each
+// geospatial column of the test file stores. A None crs means that the column uses the default
+// crs of the parquet geospatial types, which is lon/lat on the WGS84 ellipsoid.
+pub(crate) fn geospatial_crs_by_column() -> HashMap<String, Option<String>> {
+    let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
+    let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+
+    let mut crs_by_column = HashMap::new();
+
+    for column in parquet_metadata.file_metadata().schema_descr().columns() {
+        let crs = match column.logical_type_ref() {
+            Some(LogicalType::Geometry(geometry_type)) => geometry_type.crs.clone(),
+            Some(LogicalType::Geography(geography_type)) => geography_type.crs.clone(),
+            _ => continue,
+        };
+
+        crs_by_column.insert(column.name().to_string(), crs);
+    }
+
+    crs_by_column
 }

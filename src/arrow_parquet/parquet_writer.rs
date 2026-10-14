@@ -5,10 +5,7 @@ use arrow_schema::{Schema, SchemaRef};
 use object_store::buffered::BufWriter;
 use parquet::{
     arrow::AsyncArrowWriter,
-    file::{
-        metadata::KeyValue,
-        properties::{EnabledStatistics, WriterProperties},
-    },
+    file::properties::{EnabledStatistics, WriterProperties},
 };
 use pgrx::{heap_tuple::PgHeapTuple, AllocatedByRust, PgTupleDesc};
 
@@ -26,10 +23,7 @@ use crate::{
     object_store::object_store_error_message,
     parquet_copy_hook::copy_to_split_dest_receiver::CopyToParquetOptions,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
-    type_compat::{
-        geometry::{geoparquet_metadata_json_from_tupledesc, reset_postgis_context},
-        map::reset_map_context,
-    },
+    type_compat::{geometry::reset_postgis_context, map::reset_map_context},
     PG_BACKEND_TOKIO_RUNTIME,
 };
 
@@ -83,8 +77,7 @@ impl ParquetWriterContext {
             .validate_against_schema(&schema, "dictionary")
             .unwrap_or_else(|e| panic!("{e}"));
 
-        let writer_props =
-            Self::writer_props(tupledesc, &schema, options, &bloom_filter, &dictionary);
+        let writer_props = Self::writer_props(&schema, options, &bloom_filter, &dictionary);
 
         let schema = Arc::new(schema);
 
@@ -102,7 +95,6 @@ impl ParquetWriterContext {
     }
 
     fn writer_props(
-        tupledesc: &PgTupleDesc,
         schema: &Schema,
         options: CopyToParquetOptions,
         bloom_filter: &ColumnSelection,
@@ -141,15 +133,6 @@ impl ParquetWriterContext {
                 writer_props_builder =
                     writer_props_builder.set_column_dictionary_enabled(leaf_column_path, enabled);
             }
-        }
-
-        let geometry_columns_metadata_value = geoparquet_metadata_json_from_tupledesc(tupledesc);
-
-        if geometry_columns_metadata_value.is_some() {
-            let key_value_metadata = KeyValue::new("geo".into(), geometry_columns_metadata_value);
-
-            writer_props_builder =
-                writer_props_builder.set_key_value_metadata(Some(vec![key_value_metadata]));
         }
 
         writer_props_builder.build()
