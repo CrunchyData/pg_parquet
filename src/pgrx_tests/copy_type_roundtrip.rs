@@ -1560,6 +1560,58 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_domain_over_composite() {
+        Spi::run("CREATE TYPE dc_base AS (a int, b text);").unwrap();
+        Spi::run("CREATE DOMAIN dcomp AS dc_base CHECK ((value).a > 0);").unwrap();
+        Spi::run("CREATE TABLE domain_table (dc dcomp, dca dcomp[]);").unwrap();
+        Spi::run(
+            "INSERT INTO domain_table VALUES (row(1, 'x')::dcomp, array[row(2, 'y')::dcomp]);",
+        )
+        .unwrap();
+
+        let copy_to = format!("COPY domain_table TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        // a domain over a composite type is a row type to PostgreSQL, but pg_parquet writes any
+        // domain as text
+        let logical_type_of = |column: &str| {
+            Spi::get_one::<String>(&format!(
+                "SELECT logical_type FROM parquet.schema('{LOCAL_TEST_FILE_PATH}')
+                 WHERE name = '{column}'"
+            ))
+            .unwrap()
+        };
+        assert_eq!(logical_type_of("dc").as_deref(), Some("STRING"));
+        assert_eq!(logical_type_of("element").as_deref(), Some("STRING"));
+
+        Spi::run("TRUNCATE domain_table;").unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+
+        let result =
+            Spi::get_one::<String>("SELECT dc::text || ' ' || dca::text FROM domain_table;")
+                .unwrap();
+        assert_eq!(result.as_deref(), Some("(1,x) {\"(2,y)\"}"));
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "value for domain dcomp violates check constraint")]
+    fn test_domain_over_composite_check_constraint() {
+        Spi::run("CREATE TYPE dc_base AS (a int, b text);").unwrap();
+        Spi::run("CREATE DOMAIN dcomp AS dc_base CHECK ((value).a > 0);").unwrap();
+        Spi::run("CREATE TABLE domain_table (dc dcomp);").unwrap();
+
+        // the text goes into the column through the input function of the domain, which is what
+        // checks the constraint
+        let copy_to = format!("COPY (SELECT '(-1,x)' AS dc) TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+    }
+
+    #[pg_test]
     fn test_complex_composite() {
         Spi::run("CREATE TYPE dog AS (name text, age int);").unwrap();
         Spi::run("CREATE TYPE dog_owner AS (name text, dogs dog[], lucky_numbers int[]);").unwrap();
