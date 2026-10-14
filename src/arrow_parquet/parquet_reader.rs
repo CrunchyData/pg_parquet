@@ -23,6 +23,7 @@ use crate::{
     arrow_parquet::{
         arrow_to_pg::{context::collect_arrow_to_pg_attribute_contexts, to_pg_datum},
         field_ids::FieldIds,
+        integer_cast::round_for_integer_cast,
         schema::{
             coerce_schema::{
                 ensure_file_schema_match_tupledesc_schema,
@@ -172,6 +173,10 @@ impl SingleParquetReader {
                     safe: false,
                     ..Default::default()
                 };
+
+                // arrow truncates toward zero when it casts to an integer, PostgreSQL rounds
+                let column_array =
+                    round_for_integer_cast(column_array, attribute_context.data_type());
 
                 let casted_column_array =
                     cast_with_options(&column_array, attribute_context.data_type(), &cast_options)

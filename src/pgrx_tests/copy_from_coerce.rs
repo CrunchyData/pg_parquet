@@ -13,12 +13,12 @@ mod tests {
     };
     use arrow::array::{
         ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
-        Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray,
-        FixedSizeListArray, Float32Array, Float64Array, Int16Array, Int32Array, Int8Array,
-        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
-        ListViewArray, MapArray, NullArray, RecordBatch, StringArray, StringViewArray, StructArray,
-        Time32MillisecondArray, Time64MicrosecondArray, TimestampMicrosecondArray, UInt16Array,
-        UInt32Array, UInt64Array,
+        Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray,
+        FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array, Int16Array,
+        Int32Array, Int8Array, LargeBinaryArray, LargeListArray, LargeListViewArray,
+        LargeStringArray, ListArray, ListViewArray, MapArray, NullArray, RecordBatch, StringArray,
+        StringViewArray, StructArray, Time32MillisecondArray, Time64MicrosecondArray,
+        TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::i256;
@@ -2206,5 +2206,157 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(value, Timestamp::new(1000, 1, 1, 0, 0, 0.0).unwrap());
+    }
+
+    #[pg_test]
+    fn test_coerce_decimal_to_integer_rounds() {
+        // DECIMAL128 => {int}, rounded half away from zero like numeric::int4 does
+        let decimals = || {
+            Decimal128Array::from(vec![999, -999, 50, 150, 250, -50])
+                .with_precision_and_scale(10, 2)
+                .unwrap()
+        };
+
+        let element_field = Arc::new(Field::new("element", DataType::Decimal128(10, 2), true));
+        let offsets = || OffsetBuffer::new(ScalarBuffer::from(vec![0, 1, 2, 3, 4, 5, 6]));
+
+        let i = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+        let x = Arc::new(decimals());
+        let y = Arc::new(ListArray::new(
+            element_field.clone(),
+            offsets(),
+            Arc::new(decimals()),
+            None,
+        ));
+        let z =
+            Arc::new(StructArray::try_from(vec![("a", Arc::new(decimals()) as ArrayRef)]).unwrap());
+        let w = Arc::new(
+            DictionaryArray::try_new(
+                Int32Array::from(vec![0, 1, 2, 3, 4, 5]),
+                Arc::new(decimals()),
+            )
+            .unwrap(),
+        );
+        let v = Arc::new(FixedSizeListArray::new(
+            element_field.clone(),
+            1,
+            Arc::new(decimals()),
+            None,
+        ));
+
+        // the narrower decimal types round the same way
+        let u = Arc::new(
+            Decimal32Array::from(vec![999, -999, 50, 150, 250, -50])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+        );
+        let t = Arc::new(
+            Decimal64Array::from(vec![999, -999, 50, 150, 250, -50])
+                .with_precision_and_scale(18, 2)
+                .unwrap(),
+        );
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, false),
+            Field::new("x", DataType::Decimal128(10, 2), false),
+            Field::new("y", DataType::List(element_field.clone()), false),
+            Field::new(
+                "z",
+                DataType::Struct(vec![Field::new("a", DataType::Decimal128(10, 2), false)].into()),
+                false,
+            ),
+            Field::new(
+                "w",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Decimal128(10, 2)),
+                ),
+                false,
+            ),
+            Field::new("v", DataType::FixedSizeList(element_field, 1), false),
+            Field::new("u", DataType::Decimal32(9, 2), false),
+            Field::new("t", DataType::Decimal64(18, 2), false),
+        ]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![i, x, y, z, w, v, u, t]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int)";
+        Spi::run(create_type).unwrap();
+
+        let create_table =
+            "CREATE TABLE test_table (i int, x int, y int[], z test_type, w smallint, v bigint[], u int, t bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let rounded = |column: &str| {
+            Spi::get_one::<String>(&format!(
+                "SELECT string_agg({column}::text, ',' ORDER BY i) FROM test_table"
+            ))
+            .unwrap()
+        };
+
+        assert_eq!(rounded("x").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("y[1]").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("(z).a").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("w").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("v[1]").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("u").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("t").as_deref(), Some("10,-10,1,2,3,-1"));
+    }
+
+    #[pg_test]
+    fn test_coerce_float_to_integer_rounds() {
+        // FLOAT => {int}, rounded half to even like float8::int4 does through rint
+        let floats = || vec![9.99, -9.99, 0.5, 1.5, 2.5, -0.5];
+
+        // f16 cannot hold 9.99, and a tie is the point of the other values anyway
+        let half_floats = || vec![9.5_f32, -9.5, 0.5, 1.5, 2.5, -0.5];
+
+        let element_field = Arc::new(Field::new("element", DataType::Float64, true));
+
+        let i = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+        let x = Arc::new(Float64Array::from(floats()));
+        let y = Arc::new(Float32Array::from(
+            floats().into_iter().map(|f| f as f32).collect::<Vec<_>>(),
+        ));
+        let z = Arc::new(ListArray::new(
+            element_field.clone(),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1, 2, 3, 4, 5, 6])),
+            Arc::new(Float64Array::from(floats())),
+            None,
+        ));
+        let w = arrow_cast::cast(&Float32Array::from(half_floats()), &DataType::Float16).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, false),
+            Field::new("x", DataType::Float64, false),
+            Field::new("y", DataType::Float32, false),
+            Field::new("z", DataType::List(element_field), false),
+            Field::new("w", DataType::Float16, false),
+        ]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![i, x, y, z, w]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (i int, x int, y bigint, z int[], w smallint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let rounded = |column: &str| {
+            Spi::get_one::<String>(&format!(
+                "SELECT string_agg({column}::text, ',' ORDER BY i) FROM test_table"
+            ))
+            .unwrap()
+        };
+
+        assert_eq!(rounded("x").as_deref(), Some("10,-10,0,2,2,0"));
+        assert_eq!(rounded("y").as_deref(), Some("10,-10,0,2,2,0"));
+        assert_eq!(rounded("z[1]").as_deref(), Some("10,-10,0,2,2,0"));
+        assert_eq!(rounded("w").as_deref(), Some("10,-10,0,2,2,0"));
     }
 }
