@@ -518,7 +518,7 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 | PostgreSQL Type   | Parquet Physical Type     | Logical Type     |
 |-------------------|---------------------------|------------------|
 | `composite`       | GROUP                     | STRUCT           |
-| `array`           | element's physical type   | LIST             |
+| `array`(7)        | element's physical type   | LIST             |
 | `crunchy_map`(5)  | GROUP                     | MAP              |
 
 > [!WARNING]
@@ -533,6 +533,7 @@ There is currently only one GUC parameter to enable/disable the `pg_parquet`:
 > - (4) The `geometry` and `geography` types are represented as `BYTE_ARRAY` encoded as `WKB` with the `GEOMETRY` and `GEOGRAPHY` logical types, specified by the [parquet geospatial spec](https://github.com/apache/parquet-format/blob/master/Geospatial.md), when `postgis` extension is created. Otherwise, they are represented as `BYTE_ARRAY` with `STRING` logical type. The `crs` of the logical type is taken from the `srid` of the column's type modifier, e.g. `geometry(point, 3857)` is written with the `EPSG:3857` crs. A column whose `srid` is lon/lat on the `WGS84` ellipsoid is written with the default crs of the spec, which is `OGC:CRS84`, and a `geometry` column without an `srid` is written with the unset crs of the spec, which is `srid:0`. An `srid` that no authority in `spatial_ref_sys` claims is written with the engine specific `srid:<code>` form of the spec, e.g. `srid:990000`, so that it is not mistaken for an unset crs. An `srid` whose `auth_name` holds the `:` separator, or is `srid` itself, takes that same form, since its `authority:code` form would not read back as this `srid`. A `geography` column without an `srid` is written with the default crs, since PostGIS geographies are on the `WGS84` ellipsoid. The bounding box and the geometry types of each column are written as geospatial statistics, except for the bounding box of a `geography` column that has edges, as described [above](#inspect-parquet-metadata). On read, the `srid` of the geometries is restored from the `crs` of the logical type, resolving its `authority:code` form through `spatial_ref_sys` and taking the code of its `srid:<code>` form as the `srid` itself, and falls back to the `srid` of the target column's type modifier when the file has no `crs`.
 > - (5) `crunchy_map` is dependent on functionality provided by [Crunchy Bridge](https://www.crunchydata.com/products/crunchy-bridge). The `crunchy_map` type is represented as `GROUP` with `MAP` logical type when `crunchy_map` extension is created. Otherwise, it is represented as `BYTE_ARRAY` with `STRING` logical type.
 > - (6) The `oid8` type only exists on PostgreSQL 19 and later. It is written as an unsigned `INT64`, so its whole range round-trips.
+> - (7) Only one dimensional arrays can be written, since a parquet `LIST` is one dimensional. A multi dimensional array value, e.g. `'{{1,2},{3,4}}'::int[]`, is rejected rather than silently flattened.
 
 > [!NOTE]
 > `infinity` and `-infinity` values of the `date`, `timestamp` and `timestamptz` types are written as the limits of the underlying `INT32`/`INT64`, which is how `COPY FROM` reads them back. A temporal value in the Parquet file that `PostgreSQL` cannot represent is rejected with an out of range error.

@@ -1,15 +1,17 @@
 use std::{collections::HashSet, ffi::CStr};
 
 use pgrx::{
+    datum::UnboxDatum,
     pg_sys::{
         format_type_extended, format_type_with_typemod, getBaseType, getBaseTypeAndTypmod,
         get_array_type, get_element_type, get_extension_oid, get_rel_relkind, get_typ_typrelid,
-        lookup_rowtype_tupdesc, makeString, makeTypeNameFromNameList, truncate_identifier,
-        type_is_array, type_is_rowtype, typenameTypeIdAndMod, AsPgCStr, FormData_pg_attribute,
-        InvalidOid, LookupTypeNameOid, Oid, FORMAT_TYPE_FORCE_QUALIFY, FORMAT_TYPE_TYPEMOD_GIVEN,
-        RELKIND_COMPOSITE_TYPE,
+        lookup_rowtype_tupdesc, makeString, makeTypeNameFromNameList, pfree,
+        pg_detoast_datum_slice, truncate_identifier, type_is_array, type_is_rowtype,
+        typenameTypeIdAndMod, varlena, ArrayType, AsPgCStr, Datum, FormData_pg_attribute,
+        InvalidOid, LookupTypeNameOid, Oid, ANYARRAYOID, FORMAT_TYPE_FORCE_QUALIFY,
+        FORMAT_TYPE_TYPEMOD_GIVEN, RELKIND_COMPOSITE_TYPE,
     },
-    PgList, PgTupleDesc,
+    FromDatum, IntoDatum, PgList, PgTupleDesc,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -188,4 +190,54 @@ pub(crate) fn truncate_identifier_like_postgres(name: &str, warn: bool) -> Strin
         .to_str()
         .expect("truncated identifier is not valid UTF-8")
         .to_string()
+}
+
+// AnyArrayDatum is an array attribute read as the datum it is, whatever its element type. pgrx's
+// Array hides the array header, which is where the dimension count of the value lives.
+pub(crate) struct AnyArrayDatum(Datum);
+
+impl AnyArrayDatum {
+    // ndim reports how many dimensions the array value has.
+    pub(crate) fn ndim(&self) -> i32 {
+        // only the header is needed, so the value is not detoasted as a whole. the slice comes
+        // back with a standard varlena header, which is what ArrayType expects.
+        let header = unsafe {
+            pg_detoast_datum_slice(self.0.cast_mut_ptr::<varlena>(), 0, size_of::<i32>() as _)
+        } as *const ArrayType;
+
+        let ndim = unsafe { std::ptr::addr_of!((*header).ndim).read() };
+
+        unsafe { pfree(header as _) };
+
+        ndim
+    }
+}
+
+impl IntoDatum for AnyArrayDatum {
+    fn into_datum(self) -> Option<Datum> {
+        Some(self.0)
+    }
+
+    // any array type is binary coercible to anyarray, which is what lets this read an array
+    // attribute of any element type.
+    fn type_oid() -> Oid {
+        ANYARRAYOID
+    }
+}
+
+impl FromDatum for AnyArrayDatum {
+    unsafe fn from_polymorphic_datum(datum: Datum, is_null: bool, _typoid: Oid) -> Option<Self> {
+        (!is_null).then_some(Self(datum))
+    }
+}
+
+unsafe impl UnboxDatum for AnyArrayDatum {
+    type As<'src> = AnyArrayDatum;
+
+    unsafe fn unbox<'src>(datum: pgrx::datum::Datum<'src>) -> Self::As<'src>
+    where
+        Self: 'src,
+    {
+        Self(datum.sans_lifetime())
+    }
 }
