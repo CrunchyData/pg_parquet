@@ -5,7 +5,8 @@ mod tests {
     use std::vec;
 
     use crate::pgrx_tests::common::{
-        extension_exists, int96_timestamp, write_int96_timestamps_to_parquet,
+        ensure_table_attribute_type, extension_exists, int96_timestamp, parquet_interval,
+        write_int96_timestamps_to_parquet, write_intervals_to_parquet,
         write_record_batch_to_parquet, write_record_batch_to_parquet_file, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::pg_arrow_type_conversions::{
@@ -27,6 +28,7 @@ mod tests {
     use pgrx::pg_test;
     use pgrx::{
         datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
+        pg_sys::TEXTOID,
         Spi,
     };
 
@@ -2689,5 +2691,153 @@ mod tests {
         assert_eq!(rounded("y").as_deref(), Some("10,-10,0,2,2,0"));
         assert_eq!(rounded("z[1]").as_deref(), Some("10,-10,0,2,2,0"));
         assert_eq!(rounded("w").as_deref(), Some("10,-10,0,2,2,0"));
+    }
+
+    #[pg_test]
+    fn test_coerce_parquet_intervals() {
+        // parquet-rs reads an INTERVAL column as the days and the milliseconds of it and drops
+        // the months, so the column is read as the 12 bytes it is and decoded as interval text
+        // y makes the file one that has a column the decode leaves alone
+        let message_type =
+            "message schema { OPTIONAL FIXED_LEN_BYTE_ARRAY (12) x (INTERVAL); REQUIRED INT32 y; }";
+
+        let intervals = [
+            parquet_interval(14, 3, 123),
+            parquet_interval(-14, -3, -123),
+            parquet_interval(0, 0, 0),
+            parquet_interval(i32::MIN, i32::MAX, i32::MIN),
+        ];
+
+        // the last row is null
+        let def_levels = [1, 1, 1, 1, 0];
+
+        let ints = [1, 2, 3, 4, 5];
+
+        write_intervals_to_parquet(message_type, &intervals, &def_levels, None, Some(&ints));
+
+        // INTERVAL => {interval}
+        let create_table = "CREATE TABLE test_table (x interval, y int)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT array_agg(x ORDER BY ctid) =
+             ARRAY['1 year 2 mons 3 days 00:00:00.123',
+                   '-1 year -2 mons -3 days -00:00:00.123',
+                   '0',
+                   '-178956970 years -8 mons 2147483647 days -596:31:23.648',
+                   NULL]::interval[]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let value = Spi::get_one::<bool>(
+            "SELECT array_agg(y ORDER BY ctid) = ARRAY[1, 2, 3, 4, 5] FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // INTERVAL => {text}, which is the type the column is read as
+        let create_table = "CREATE TABLE test_table (x text, y int)";
+        Spi::run(create_table).unwrap();
+
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT array_agg(x ORDER BY ctid) =
+             ARRAY['14 mons 3 days 0.123 secs',
+                   '-14 mons -3 days -0.123 secs',
+                   '0 mons 0 days 0.000 secs',
+                   '-2147483648 mons 2147483647 days -2147483.648 secs',
+                   NULL]::text[]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // the column is inferred as the text it is read as
+        let create_table =
+            format!("CREATE TABLE test_table () WITH (load_from = '{LOCAL_TEST_FILE_PATH}')");
+        Spi::run(&create_table).unwrap();
+
+        ensure_table_attribute_type("test_table", "x", TEXTOID, -1);
+
+        let value =
+            Spi::get_one::<bool>("SELECT count(*) = 5 AND count(x) = 4 FROM test_table").unwrap();
+        assert_eq!(value, Some(true));
+    }
+
+    #[pg_test]
+    fn test_coerce_nested_parquet_intervals() {
+        // an interval is decoded at any nesting level
+        let message_type =
+            "message schema { OPTIONAL group x { OPTIONAL FIXED_LEN_BYTE_ARRAY (12) iv (INTERVAL); } }";
+
+        let intervals = [parquet_interval(14, 3, 123)];
+
+        let def_levels = [2];
+
+        write_intervals_to_parquet(message_type, &intervals, &def_levels, None, None);
+
+        let create_type = "CREATE TYPE test_type AS (iv interval)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT (x).iv = '1 year 2 mons 3 days 00:00:00.123'::interval FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
+
+        let drop_table = "DROP TABLE test_table";
+        Spi::run(drop_table).unwrap();
+
+        // a list keeps its leaf two levels down, under the repeated group
+        let message_type = "message schema { OPTIONAL group x (LIST) { REPEATED group list { OPTIONAL FIXED_LEN_BYTE_ARRAY (12) element (INTERVAL); } } }";
+
+        let intervals = [
+            parquet_interval(14, 3, 123),
+            parquet_interval(-14, -3, -123),
+        ];
+
+        // the last element of the list is null
+        let def_levels = [3, 3, 2];
+        let rep_levels = [0, 1, 1];
+
+        write_intervals_to_parquet(
+            message_type,
+            &intervals,
+            &def_levels,
+            Some(&rep_levels),
+            None,
+        );
+
+        let create_table = "CREATE TABLE test_table (x interval[])";
+        Spi::run(create_table).unwrap();
+
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT x = ARRAY['1 year 2 mons 3 days 00:00:00.123',
+                              '-1 year -2 mons -3 days -00:00:00.123',
+                              NULL]::interval[]
+             FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
     }
 }

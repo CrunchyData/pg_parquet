@@ -158,7 +158,7 @@ pub(crate) fn infer_columns_from_uri(uri_info: &ParsedUriInfo) -> PgList<ColumnD
 // table anyway.
 fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaRef {
     let reader_error = match parquet_reader_from_uri(uri_info) {
-        Ok((parquet_reader, _)) => return parquet_reader.schema().clone(),
+        Ok((_, file_schema, _)) => return file_schema,
         Err(e) => e,
     };
 
@@ -182,14 +182,14 @@ fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaRef {
     let first_uri_info = ParsedUriInfo::try_from(first_uri.as_str())
         .unwrap_or_else(|e| panic!("failed to parse file uri {}: {}", first_uri, e));
 
-    let (parquet_reader, _) = parquet_reader_from_uri(&first_uri_info).unwrap_or_else(|e| {
+    let (_, file_schema, _) = parquet_reader_from_uri(&first_uri_info).unwrap_or_else(|e| {
         panic!(
             "failed to create parquet reader for uri {}: {}",
             first_uri, e
         )
     });
 
-    parquet_reader.schema().clone()
+    file_schema
 }
 
 // get_or_create_pg_type_from_arrow_type returns the Postgres type for the given arrow field.

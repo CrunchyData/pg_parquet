@@ -6,7 +6,10 @@ mod tests {
 
     use pgrx::{pg_test, Spi};
 
-    use crate::pgrx_tests::common::{psql, test_pg_port, FileCleanup, COPY_START_TIMEOUT};
+    use crate::pgrx_tests::common::{
+        parquet_interval, psql, test_pg_port, write_interval_row_groups, FileCleanup,
+        COPY_START_TIMEOUT,
+    };
 
     // the tests of this module keep to their own paths rather than the file path the rest of
     // the suite shares, because a parallel worker reads the file while the command runs and
@@ -169,6 +172,43 @@ mod tests {
             rows_in_different_order("sequential_table", "parallel_table"),
             0
         );
+    }
+
+    // an interval column is read as the 12 bytes it is and decoded into interval text, which
+    // the workers have to do for the row groups they decode just like the single process path
+    // does for the whole file
+    #[pg_test]
+    fn test_parallel_copy_from_intervals() {
+        let path = "/tmp/pg_parquet_test_parallel_from_intervals.parquet";
+        let _file = FileCleanup::new(path);
+
+        let message_type = "message schema { REQUIRED FIXED_LEN_BYTE_ARRAY (12) x (INTERVAL); }";
+
+        let first = [parquet_interval(14, 3, 123), parquet_interval(0, 0, 0)];
+        let second = [
+            parquet_interval(-14, -3, -123),
+            parquet_interval(1, 1, 1_000),
+        ];
+
+        write_interval_row_groups(path, message_type, &[&first, &second]);
+
+        Spi::run("CREATE TABLE interval_table (x interval);").unwrap();
+        Spi::run("SET pg_parquet.max_parallel_workers TO 4;").unwrap();
+        Spi::run(&format!(
+            "COPY interval_table FROM '{path}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let value = Spi::get_one::<bool>(
+            "SELECT array_agg(x ORDER BY ctid) =
+             ARRAY['1 year 2 mons 3 days 00:00:00.123',
+                   '0',
+                   '-1 year -2 mons -3 days -00:00:00.123',
+                   '1 mon 1 day 00:00:01']::interval[]
+             FROM interval_table",
+        )
+        .unwrap();
+        assert_eq!(value, Some(true));
     }
 
     // a uri with a wildcard stands for several files, whose row groups are one list that the

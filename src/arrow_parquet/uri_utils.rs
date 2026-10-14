@@ -29,6 +29,7 @@ use url::Url;
 
 use crate::{
     arrow_parquet::{
+        interval_as_text::{metadata_with_interval_as_bytes, schema_with_interval_as_text},
         parquet_shared_upload::shared_upload_writer,
         parquet_single_upload::single_upload_writer,
         schema::parse_schema::{schema_with_int96_as_micros, schema_without_dictionaries},
@@ -241,22 +242,20 @@ pub(crate) fn object_store_base_uri(uri: &Url) -> String {
 }
 
 pub(crate) fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaDescriptor {
-    let (parquet_reader, _) = parquet_reader_from_uri(uri_info).unwrap_or_else(|e| {
+    let (_, file_schema, _) = parquet_reader_from_uri(uri_info).unwrap_or_else(|e| {
         panic!(
             "failed to create parquet reader for uri {}: {}",
             uri_info.uri, e
         )
     });
 
-    let arrow_schema = parquet_reader.schema();
-
     ArrowSchemaConverter::new()
-        .convert(arrow_schema)
+        .convert(&file_schema)
         .unwrap_or_else(|e| panic!("{}", e))
 }
 
 pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<ParquetMetaData> {
-    let (_, reader_metadata, _) = open_parquet_file(uri_info).unwrap_or_else(|e| panic!("{e}"));
+    let (_, reader_metadata, _, _) = open_parquet_file(uri_info).unwrap_or_else(|e| panic!("{e}"));
 
     reader_metadata.metadata().to_owned()
 }
@@ -265,12 +264,21 @@ pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<Parquet
 pub(crate) const RECORD_BATCH_SIZE: i64 = 1024;
 
 // open_parquet_file reads everything that the readers of one file share: a handle to the
-// file's bytes, the metadata to read it with, and the batch size that its columns call for.
-// None of it differs between the row groups of the file, which is what lets a parallel COPY
-// FROM worker read all of its row groups without going back to the footer.
+// file's bytes, the metadata to read it with, the schema to read it as, and the batch size
+// that its columns call for. None of it differs between the row groups of the file, which is
+// what lets a parallel COPY FROM worker read all of its row groups without going back to the
+// footer.
 fn open_parquet_file(
     uri_info: &ParsedUriInfo,
-) -> Result<(ParquetObjectStoreReader, ArrowReaderMetadata, usize), String> {
+) -> Result<
+    (
+        ParquetObjectStoreReader,
+        ArrowReaderMetadata,
+        SchemaRef,
+        usize,
+    ),
+    String,
+> {
     let copy_from = true;
 
     // the object store is created before the runtime is entered, since creating one blocks on
@@ -299,13 +307,13 @@ fn open_parquet_file(
         let mut object_reader =
             ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
 
-        let reader_metadata = parquet_reader_metadata(&mut object_reader).await;
+        let (reader_metadata, file_schema) = parquet_reader_metadata(&mut object_reader).await;
 
-        pgrx::debug2!("Converted arrow schema is: {}", reader_metadata.schema());
+        pgrx::debug2!("Converted arrow schema is: {}", file_schema);
 
         let batch_size = calculate_reader_batch_size(reader_metadata.metadata());
 
-        Ok((object_reader, reader_metadata, batch_size))
+        Ok((object_reader, reader_metadata, file_schema, batch_size))
     })
 }
 
@@ -337,13 +345,32 @@ async fn folder_hint(
 // parquet_reader_metadata reads the file's footer and settles which schema to read the file
 // with: the file's own schema is not always the one, since the Parquet dictionary decoder
 // cannot build a dictionary of all value types, and an INT96 column needs its resolution
-// hinted.
+// hinted. It also returns the schema that the file is read as, which is the schema of the
+// reader with its interval columns as the text they are decoded into.
 async fn parquet_reader_metadata(
     object_reader: &mut ParquetObjectStoreReader,
-) -> ArrowReaderMetadata {
+) -> (ArrowReaderMetadata, SchemaRef) {
     let reader_metadata = ArrowReaderMetadata::load_async(object_reader, ArrowReaderOptions::new())
         .await
         .unwrap_or_else(|e| panic!("{}", e));
+
+    // an interval column is read as the 12 bytes it is, which is what lets its months part,
+    // which the reader would drop, be decoded with the rest of it
+    let (reader_metadata, interval_schema) =
+        match metadata_with_interval_as_bytes(reader_metadata.metadata()) {
+            Some(metadata) => {
+                // the schema the file has before the annotation is cleared is the one that
+                // says which of its columns is an interval
+                let interval_schema = reader_metadata.schema().clone();
+
+                let bytes_metadata =
+                    ArrowReaderMetadata::try_new(metadata, ArrowReaderOptions::new())
+                        .unwrap_or_else(|e| panic!("failed to read the schema of the file: {e}"));
+
+                (bytes_metadata, Some(interval_schema))
+            }
+            None => (reader_metadata, None),
+        };
 
     let schema_hint = {
         let file_schema = reader_metadata.schema();
@@ -355,29 +382,46 @@ async fn parquet_reader_metadata(
         schema_with_int96_as_micros(hint_base, file_metadata).or(without_dictionaries)
     };
 
-    let Some(schema) = schema_hint else {
-        return reader_metadata;
+    let reader_metadata = match schema_hint {
+        Some(schema) => {
+            let options = ArrowReaderOptions::new().with_schema(schema);
+
+            match ArrowReaderMetadata::try_new(reader_metadata.metadata().clone(), options) {
+                Ok(hinted_metadata) => hinted_metadata,
+                // keep the file's own schema if it rejects the hinted one
+                Err(e) => {
+                    pgrx::debug2!("Schema hint is rejected: {}", e);
+
+                    reader_metadata
+                }
+            }
+        }
+        None => reader_metadata,
     };
 
-    let options = ArrowReaderOptions::new().with_schema(schema);
+    let file_schema = interval_schema
+        .and_then(|interval_schema| {
+            schema_with_interval_as_text(reader_metadata.schema(), &interval_schema)
+        })
+        .unwrap_or_else(|| reader_metadata.schema().clone());
 
-    match ArrowReaderMetadata::try_new(reader_metadata.metadata().clone(), options) {
-        Ok(hinted_metadata) => hinted_metadata,
-        // keep the file's own schema if it rejects the hinted one
-        Err(e) => {
-            pgrx::debug2!("Schema hint is rejected: {}", e);
-
-            reader_metadata
-        }
-    }
+    (reader_metadata, file_schema)
 }
 
-// parquet_reader_from_uri creates a reader over the whole file. It also returns the number of
-// the rows that the file has since the row count is only reachable from the reader's builder.
+// parquet_reader_from_uri creates a reader over the whole file. It also returns the schema to
+// read the file as and the number of the rows that the file has, since neither is reachable
+// from the reader.
 pub(crate) fn parquet_reader_from_uri(
     uri_info: &ParsedUriInfo,
-) -> Result<(ParquetRecordBatchStream<ParquetObjectStoreReader>, i64), String> {
-    let (object_reader, reader_metadata, batch_size) = open_parquet_file(uri_info)?;
+) -> Result<
+    (
+        ParquetRecordBatchStream<ParquetObjectStoreReader>,
+        SchemaRef,
+        i64,
+    ),
+    String,
+> {
+    let (object_reader, reader_metadata, file_schema, batch_size) = open_parquet_file(uri_info)?;
 
     let total_rows = reader_metadata.metadata().file_metadata().num_rows();
 
@@ -386,7 +430,7 @@ pub(crate) fn parquet_reader_from_uri(
         .build()
         .unwrap_or_else(|e| panic!("{}", e));
 
-    Ok((reader, total_rows))
+    Ok((reader, file_schema, total_rows))
 }
 
 // ParquetRowGroupOpener opens one file and then hands out a reader per row group of it. The
@@ -398,19 +442,27 @@ pub(crate) struct ParquetRowGroupOpener {
     uri: String,
     object_reader: ParquetObjectStoreReader,
     reader_metadata: ArrowReaderMetadata,
+    file_schema: SchemaRef,
     batch_size: usize,
 }
 
 impl ParquetRowGroupOpener {
     pub(crate) fn try_new(uri_info: &ParsedUriInfo) -> Result<Self, String> {
-        let (object_reader, reader_metadata, batch_size) = open_parquet_file(uri_info)?;
+        let (object_reader, reader_metadata, file_schema, batch_size) =
+            open_parquet_file(uri_info)?;
 
         Ok(Self {
             uri: uri_info.uri.to_string(),
             object_reader,
             reader_metadata,
+            file_schema,
             batch_size,
         })
+    }
+
+    // file_schema is the schema that every row group of the file is read as
+    pub(crate) fn file_schema(&self) -> SchemaRef {
+        self.file_schema.clone()
     }
 
     // row_groups is how many row groups the file holds and how many rows they hold together

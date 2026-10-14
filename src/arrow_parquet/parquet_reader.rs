@@ -53,6 +53,7 @@ use crate::{
 
 use super::{
     arrow_to_pg::context::ArrowToPgAttributeContext,
+    interval_as_text::record_batch_with_interval_as_text,
     match_by::{column_index_by_name, MatchBy},
     uri_utils::{
         parquet_reader_from_uri, uri_as_string, ParquetObjectStoreReader, ParquetRowGroupOpener,
@@ -285,6 +286,9 @@ fn write_field(
 
 pub(crate) struct SingleParquetReader {
     reader: ParquetRecordBatchStream<ParquetObjectStoreReader>,
+    // the schema to read the file as, which is the schema of the reader with its interval
+    // columns as text
+    file_schema: SchemaRef,
     attribute_contexts: Vec<ArrowToPgAttributeContext>,
     match_by: MatchBy,
     total_rows: i64,
@@ -318,10 +322,11 @@ impl SingleParquetReader {
         tupledesc_schema: SchemaRef,
         attributes: &[FormData_pg_attribute],
     ) -> Result<Self, String> {
-        let (reader, total_rows) = parquet_reader_from_uri(uri_info)?;
+        let (reader, file_schema, total_rows) = parquet_reader_from_uri(uri_info)?;
 
         Ok(Self::from_reader(
             reader,
+            file_schema,
             total_rows,
             match_by,
             tupledesc_schema,
@@ -342,6 +347,7 @@ impl SingleParquetReader {
 
         Ok(Self::from_reader(
             reader,
+            opener.file_schema(),
             total_rows,
             match_by,
             tupledesc_schema,
@@ -351,6 +357,7 @@ impl SingleParquetReader {
 
     fn from_reader(
         reader: ParquetRecordBatchStream<ParquetObjectStoreReader>,
+        file_schema: SchemaRef,
         total_rows: i64,
         match_by: MatchBy,
         tupledesc_schema: SchemaRef,
@@ -361,7 +368,7 @@ impl SingleParquetReader {
         // coercion below, which builds its cast targets from the tupledesc schema and would
         // otherwise drop the crs of a geospatial field nested in a struct, list or map.
         let tupledesc_schema = Arc::new(Schema::new_with_metadata(
-            overlay_file_geospatial_crs(reader.schema(), &tupledesc_schema, match_by),
+            overlay_file_geospatial_crs(&file_schema, &tupledesc_schema, match_by),
             tupledesc_schema.metadata().clone(),
         ));
 
@@ -369,7 +376,7 @@ impl SingleParquetReader {
         // Gets cast_to_types for each attribute if a cast is needed for the attribute's columnar array
         // to match the expected columnar array for its tupledesc type.
         let cast_to_types = ensure_file_schema_match_tupledesc_schema(
-            reader.schema().clone(),
+            file_schema.clone(),
             tupledesc_schema.clone(),
             attributes,
             match_by,
@@ -383,6 +390,7 @@ impl SingleParquetReader {
 
         SingleParquetReader {
             reader,
+            file_schema,
             attribute_contexts,
             match_by,
             total_rows,
@@ -425,6 +433,12 @@ impl SingleParquetReader {
 
     fn attribute_count(&self) -> usize {
         self.attribute_contexts.len()
+    }
+
+    // the reader hands an interval column back as the 12 bytes it is in the file, which the
+    // schema of the reader has as text
+    fn decode_interval_columns(&self, record_batch: RecordBatch) -> RecordBatch {
+        record_batch_with_interval_as_text(record_batch, &self.file_schema)
     }
 
     // Resolves each attribute's column once per batch, casts once per batch instead of
@@ -699,6 +713,11 @@ impl ParquetReaderContext {
                     object_store_error_message(e)
                 )
             });
+
+            let record_batch = self
+                .current_reader()
+                .expect("no reader found")
+                .decode_interval_columns(record_batch);
 
             let num_rows = record_batch.num_rows();
 
