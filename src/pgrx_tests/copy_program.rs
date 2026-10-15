@@ -8,7 +8,7 @@ mod tests {
     use pgrx::pg_test;
     use pgrx::Spi;
 
-    use crate::pgrx_tests::common::{test_pg_port, LOCAL_TEST_FILE_PATH};
+    use crate::pgrx_tests::common::{test_pg_port, FileCleanup, LOCAL_TEST_FILE_PATH};
 
     #[pg_test]
     fn test_copy_program() {
@@ -275,5 +275,84 @@ mod tests {
             .output()
             .expect("failed to execute process");
         assert!(output.status.success(), "Failed to clean up");
+    }
+
+    #[pg_test]
+    fn test_copy_program_leaves_postgres_descriptors_alone() {
+        let test_port = test_pg_port();
+
+        let psql = |statements: &[String], stop_on_error: bool| {
+            let mut command = Command::new("psql");
+
+            command
+                .arg("-p")
+                .arg(test_port.clone())
+                .arg("-h")
+                .arg("localhost")
+                .arg("-d")
+                .arg("pgrx_tests")
+                .arg("-tA");
+
+            if stop_on_error {
+                command.arg("-v").arg("ON_ERROR_STOP=1");
+            }
+
+            // every statement runs in the one session, which is what lets a descriptor the
+            // copy closed be handed out again to a later statement of it
+            for statement in statements {
+                command.arg("-c").arg(statement);
+            }
+
+            command.output().expect("failed to execute process")
+        };
+
+        let other_test_file_path = format!("{LOCAL_TEST_FILE_PATH}.2");
+        let _other_test_file = FileCleanup::new(&other_test_file_path);
+
+        let output = psql(
+            &[
+                "CREATE TABLE test_fds AS SELECT i, i::text AS s FROM generate_series(1, 1000) i"
+                    .into(),
+                format!(
+                    "COPY test_fds TO PROGRAM 'cat > {LOCAL_TEST_FILE_PATH}' WITH (format parquet)"
+                ),
+                "TRUNCATE test_fds".into(),
+                format!(
+                    "COPY test_fds FROM PROGRAM 'cat {LOCAL_TEST_FILE_PATH}' WITH (format parquet)"
+                ),
+                // the copies above must leave the descriptors of the relation as they were, or
+                // these two find one of them closed under them
+                format!("COPY test_fds TO '{other_test_file_path}' WITH (format parquet)"),
+                "SELECT count(*) FROM test_fds".into(),
+            ],
+            true,
+        );
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+
+        assert!(
+            output.status.success(),
+            "a program copy left a descriptor of the session closed: {stderr}"
+        );
+        assert!(stdout.contains("1000"), "unexpected row count: {stdout}");
+
+        // a program that exits before the copy is done with the pipe leaves the session usable
+        let output = psql(
+            &[
+                "COPY test_fds TO PROGRAM 'exit 1' WITH (format parquet)".into(),
+                "SELECT count(*) FROM test_fds".into(),
+                "DROP TABLE test_fds".into(),
+            ],
+            false,
+        );
+
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+
+        assert!(
+            stdout.contains("1000"),
+            "the session did not survive the program that exited early: {stdout} {stderr}"
+        );
     }
 }

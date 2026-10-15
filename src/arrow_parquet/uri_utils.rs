@@ -86,7 +86,18 @@ impl ParsedUriInfo {
             panic!("Failed to get file descriptor for pipe stream: {}", program);
         }
 
-        unsafe { File::from_raw_fd(fd) }
+        // the pipe stream owns fd and ClosePipeStream closes it in drop, so the caller gets a
+        // descriptor of its own rather than one that postgres closes a second time
+        let dup_fd = unsafe { libc::dup(fd) };
+
+        if dup_fd < 0 {
+            panic!(
+                "Failed to duplicate file descriptor for program: {}",
+                program
+            );
+        }
+
+        unsafe { File::from_raw_fd(dup_fd) }
     }
 
     fn with_tmp_file() -> Self {
