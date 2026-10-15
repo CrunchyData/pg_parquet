@@ -267,11 +267,13 @@ mod tests {
             .arg("localhost")
             .arg("-d")
             .arg("pgrx_tests")
+            // the COPY is the only statement of its own -c, since psql aborts the
+            // connection when a COPY .. FROM STDIN is not the first statement of the string
+            // it was handed
             .arg("-c")
-            .arg(
-                "CREATE TABLE tmp_file_test (a int, b text);
-                 COPY tmp_file_test FROM STDIN WITH (format parquet);",
-            )
+            .arg("CREATE TABLE tmp_file_test (a int, b text);")
+            .arg("-c")
+            .arg("COPY tmp_file_test FROM STDIN WITH (format parquet);")
             .stdin(Stdio::piped())
             .spawn()
             .expect("failed to execute process");
