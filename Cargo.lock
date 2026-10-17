@@ -2430,6 +2430,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "object-store-core"
+version = "0.1.0"
+source = "git+ssh://git@github.com/CrunchyData/pg_object_store.git?branch=main#b690da0b123bdf8c8e68a3c7651154d0df49fb17"
+dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "azure_storage",
+ "bytes",
+ "futures",
+ "home",
+ "object_store",
+ "rust-ini",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "object_store"
 version = "0.14.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2628,25 +2645,20 @@ dependencies = [
  "arrow",
  "arrow-cast",
  "arrow-schema",
- "aws-config",
- "aws-credential-types",
- "azure_storage",
  "bytes",
  "cfg_aliases",
  "futures",
  "glob",
- "home",
  "libc",
+ "object-store-core",
  "object_store",
  "once_cell",
  "parquet",
  "parquet-geospatial",
  "pgrx",
  "pgrx-tests",
- "rust-ini",
  "serde",
  "serde_json",
- "tokio",
  "url",
 ]
 

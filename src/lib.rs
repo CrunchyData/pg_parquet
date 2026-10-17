@@ -1,5 +1,4 @@
 use std::ffi::CStr;
-use std::sync::LazyLock;
 
 use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
@@ -7,10 +6,8 @@ use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
 use pgrx::memcxt::PgMemoryContexts;
 use pgrx::pg_sys::AsPgCStr;
 use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry};
-use tokio::runtime::Runtime;
 
 mod arrow_parquet;
-mod object_store;
 mod parquet_copy_hook;
 mod parquet_udfs;
 #[cfg(any(test, feature = "pg_test"))]
@@ -27,15 +24,6 @@ pub use crate::parquet_copy_hook::copy_to_split_dest_receiver::create_copy_to_pa
 pgrx::pg_module_magic!();
 
 extension_sql_file!("../sql/bootstrap.sql", name = "role_setup", bootstrap);
-
-// PG_BACKEND_TOKIO_RUNTIME creates a tokio runtime that uses the current thread
-// to run the tokio reactor. This uses the same thread that is running the Postgres backend.
-pub(crate) static PG_BACKEND_TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"))
-});
 
 #[pg_guard]
 pub extern "C-unwind" fn _PG_init() {
@@ -59,6 +47,16 @@ pub extern "C-unwind" fn _PG_init() {
     MarkGUCPrefixReserved("pg_parquet");
 
     init_parquet_copy_hook();
+
+    // object-store-core traces nowhere unless a host says where. Ours is ereport(DEBUG2),
+    // which is where the "credentials for <bucket> expired" message used to be written.
+    object_store_core::runtime::set_trace_sink(|message| {
+        pgrx::ereport!(
+            PgLogLevel::DEBUG2,
+            PgSqlErrorCode::ERRCODE_WARNING,
+            message.to_string()
+        );
+    });
 
     init_geospatial_stats_accumulator_factory();
 }

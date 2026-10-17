@@ -21,15 +21,14 @@ pg_test = []
 arrow = {version = "60", default-features = false}
 arrow-cast = {version = "60", default-features = false}
 arrow-schema = {version = "60", default-features = false, features = ["canonical_extension_types"]}
-aws-config = { version = "1", default-features = false, features = ["rustls","rt-tokio"] }
-aws-credential-types = {version = "1", default-features = false}
-azure_storage = {version = "0.21", default-features = false}
 bytes = "1"
 futures = "0.3"
 glob = "0.3"
-home = "0.5"
 libc = {version = "0.2", default-features = false }
 object_store = {version = "0.14", default-features = false, features = ["aws", "azure", "fs", "gcp", "http"]}
+# the object store access layer: uri parsing, credentials, clients and their cache. Shared
+# with pg_object_store and with every other extension that reaches an object store.
+object-store-core = {git = "ssh://git@github.com/CrunchyData/pg_object_store.git", branch = "main"}
 once_cell = "1"
 parquet = {version = "60", default-features = false, features = [
     "arrow",
@@ -46,10 +45,8 @@ parquet = {version = "60", default-features = false, features = [
 ]}
 parquet-geospatial = "60"
 pgrx = "=0.19.3"
-rust-ini = "0.21"
 serde = "1"
 serde_json = "1"
-tokio = {version = "1", default-features = false, features = ["rt", "time", "macros"]}
 url = "2"
 
 [dev-dependencies]

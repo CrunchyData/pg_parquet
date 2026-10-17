@@ -1,10 +1,18 @@
-use std::{ffi::CStr, fs::File, ops::Range, os::fd::FromRawFd, panic, sync::Arc};
+use std::{
+    ffi::CStr,
+    fs::File,
+    ops::{Deref, Range},
+    os::fd::FromRawFd,
+    panic,
+    sync::Arc,
+};
 
 use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
 use futures::{future::BoxFuture, FutureExt, TryFutureExt};
-use object_store::{
-    buffered::BufWriter, path::Path, ObjectStore, ObjectStoreExt, ObjectStoreScheme,
+use object_store::{buffered::BufWriter, path::Path, ObjectStore, ObjectStoreExt};
+use object_store_core::{
+    block_on, get_or_create_object_store, object_store_error_message, ParsedUri,
 };
 use parquet::{
     arrow::{
@@ -28,37 +36,46 @@ use pgrx::{
 };
 use url::Url;
 
-use crate::{
-    arrow_parquet::schema::parse_schema::{
-        schema_with_int96_as_micros, schema_without_dictionaries,
-    },
-    object_store::{
-        aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
-        http::parse_http_base_uri, object_store_cache::get_or_create_object_store,
-        object_store_error_message,
-    },
-    PG_BACKEND_TOKIO_RUNTIME,
+use crate::arrow_parquet::schema::parse_schema::{
+    schema_with_int96_as_micros, schema_without_dictionaries,
 };
 
 const PARQUET_OBJECT_STORE_READ_ROLE: &str = "parquet_object_store_read";
 const PARQUET_OBJECT_STORE_WRITE_ROLE: &str = "parquet_object_store_write";
 
-// ParsedUriInfo is a struct that holds the parsed uri information.
+// ParsedUriInfo is what a COPY statement's destination resolves to: a uri that
+// object-store-core knows how to reach, plus the Postgres-side plumbing that a uri alone
+// cannot express. STDIN, STDOUT and PROGRAM are not uris, so they are served by copying
+// through a temporary file inside the data directory, and that file (or the pipe to the
+// program) is the half that stays here.
+//
+// The object store half is object_store_core::ParsedUri and is reached through Deref, so
+// uri_info.uri, .bucket, .path and .scheme mean what they always did.
 #[derive(Debug)]
 pub(crate) struct ParsedUriInfo {
-    pub(crate) uri: Url,
-    pub(crate) bucket: Option<String>,
-    pub(crate) path: Path,
-    pub(crate) scheme: ObjectStoreScheme,
+    parsed: ParsedUri,
     // tmp_fd is used as intermediate file for copying data to/from stdin/out or program pipes
-    pub(crate) tmp_fd: Option<i32>,
+    tmp_fd: Option<i32>,
     // pipe_file is used to hold the pipe file descriptor for copying data to/from a program
     // call open_program_pipe to open the pipe to a program
-    pub(crate) is_program: bool,
-    pub(crate) pipe_file: *mut libc::FILE,
+    is_program: bool,
+    pipe_file: *mut libc::FILE,
+}
+
+impl Deref for ParsedUriInfo {
+    type Target = ParsedUri;
+
+    fn deref(&self) -> &ParsedUri {
+        &self.parsed
+    }
 }
 
 impl ParsedUriInfo {
+    // the object store half of the uri, which is all that object-store-core is given
+    pub(crate) fn parsed(&self) -> &ParsedUri {
+        &self.parsed
+    }
+
     pub(crate) fn for_std_inout() -> Self {
         Self::with_tmp_file()
     }
@@ -131,41 +148,15 @@ impl ParsedUriInfo {
     fn is_std_inout(&self) -> bool {
         self.tmp_fd.is_some() && !self.is_program
     }
+}
 
-    fn try_parse_uri(uri: &str) -> Result<Url, String> {
-        if !uri.contains("://") {
-            // local file
-            Url::from_file_path(uri).map_err(|_| format!("not a valid file path: {uri}"))
-        } else {
-            Url::parse(uri).map_err(|e| e.to_string())
-        }
-    }
-
-    fn try_parse_scheme(uri: &Url) -> Result<(ObjectStoreScheme, Path), String> {
-        ObjectStoreScheme::parse(uri).map_err(|_| {
-            format!(
-                "unrecognized uri {uri}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes."
-            )
-        })
-    }
-
-    fn try_parse_bucket(scheme: &ObjectStoreScheme, uri: &Url) -> Result<Option<String>, String> {
-        match scheme {
-            ObjectStoreScheme::AmazonS3 => parse_s3_bucket(uri)
-                .ok_or(format!("unsupported s3 uri {uri}"))
-                .map(Some),
-            ObjectStoreScheme::MicrosoftAzure => parse_azure_blob_container(uri)
-                .ok_or(format!("unsupported azure blob storage uri: {uri}"))
-                .map(Some),
-            ObjectStoreScheme::Http => parse_http_base_uri(uri).
-                ok_or(format!("unsupported http storage uri: {uri}"))
-                .map(Some),
-            ObjectStoreScheme::GoogleCloudStorage => parse_gcs_bucket(uri)
-                .ok_or(format!("unsupported gcs uri {uri}"))
-                .map(Some),
-            ObjectStoreScheme::Local => Ok(None),
-            _ => Err(format!("unsupported scheme {} in uri {}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes.",
-                            uri.scheme(), uri))
+impl From<ParsedUri> for ParsedUriInfo {
+    fn from(parsed: ParsedUri) -> Self {
+        ParsedUriInfo {
+            parsed,
+            tmp_fd: None,
+            is_program: false,
+            pipe_file: std::ptr::null_mut(),
         }
     }
 }
@@ -174,21 +165,7 @@ impl TryFrom<&str> for ParsedUriInfo {
     type Error = String;
 
     fn try_from(uri: &str) -> Result<Self, Self::Error> {
-        let uri = Self::try_parse_uri(uri)?;
-
-        let (scheme, path) = Self::try_parse_scheme(&uri)?;
-
-        let bucket = Self::try_parse_bucket(&scheme, &uri)?;
-
-        Ok(ParsedUriInfo {
-            uri: uri.clone(),
-            bucket,
-            path,
-            scheme,
-            tmp_fd: None,
-            is_program: false,
-            pipe_file: std::ptr::null_mut(),
-        })
+        ParsedUri::try_from(uri).map(Into::into)
     }
 }
 
@@ -206,32 +183,14 @@ impl Drop for ParsedUriInfo {
     }
 }
 
+// object-store-core returns a message where we used to panic, since a library cannot assume
+// it runs inside a backend. We do run inside one, so a bad uri is still an ERROR here.
 pub(crate) fn uri_as_string(uri: &Url) -> String {
-    if uri.scheme() == "file" {
-        // removes file:// prefix from the local path uri
-        return uri
-            .to_file_path()
-            .unwrap_or_else(|_| panic!("invalid local path: {uri}"))
-            .to_string_lossy()
-            .to_string();
-    }
-
-    uri.to_string()
+    object_store_core::uri_as_string(uri).unwrap_or_else(|e| panic!("{e}"))
 }
 
 pub(crate) fn object_store_base_uri(uri: &Url) -> String {
-    if uri.scheme() == "file" {
-        // root path for local file
-        return "/".to_string();
-    }
-
-    let scheme = uri.scheme();
-
-    let host = uri.host_str().expect("missing host in uri");
-
-    let port = uri.port().map(|p| format!(":{}", p)).unwrap_or_default();
-
-    format!("{}://{}{}", scheme, host, port)
+    object_store_core::base_uri(uri).unwrap_or_else(|e| panic!("{e}"))
 }
 
 pub(crate) fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaDescriptor {
@@ -251,9 +210,10 @@ pub(crate) fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaDescrip
 
 pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<ParquetMetaData> {
     let copy_from = true;
-    let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
+    let (parquet_object_store, location) =
+        get_or_create_object_store(uri_info.parsed(), copy_from).unwrap_or_else(|e| panic!("{e}"));
 
-    PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+    block_on(async {
         let object_store_meta = parquet_object_store
             .head(&location)
             .await
@@ -285,9 +245,10 @@ pub(crate) fn parquet_reader_from_uri(
     uri_info: &ParsedUriInfo,
 ) -> Result<(ParquetRecordBatchStream<ParquetObjectStoreReader>, i64), String> {
     let copy_from = true;
-    let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
+    let (parquet_object_store, location) =
+        get_or_create_object_store(uri_info.parsed(), copy_from).unwrap_or_else(|e| panic!("{e}"));
 
-    PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+    block_on(async {
         let object_store_meta = parquet_object_store.head(&location).await.map_err(|e| {
             format!(
                 "failed to get object store metadata for uri {}: {}",
@@ -389,7 +350,8 @@ pub(crate) fn parquet_writer_from_uri(
     writer_props: WriterProperties,
 ) -> AsyncArrowWriter<BufWriter> {
     let copy_from = false;
-    let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
+    let (parquet_object_store, location) =
+        get_or_create_object_store(uri_info.parsed(), copy_from).unwrap_or_else(|e| panic!("{e}"));
 
     let parquet_object_writer = BufWriter::new(parquet_object_store, location);
 

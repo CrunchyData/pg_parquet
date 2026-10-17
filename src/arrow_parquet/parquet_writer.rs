@@ -3,6 +3,7 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
 use object_store::buffered::BufWriter;
+use object_store_core::{block_on, object_store_error_message};
 use parquet::{
     arrow::AsyncArrowWriter,
     file::properties::{EnabledStatistics, WriterProperties},
@@ -20,11 +21,9 @@ use crate::{
         },
         uri_utils::parquet_writer_from_uri,
     },
-    object_store::object_store_error_message,
     parquet_copy_hook::copy_to_split_dest_receiver::CopyToParquetOptions,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
     type_compat::{geometry::reset_postgis_context, map::reset_map_context},
-    PG_BACKEND_TOKIO_RUNTIME,
 };
 
 use super::{
@@ -146,39 +145,33 @@ impl ParquetWriterContext {
 
         let parquet_writer = &mut self.parquet_writer;
 
-        PG_BACKEND_TOKIO_RUNTIME
-            .block_on(parquet_writer.write(&record_batch))
-            .unwrap_or_else(|e| {
-                panic!(
-                    "failed to write record batch: {}",
-                    object_store_error_message(e)
-                )
-            });
+        block_on(parquet_writer.write(&record_batch)).unwrap_or_else(|e| {
+            panic!(
+                "failed to write record batch: {}",
+                object_store_error_message(e)
+            )
+        });
 
         if parquet_writer.in_progress_rows() >= self.options.row_group_size as _
             || parquet_writer.in_progress_size() >= self.options.row_group_size_bytes as _
         {
-            PG_BACKEND_TOKIO_RUNTIME
-                .block_on(parquet_writer.flush())
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "failed to flush record batch: {}",
-                        object_store_error_message(e)
-                    )
-                });
+            block_on(parquet_writer.flush()).unwrap_or_else(|e| {
+                panic!(
+                    "failed to flush record batch: {}",
+                    object_store_error_message(e)
+                )
+            });
         }
     }
 
     // finalize flushes the in progress rows to a new row group and finally writes metadata to the file.
     pub(crate) fn finalize(&mut self) {
-        PG_BACKEND_TOKIO_RUNTIME
-            .block_on(self.parquet_writer.finish())
-            .unwrap_or_else(|e| {
-                panic!(
-                    "failed to finish parquet writer: {}",
-                    object_store_error_message(e)
-                )
-            });
+        block_on(self.parquet_writer.finish()).unwrap_or_else(|e| {
+            panic!(
+                "failed to finish parquet writer: {}",
+                object_store_error_message(e)
+            )
+        });
     }
 
     pub(crate) fn bytes_written(&self) -> usize {

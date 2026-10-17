@@ -1,12 +1,11 @@
 use futures::StreamExt;
 use glob::{MatchOptions, Pattern};
+use object_store_core::{block_on, get_or_create_object_store};
 use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
 
 use crate::arrow_parquet::uri_utils::{
     ensure_access_privilege_to_uri, object_store_base_uri, ParsedUriInfo,
 };
-use crate::object_store::object_store_cache::get_or_create_object_store;
-use crate::PG_BACKEND_TOKIO_RUNTIME;
 
 #[pg_schema]
 mod parquet {
@@ -33,7 +32,8 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
     });
 
     let copy_from = true;
-    let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
+    let (parquet_object_store, location) =
+        get_or_create_object_store(uri_info.parsed(), copy_from).unwrap_or_else(|e| panic!("{e}"));
 
     // prefix is the part of the location that doesn't contain any patterns
     let prefix = location
@@ -46,7 +46,7 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
 
     let mut paths = vec![];
 
-    PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+    block_on(async {
         while let Some(meta) = list_stream.next().await.transpose().unwrap_or_else(|e| {
             panic!("{}", e);
         }) {

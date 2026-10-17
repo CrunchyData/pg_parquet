@@ -332,6 +332,21 @@ The byte counters mean different things for the two directions:
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
 > Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
 
+Reaching an object store — parsing a uri, resolving credentials from the environment and from
+the cloud vendors' own config files, building the client and caching it per bucket until its
+credentials expire — is not specific to Parquet, so it lives in
+[`object-store-core`](https://github.com/CrunchyData/pg_object_store), which `pg_parquet` links.
+Nothing about the uris, the credentials, the roles or the error messages changes with that: it
+is the same code, in a crate that `pg_object_store` and every other Arrow-backed format
+extension share instead of vendoring their own copy.
+
+`object-store-core` is a library, not an extension, so installing `pg_parquet` still installs
+nothing else and still defines its own roles. An extension that only needs bytes in and bytes
+out can instead go through `pg_object_store`'s C vtable and share one client cache with the
+rest of the cluster; `pg_parquet` cannot, because it reads a Parquet file by fetching the
+footer and then individual row groups, which needs the `ObjectStore` handle itself rather than
+a byte-range call.
+
 #### S3 Storage
 
 The simplest way to configure object storage is by creating the standard `~/.aws/credentials` and `~/.aws/config` files:

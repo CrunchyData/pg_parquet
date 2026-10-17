@@ -6,12 +6,12 @@ mod tests {
     use parquet::errors::ParquetError;
     use pgrx::{pg_sys::Timestamp, pg_test, Spi};
 
-    use crate::{
-        object_store::{
-            client_options::load_client_options, object_store_error_message, proxy_hint,
-        },
-        pgrx_tests::common::{copy_to_helper, CopyOptionValue, TestTable},
+    use object_store_core::{
+        client_options::load_client_options,
+        error::{object_store_error_message, proxy_hint},
     };
+
+    use crate::pgrx_tests::common::{copy_to_helper, CopyOptionValue, TestTable};
 
     fn object_store_cache_clear() {
         Spi::run("SELECT parquet_test.object_store_cache_clear();").unwrap();
@@ -326,7 +326,12 @@ mod tests {
         let message = object_store_error_message(error);
 
         assert!(message.starts_with("Generic S3 error: "));
-        assert!(message.ends_with("likely rejected the request)"));
+        // the hint is worded by object-store-core now, which also names the proxy
+        // environment variables to look at
+        assert!(
+            message.contains("a proxy answered instead of the object store"),
+            "{message}"
+        );
     }
 
     #[pg_test]
@@ -531,7 +536,7 @@ mod tests {
 
         assert!(matches!(
             object_store_cache_items()[..],
-            [("AmazonS3", "testbucket" , Some(expire_at) )] if expire_at > 0
+            [("s3", "testbucket", Some(expire_at))] if expire_at > 0
         ));
 
         // expire the token for the bucket
@@ -1199,10 +1204,7 @@ mod tests {
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
 
-        assert_eq!(
-            object_store_cache_items(),
-            vec![("AmazonS3", "testbucket", None)]
-        );
+        assert_eq!(object_store_cache_items(), vec![("s3", "testbucket", None)]);
 
         // s3 scheme and same bucket
         let test_table =
@@ -1210,10 +1212,7 @@ mod tests {
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
 
-        assert_eq!(
-            object_store_cache_items(),
-            vec![("AmazonS3", "testbucket", None)]
-        );
+        assert_eq!(object_store_cache_items(), vec![("s3", "testbucket", None)]);
 
         // s3 scheme and different bucket
         let test_table =
@@ -1223,10 +1222,7 @@ mod tests {
 
         assert_eq!(
             object_store_cache_items(),
-            vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None)
-            ]
+            vec![("s3", "testbucket", None), ("s3", "testbucket2", None)]
         );
 
         // az scheme and container
@@ -1238,9 +1234,9 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("MicrosoftAzure", "testcontainer", None)
+                ("azure", "testcontainer", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
 
@@ -1253,9 +1249,9 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("MicrosoftAzure", "testcontainer", None)
+                ("azure", "testcontainer", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
 
@@ -1268,10 +1264,10 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("MicrosoftAzure", "testcontainer", None),
-                ("MicrosoftAzure", "testcontainer2", None)
+                ("azure", "testcontainer", None),
+                ("azure", "testcontainer2", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
 
@@ -1284,11 +1280,11 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("GoogleCloudStorage", "testbucket", None),
-                ("MicrosoftAzure", "testcontainer", None),
-                ("MicrosoftAzure", "testcontainer2", None)
+                ("azure", "testcontainer", None),
+                ("azure", "testcontainer2", None),
+                ("gcs", "testbucket", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
 
@@ -1301,11 +1297,11 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("GoogleCloudStorage", "testbucket", None),
-                ("MicrosoftAzure", "testcontainer", None),
-                ("MicrosoftAzure", "testcontainer2", None)
+                ("azure", "testcontainer", None),
+                ("azure", "testcontainer2", None),
+                ("gcs", "testbucket", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
 
@@ -1318,12 +1314,12 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("GoogleCloudStorage", "testbucket", None),
-                ("GoogleCloudStorage", "testbucket2", None),
-                ("MicrosoftAzure", "testcontainer", None),
-                ("MicrosoftAzure", "testcontainer2", None)
+                ("azure", "testcontainer", None),
+                ("azure", "testcontainer2", None),
+                ("gcs", "testbucket", None),
+                ("gcs", "testbucket2", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
 
@@ -1335,13 +1331,13 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("GoogleCloudStorage", "testbucket", None),
-                ("GoogleCloudStorage", "testbucket2", None),
-                ("Http", "https://d37ci6vzurychx.cloudfront.net", None),
-                ("MicrosoftAzure", "testcontainer", None),
-                ("MicrosoftAzure", "testcontainer2", None)
+                ("azure", "testcontainer", None),
+                ("azure", "testcontainer2", None),
+                ("gcs", "testbucket", None),
+                ("gcs", "testbucket2", None),
+                ("http", "https://d37ci6vzurychx.cloudfront.net", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
 
@@ -1353,13 +1349,13 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("GoogleCloudStorage", "testbucket", None),
-                ("GoogleCloudStorage", "testbucket2", None),
-                ("Http", "https://d37ci6vzurychx.cloudfront.net", None),
-                ("MicrosoftAzure", "testcontainer", None),
-                ("MicrosoftAzure", "testcontainer2", None)
+                ("azure", "testcontainer", None),
+                ("azure", "testcontainer2", None),
+                ("gcs", "testbucket", None),
+                ("gcs", "testbucket2", None),
+                ("http", "https://d37ci6vzurychx.cloudfront.net", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
 
@@ -1370,14 +1366,14 @@ mod tests {
         assert_eq!(
             object_store_cache_items(),
             vec![
-                ("AmazonS3", "testbucket", None),
-                ("AmazonS3", "testbucket2", None),
-                ("GoogleCloudStorage", "testbucket", None),
-                ("GoogleCloudStorage", "testbucket2", None),
-                ("Http", "https://d37ci6vzurychx.cloudfront.net", None),
-                ("Http", "https://www.filesampleshub.com", None),
-                ("MicrosoftAzure", "testcontainer", None),
-                ("MicrosoftAzure", "testcontainer2", None)
+                ("azure", "testcontainer", None),
+                ("azure", "testcontainer2", None),
+                ("gcs", "testbucket", None),
+                ("gcs", "testbucket2", None),
+                ("http", "https://d37ci6vzurychx.cloudfront.net", None),
+                ("http", "https://www.filesampleshub.com", None),
+                ("s3", "testbucket", None),
+                ("s3", "testbucket2", None)
             ]
         );
     }
