@@ -1837,7 +1837,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(
-        expected = "string value in the parquet file contains a null byte, which PostgreSQL cannot store"
+        expected = "string value in the file contains a null byte, which PostgreSQL cannot store"
     )]
     fn test_coerce_string_with_null_byte() {
         // a string with a null byte is rejected instead of being truncated at it, which is what

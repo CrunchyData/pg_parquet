@@ -286,7 +286,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "duplicate attribute \"a\" is not allowed in parquet schema")]
+    #[should_panic(expected = "duplicate attribute \"a\" is not allowed in a file schema")]
     fn test_with_duplicate_column_name() {
         Spi::run(format!("copy (select 1 as a, 2 as a) to '{LOCAL_TEST_FILE_PATH}';").as_str())
             .unwrap();

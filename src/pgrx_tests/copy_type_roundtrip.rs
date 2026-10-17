@@ -829,7 +829,7 @@ mod tests {
     // i64::MAX is the infinity sentinel in the file, so the one finite timestamp that lands
     // on it cannot be written
     #[pg_test]
-    #[should_panic(expected = "is out of range for a parquet \"timestamp\" column")]
+    #[should_panic(expected = "is out of range for an Arrow \"timestamp\" column")]
     fn test_timestamp_at_infinity_sentinel() {
         let test_table = TestTable::<Timestamp>::new("timestamp".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES ('294247-01-10 04:00:54.775807');");
@@ -1284,7 +1284,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(
-        expected = "numeric value contains 30 digits before decimal point, which exceeds max allowed integral digits 29 during copy to parquet"
+        expected = "numeric value contains 30 digits before decimal point, which exceeds max allowed integral digits 29 during copy to a file"
     )]
     fn test_invalid_unbounded_numeric_integral_digits() {
         let invalid_integral_digits =
@@ -1299,7 +1299,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(
-        expected = "numeric value contains 10 digits after decimal point, which exceeds max allowed decimal digits 9 during copy to parquet"
+        expected = "numeric value contains 10 digits after decimal point, which exceeds max allowed decimal digits 9 during copy to a file"
     )]
     fn test_invalid_unbounded_numeric_decimal_digits() {
         let invalid_decimal_digits = DEFAULT_UNBOUNDED_NUMERIC_SCALE + 1;
