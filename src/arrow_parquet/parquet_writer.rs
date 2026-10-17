@@ -7,7 +7,7 @@ use parquet::{
     arrow::AsyncArrowWriter,
     file::properties::{EnabledStatistics, WriterProperties},
 };
-use pgrx::{heap_tuple::PgHeapTuple, AllocatedByRust, PgTupleDesc};
+use pgrx::{pg_sys::Datum, PgTupleDesc};
 
 use crate::{
     arrow_parquet::{
@@ -138,11 +138,14 @@ impl ParquetWriterContext {
         writer_props_builder.build()
     }
 
-    // write_tuples writes the tuples to the parquet file. It flushes the in progress rows to a new row group
-    // if the row group size is reached.
-    pub(crate) fn write_tuples(&mut self, tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>) {
-        let record_batch =
-            Self::pg_tuples_to_record_batch(tuples, &self.attribute_contexts, self.schema.clone());
+    // write_columns writes the collected columns to the parquet file. It flushes the in progress
+    // rows to a new row group if the row group size is reached.
+    pub(crate) fn write_columns(&mut self, columns: &[Vec<Option<Datum>>]) {
+        let record_batch = Self::pg_columns_to_record_batch(
+            columns,
+            &self.attribute_contexts,
+            self.schema.clone(),
+        );
 
         let parquet_writer = &mut self.parquet_writer;
 
@@ -185,15 +188,15 @@ impl ParquetWriterContext {
         self.parquet_writer.bytes_written()
     }
 
-    fn pg_tuples_to_record_batch(
-        tuples: Vec<Option<PgHeapTuple<AllocatedByRust>>>,
+    fn pg_columns_to_record_batch(
+        columns: &[Vec<Option<Datum>>],
         attribute_contexts: &[PgToArrowAttributeContext],
         schema: SchemaRef,
     ) -> RecordBatch {
         let mut attribute_arrays = vec![];
 
-        for attribute_context in attribute_contexts {
-            let attribute_array = to_arrow_array(&tuples, attribute_context);
+        for (attribute_context, column_datums) in attribute_contexts.iter().zip(columns) {
+            let attribute_array = to_arrow_array(column_datums, attribute_context);
 
             attribute_arrays.push(attribute_array);
         }

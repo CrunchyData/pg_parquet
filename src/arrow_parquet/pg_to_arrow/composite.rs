@@ -1,11 +1,11 @@
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use arrow::{
     array::{ArrayRef, ListArray, StructArray},
     buffer::{BooleanBuffer, NullBuffer},
 };
 use arrow_schema::DataType;
-use pgrx::{heap_tuple::PgHeapTuple, AllocatedByRust};
+use pgrx::{heap_tuple::PgHeapTuple, htup::heap_getattr_raw, pg_sys::Datum, AllocatedByRust};
 
 use crate::arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray};
 
@@ -23,17 +23,36 @@ impl PgTypeToArrowArray<PgHeapTuple<'_, AllocatedByRust>>
             _ => panic!("Expected Struct field"),
         };
 
-        let tuples = self;
+        let tupledesc = context.tupledesc();
+
+        // the child arrays are built column by column, so we need the raw tuple pointers
+        // to stay alive across all of them. they are palloc'd in the current (per batch)
+        // memory context, which outlives this call.
+        let tuple_ptrs = self
+            .into_iter()
+            .map(|tuple| tuple.map(|tuple| tuple.into_pg()))
+            .collect::<Vec<_>>();
 
         let mut struct_attribute_arrays = vec![];
 
         for attribute_context in context.attribute_contexts() {
-            let attribute_array = to_arrow_array(&tuples, attribute_context);
+            let attnum = NonZeroUsize::new(attribute_context.attnum() as usize)
+                .expect("invalid attribute number");
+
+            let attribute_datums = tuple_ptrs
+                .iter()
+                .map(|tuple| match tuple {
+                    Some(tuple) => unsafe { heap_getattr_raw(*tuple, attnum, tupledesc.as_ptr()) },
+                    None => None,
+                })
+                .collect::<Vec<Option<Datum>>>();
+
+            let attribute_array = to_arrow_array(&attribute_datums, attribute_context);
             struct_attribute_arrays.push(attribute_array);
         }
 
-        let is_null_buffer = BooleanBuffer::collect_bool(tuples.len(), |idx| {
-            tuples.get(idx).expect("invalid tuple idx").is_some()
+        let is_null_buffer = BooleanBuffer::collect_bool(tuple_ptrs.len(), |idx| {
+            tuple_ptrs.get(idx).expect("invalid tuple idx").is_some()
         });
         let struct_null_buffer = NullBuffer::new(is_null_buffer);
 
