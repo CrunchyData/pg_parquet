@@ -12,7 +12,10 @@ use object_store::{
 };
 use pgrx::{ereport, pg_sys, PgLogLevel, PgSqlErrorCode};
 
-use crate::{object_store::object_store_error_message, PG_BACKEND_TOKIO_RUNTIME};
+use crate::{
+    arrow_parquet::parquet_single_upload::SingleUpload, object_store::object_store_error_message,
+    PG_BACKEND_TOKIO_RUNTIME,
+};
 
 // what a part of a parallel COPY TO is named after its prefix with, see part_uri
 pub(crate) const PART_URI_INFIX: &str = ".pgpq-part-";
@@ -54,6 +57,9 @@ pub(crate) enum UnfinishedWrite {
     // the destination's own upload of a parallel COPY TO, which the participants uploaded
     // the parts of and which holds the bytes of the copy until it is completed or aborted
     SharedUpload(Arc<dyn MultipartStore>, ObjectStorePath, MultipartId),
+    // the upload object_store's writer started for a single process copy, which is given up
+    // through the writer itself: the id of the upload it started is reachable nowhere else.
+    WriterUpload(SingleUpload),
 }
 
 pub(crate) fn register_unfinished_write(write: UnfinishedWrite) -> CleanupId {
@@ -118,6 +124,7 @@ fn give_up_write(write: &UnfinishedWrite, report_failures: bool) {
         UnfinishedWrite::SharedUpload(store, path, upload_id) => {
             abort_upload(store, path, upload_id, report_failures)
         }
+        UnfinishedWrite::WriterUpload(upload) => abort_writer_upload(upload, report_failures),
     }
 }
 
@@ -137,6 +144,19 @@ pub(crate) fn abort_upload(
 
     if report_failures {
         report_abort_failure(path.as_ref(), result);
+    }
+}
+
+// abort_writer_upload gives the upload object_store's writer started for a single process
+// copy up, if it started one: a copy that stayed inside the writer's buffer was put as a
+// single object instead, and has no upload to give up. It throws nothing: it runs while an
+// error is unwinding as well.
+fn abort_writer_upload(upload: &SingleUpload, report_failures: bool) {
+    let result = PG_BACKEND_TOKIO_RUNTIME
+        .block_on(async { tokio::time::timeout(UPLOAD_ABORT_TIMEOUT, upload.abort()).await });
+
+    if report_failures {
+        report_abort_failure(upload.destination(), result);
     }
 }
 
