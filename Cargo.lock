@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "parquet-format"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -2049,7 +2049,7 @@ dependencies = [
 
 [[package]]
 name = "pg_parquet"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arrow",
  "arrow-cast",
