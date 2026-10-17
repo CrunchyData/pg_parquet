@@ -29,8 +29,9 @@ use pgrx::{
 use url::Url;
 
 use crate::{
-    arrow_parquet::schema::parse_schema::{
-        schema_with_int96_as_micros, schema_without_dictionaries,
+    arrow_parquet::{
+        interval_as_text::{metadata_with_interval_as_bytes, schema_with_interval_as_text},
+        schema::parse_schema::{schema_with_int96_as_micros, schema_without_dictionaries},
     },
     object_store::{
         aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
@@ -235,17 +236,15 @@ pub(crate) fn object_store_base_uri(uri: &Url) -> String {
 }
 
 pub(crate) fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaDescriptor {
-    let (parquet_reader, _) = parquet_reader_from_uri(uri_info).unwrap_or_else(|e| {
+    let (_, file_schema, _) = parquet_reader_from_uri(uri_info).unwrap_or_else(|e| {
         panic!(
             "failed to create parquet reader for uri {}: {}",
             uri_info.uri, e
         )
     });
 
-    let arrow_schema = parquet_reader.schema();
-
     ArrowSchemaConverter::new()
-        .convert(arrow_schema)
+        .convert(&file_schema)
         .unwrap_or_else(|e| panic!("{}", e))
 }
 
@@ -279,11 +278,19 @@ pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<Parquet
 // default # of records per batch during arrow-parquet conversions (RecordBatch api)
 pub(crate) const RECORD_BATCH_SIZE: i64 = 1024;
 
-// parquet_reader_from_uri creates a reader for the given uri. It also returns the number of the
-// rows that the file has since the row count is only reachable from the reader's builder.
+// parquet_reader_from_uri creates a reader for the given uri. It also returns the schema to
+// read the file as, which is the schema of the reader with its interval columns as text, and
+// the number of the rows that the file has, since neither is reachable from the reader.
 pub(crate) fn parquet_reader_from_uri(
     uri_info: &ParsedUriInfo,
-) -> Result<(ParquetRecordBatchStream<ParquetObjectStoreReader>, i64), String> {
+) -> Result<
+    (
+        ParquetRecordBatchStream<ParquetObjectStoreReader>,
+        SchemaRef,
+        i64,
+    ),
+    String,
+> {
     let copy_from = true;
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
@@ -305,6 +312,35 @@ pub(crate) fn parquet_reader_from_uri(
         let builder = ParquetRecordBatchStreamBuilder::new(parquet_object_reader)
             .await
             .unwrap_or_else(|e| panic!("{}", e));
+
+        // an interval column is read as the 12 bytes it is, which is what lets its months
+        // part, which the reader would drop, be decoded with the rest of it
+        let (builder, interval_schema) = match metadata_with_interval_as_bytes(builder.metadata()) {
+            Some(metadata) => {
+                // the schema the file has before the annotation is cleared is the one that says
+                // which of its columns is an interval
+                let interval_schema = builder.schema().clone();
+
+                let reader_metadata =
+                    ArrowReaderMetadata::try_new(metadata, ArrowReaderOptions::new())
+                        .map_err(|e| format!("failed to read the schema of the file: {e}"))?;
+
+                let parquet_object_reader = ParquetObjectStoreReader::new(
+                    parquet_object_store.clone(),
+                    location.clone(),
+                    object_store_meta.size,
+                );
+
+                (
+                    ParquetRecordBatchStreamBuilder::new_with_metadata(
+                        parquet_object_reader,
+                        reader_metadata,
+                    ),
+                    Some(interval_schema),
+                )
+            }
+            None => (builder, None),
+        };
 
         // the reader's own schema is not always the one to read the file with: the Parquet
         // dictionary decoder cannot build a dictionary of all value types, and an INT96
@@ -358,7 +394,13 @@ pub(crate) fn parquet_reader_from_uri(
             .build()
             .unwrap_or_else(|e| panic!("{}", e));
 
-        Ok((reader, total_rows))
+        let file_schema = interval_schema
+            .and_then(|interval_schema| {
+                schema_with_interval_as_text(reader.schema(), &interval_schema)
+            })
+            .unwrap_or_else(|| reader.schema().clone());
+
+        Ok((reader, file_schema, total_rows))
     })
 }
 
