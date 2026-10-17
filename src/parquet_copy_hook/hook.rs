@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::{
-    copy_from::{execute_copy_from, pop_parquet_reader_context},
+    copy_from::{execute_copy_from, pop_parallel_copy_from_source, pop_parquet_reader_context},
     copy_progress::{end_copy_progress, start_copy_to_progress},
     copy_to::execute_copy_to_with_dest_receiver,
     copy_to_split_dest_receiver::free_copy_to_parquet_split_dest_receiver,
@@ -152,6 +152,7 @@ fn process_copy_from_parquet(
             // In case we did not push the context, we should not throw an error while popping
             let throw_error = false;
             pop_parquet_reader_context(throw_error);
+            pop_parallel_copy_from_source();
 
             cause.rethrow()
         })

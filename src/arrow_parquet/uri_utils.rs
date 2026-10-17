@@ -349,6 +349,68 @@ pub(crate) fn parquet_reader_from_uri(
     Ok((reader, total_rows))
 }
 
+// ParquetRowGroupOpener opens one file and then hands out a reader per row group of it. The
+// row groups of one file are what the parallel COPY FROM workers split between themselves,
+// and a worker owns many of them, so the footer is read and parsed once per worker instead of
+// once per row group. Over an object store that is the difference between one request and one
+// request per row group.
+pub(crate) struct ParquetRowGroupOpener {
+    uri: String,
+    object_reader: ParquetObjectStoreReader,
+    reader_metadata: ArrowReaderMetadata,
+    batch_size: usize,
+}
+
+impl ParquetRowGroupOpener {
+    pub(crate) fn try_new(uri_info: &ParsedUriInfo) -> Result<Self, String> {
+        let (object_reader, reader_metadata, batch_size) = open_parquet_file(uri_info)?;
+
+        Ok(Self {
+            uri: uri_info.uri.to_string(),
+            object_reader,
+            reader_metadata,
+            batch_size,
+        })
+    }
+
+    // row_groups is how many row groups the file holds and how many rows they hold together
+    pub(crate) fn row_groups(&self) -> (u32, i64) {
+        let metadata = self.reader_metadata.metadata();
+
+        (
+            metadata.num_row_groups() as u32,
+            metadata.file_metadata().num_rows(),
+        )
+    }
+
+    // reader_for_row_group creates a reader restricted to a single row group of the file. It
+    // reads nothing itself, since what a reader needs to know about the file was already read
+    // when the file was opened. The returned row count is the row count of that row group.
+    pub(crate) fn reader_for_row_group(
+        &self,
+        row_group: usize,
+    ) -> Result<(ParquetRecordBatchStream<ParquetObjectStoreReader>, i64), String> {
+        let total_rows = self
+            .reader_metadata
+            .metadata()
+            .row_groups()
+            .get(row_group)
+            .ok_or_else(|| format!("row group {} does not exist in uri {}", row_group, self.uri))?
+            .num_rows();
+
+        let reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
+            self.object_reader.clone(),
+            self.reader_metadata.clone(),
+        )
+        .with_row_groups(vec![row_group])
+        .with_batch_size(self.batch_size)
+        .build()
+        .unwrap_or_else(|e| panic!("{}", e));
+
+        Ok((reader, total_rows))
+    }
+}
+
 fn calculate_reader_batch_size(metadata: &Arc<ParquetMetaData>) -> usize {
     const MAX_ARROW_ARRAY_SIZE: i64 = i32::MAX as _;
 

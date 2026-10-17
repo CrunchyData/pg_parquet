@@ -19,6 +19,9 @@ use crate::{
             copy_from_stmt_create_option_list, copy_stmt_is_std_inout, copy_stmt_lock_mode,
             copy_stmt_program, copy_stmt_relation_oid,
         },
+        parallel_copy_from::{
+            copy_parallel_parquet_data_to_buffer, try_parallel_copy_from, ParallelCopyFromSource,
+        },
     },
 };
 
@@ -34,6 +37,34 @@ use super::{
 // stack to store parquet reader contexts for COPY FROM.
 // This needs to be a stack since COPY command can be nested.
 static mut PARQUET_READER_CONTEXT_STACK: Vec<ParquetReaderContext> = vec![];
+
+// the same stack for the COPY FROM commands whose rows are decoded by parallel workers, which
+// read the file instead of this backend
+static mut PARALLEL_COPY_FROM_SOURCE_STACK: Vec<ParallelCopyFromSource> = vec![];
+
+pub(crate) fn peek_parallel_copy_from_source() -> Option<&'static mut ParallelCopyFromSource> {
+    #[allow(static_mut_refs)]
+    unsafe {
+        PARALLEL_COPY_FROM_SOURCE_STACK.last_mut()
+    }
+}
+
+pub(crate) fn push_parallel_copy_from_source(source: ParallelCopyFromSource) {
+    #[allow(static_mut_refs)]
+    unsafe {
+        PARALLEL_COPY_FROM_SOURCE_STACK.push(source)
+    };
+}
+
+// pop_parallel_copy_from_source drops the leader's end of a parallel COPY FROM. The parallel
+// context itself is only torn down here on the error path, since the transaction that an
+// error aborts cleans up after any context it finds still active.
+pub(crate) fn pop_parallel_copy_from_source() {
+    #[allow(static_mut_refs)]
+    let source = unsafe { PARALLEL_COPY_FROM_SOURCE_STACK.pop() };
+
+    drop(source);
+}
 
 pub(crate) fn peek_parquet_reader_context() -> Option<&'static mut ParquetReaderContext> {
     #[allow(static_mut_refs)]
@@ -158,9 +189,21 @@ pub(crate) fn execute_copy_from(
             copy_stdin_to_file(&uri_info, tupledesc.natts as _, is_binary);
         }
 
-        // parquet reader context is used throughout the COPY FROM operation.
-        let parquet_reader_context = ParquetReaderContext::new(&uri_info, match_by, &tupledesc);
-        push_parquet_reader_context(parquet_reader_context);
+        // the row groups of the file can be decoded by parallel workers, which hand the rows
+        // to this backend, the only one of them that may write into the relation
+        let is_parallel = try_parallel_copy_from(p_stmt, &uri_info, &relation, match_by);
+
+        if !is_parallel {
+            // parquet reader context is used throughout the COPY FROM operation.
+            let parquet_reader_context = ParquetReaderContext::new(&uri_info, match_by, &tupledesc);
+            push_parquet_reader_context(parquet_reader_context);
+        }
+
+        let data_source = if is_parallel {
+            copy_parallel_parquet_data_to_buffer
+        } else {
+            copy_parquet_data_to_buffer
+        };
 
         // makes sure to set binary format
         let copy_options = copy_from_stmt_create_option_list(p_stmt);
@@ -171,7 +214,7 @@ pub(crate) fn execute_copy_from(
             where_clause,
             std::ptr::null(),
             false,
-            Some(copy_parquet_data_to_buffer),
+            Some(data_source),
             attribute_list,
             copy_options.as_ptr(),
         );
@@ -180,8 +223,16 @@ pub(crate) fn execute_copy_from(
 
         EndCopyFrom(copy_from_state);
 
-        let throw_error = true;
-        pop_parquet_reader_context(throw_error);
+        if is_parallel {
+            peek_parallel_copy_from_source()
+                .expect("parallel COPY FROM source is not found")
+                .finish();
+
+            pop_parallel_copy_from_source();
+        } else {
+            let throw_error = true;
+            pop_parquet_reader_context(throw_error);
+        }
 
         nprocessed
     }
