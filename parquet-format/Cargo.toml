@@ -1,0 +1,34 @@
+[package]
+name = "parquet-format"
+version = "0.6.0"
+edition = "2021"
+license-file = "../LICENSE"
+
+# What `pg_parquet` is, minus Postgres. Nothing here depends on pgrx or on an object store, so
+# the whole crate is testable with `cargo test -p parquet-format`.
+
+[dependencies]
+arrow = { version = "60", default-features = false, features = ["ffi"] }
+arrow-schema = { version = "60", default-features = false, features = [
+    "canonical_extension_types",
+] }
+bytes = "1"
+
+# tier 2, for the trait and the registration ABI only. A provider depends on this and on
+# nothing else of ours: no pgrx of tier 2's, no pg_object_store.
+format-registry = { git = "ssh://git@github.com/CrunchyData/pg_arrow_base.git", branch = "main" }
+
+parquet = { version = "60", default-features = false, features = [
+    "arrow",
+    "crc",
+    "snap",
+    "brotli",
+    "flate2-zlib-rs",
+    "simdutf8",
+    "lz4",
+    "zstd",
+    "arrow_canonical_extension_types",
+    "geospatial",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

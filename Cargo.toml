@@ -1,3 +1,8 @@
+# the provider itself is a crate of its own: no pgrx, no Postgres, testable with plain
+# `cargo test`. The root package is a workspace member automatically.
+[workspace]
+members = ["parquet-format"]
+
 [package]
 name = "pg_parquet"
 version = "0.6.0"

@@ -130,6 +130,7 @@ dependencies = [
  "chrono",
  "half 2.7.1",
  "hashbrown 0.17.1",
+ "libc",
  "num-complex",
  "num-integer",
  "num-traits",
@@ -239,6 +240,7 @@ version = "60.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f85a9a58cd03560526b0066487574aacb9008e413504fa0ee23d61141e96c338"
 dependencies = [
+ "bitflags",
  "serde_core",
  "serde_json",
 ]
@@ -1405,6 +1407,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "format-registry"
+version = "0.1.0"
+source = "git+ssh://git@github.com/CrunchyData/pg_arrow_base.git?branch=main#3d2fd7378ca2a7fb8705c3fce8b1ad22761b57ab"
+dependencies = [
+ "arrow",
+ "bytes",
 ]
 
 [[package]]
@@ -2589,6 +2600,19 @@ dependencies = [
  "tokio",
  "twox-hash",
  "zstd",
+]
+
+[[package]]
+name = "parquet-format"
+version = "0.6.0"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "bytes",
+ "format-registry",
+ "parquet",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
