@@ -68,8 +68,11 @@ pub(crate) fn create_s3_object_store(uri: &Url) -> ObjectStoreWithExpiration {
 
     let expire_at = aws_s3_config.expire_at;
 
+    let object_store = Arc::new(object_store);
+
     ObjectStoreWithExpiration {
-        object_store: Arc::new(object_store),
+        multipart_store: Some(object_store.clone()),
+        object_store,
         expire_at,
     }
 }

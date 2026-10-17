@@ -5,7 +5,7 @@ use std::{
     time::SystemTime,
 };
 
-use object_store::{path::Path, ObjectStore, ObjectStoreScheme};
+use object_store::{multipart::MultipartStore, path::Path, ObjectStore, ObjectStoreScheme};
 use once_cell::sync::Lazy;
 use pgrx::{ereport, PgLogLevel, PgSqlErrorCode};
 use url::Url;
@@ -26,6 +26,27 @@ pub(crate) fn get_or_create_object_store(
     uri_info: &ParsedUriInfo,
     copy_from: bool,
 ) -> (Arc<dyn ObjectStore>, Path) {
+    let (item, path) = get_or_create_object_store_item(uri_info, copy_from);
+
+    (item.object_store, path)
+}
+
+// get_or_create_multipart_store is the multipart upload interface of the store the uri names,
+// which is what lets several processes upload parts of one upload. It is None for a store
+// that does not implement it, e.g. the local filesystem.
+pub(crate) fn get_or_create_multipart_store(
+    uri_info: &ParsedUriInfo,
+) -> Option<(Arc<dyn MultipartStore>, Path)> {
+    let copy_from = false;
+    let (item, path) = get_or_create_object_store_item(uri_info, copy_from);
+
+    Some((item.multipart_store?, path))
+}
+
+fn get_or_create_object_store_item(
+    uri_info: &ParsedUriInfo,
+    copy_from: bool,
+) -> (ObjectStoreWithExpiration, Path) {
     #[allow(static_mut_refs)]
     unsafe {
         OBJECT_STORE_CACHE.get_or_create(uri_info, copy_from)
@@ -47,7 +68,7 @@ impl ObjectStoreCache {
         &mut self,
         uri_info: &ParsedUriInfo,
         copy_from: bool,
-    ) -> (Arc<dyn ObjectStore>, Path) {
+    ) -> (ObjectStoreWithExpiration, Path) {
         let uri = uri_info.uri.clone();
         let scheme = uri_info.scheme.clone();
         let bucket = uri_info.bucket.clone();
@@ -56,7 +77,7 @@ impl ObjectStoreCache {
         // no need to cache local files
         if scheme == ObjectStoreScheme::Local {
             let item = Self::create(scheme, &uri, copy_from);
-            return (item.object_store, path);
+            return (item, path);
         }
 
         let bucket = bucket.expect("bucket is None");
@@ -70,7 +91,7 @@ impl ObjectStoreCache {
             if item.expired(&key.bucket) {
                 self.cache.remove(&key);
             } else {
-                return (item.object_store.clone(), path);
+                return (item.clone(), path);
             }
         }
 
@@ -78,7 +99,7 @@ impl ObjectStoreCache {
 
         self.cache.insert(key, item.clone());
 
-        (item.object_store.clone(), path)
+        (item, path)
     }
 
     fn create(scheme: ObjectStoreScheme, uri: &Url, copy_from: bool) -> ObjectStoreWithExpiration {
@@ -103,6 +124,9 @@ impl ObjectStoreCache {
 #[derive(Clone)]
 pub(crate) struct ObjectStoreWithExpiration {
     pub(crate) object_store: Arc<dyn object_store::ObjectStore>,
+
+    // the same store seen as a multipart upload interface, for a store that implements it
+    pub(crate) multipart_store: Option<Arc<dyn MultipartStore>>,
 
     // expiration time (if not applicable, the object_store will never expire)
     pub(crate) expire_at: Option<SystemTime>,

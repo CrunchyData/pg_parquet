@@ -343,6 +343,18 @@ pub(crate) fn copy_to_stmt_row_group_size(p_stmt: &PgBox<PlannedStmt>) -> i64 {
     }
 }
 
+// the row group size the command asked for, which is None when it asked for none and
+// DEFAULT_ROW_GROUP_SIZE is what the copy writes
+pub(crate) fn copy_to_stmt_explicit_row_group_size(p_stmt: &PgBox<PlannedStmt>) -> Option<i64> {
+    let row_group_size_option = copy_stmt_get_option(p_stmt, "row_group_size");
+
+    if row_group_size_option.is_null() {
+        None
+    } else {
+        Some(unsafe { defGetInt64(row_group_size_option.as_ptr()) })
+    }
+}
+
 pub(crate) fn copy_to_stmt_row_group_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
     let row_group_size_bytes_option = copy_stmt_get_option(p_stmt, "row_group_size_bytes");
 
@@ -704,7 +716,7 @@ pub(crate) fn copy_stmt_create_namespace_item(
     unsafe { PgBox::from_pg(ns_item) }
 }
 
-fn copy_stmt_attribute_names(p_stmt: &PgBox<PlannedStmt>) -> Vec<String> {
+pub(crate) fn copy_stmt_attribute_names(p_stmt: &PgBox<PlannedStmt>) -> Vec<String> {
     let attribute_name_list = copy_stmt_attribute_list(p_stmt);
 
     unsafe {
@@ -726,8 +738,16 @@ pub(crate) fn create_filtered_tupledesc_for_relation<'a>(
     p_stmt: &PgBox<PlannedStmt>,
     relation: &'a PgRelation,
 ) -> PgTupleDesc<'a> {
-    let attribute_name_list = copy_stmt_attribute_names(p_stmt);
+    create_filtered_tupledesc_for_attribute_names(&copy_stmt_attribute_names(p_stmt), relation)
+}
 
+// create_filtered_tupledesc_for_attribute_names is create_filtered_tupledesc_for_relation for a
+// caller that already has the attribute names, such as a parallel COPY FROM worker, which is
+// handed the names rather than the statement they came from.
+pub(crate) fn create_filtered_tupledesc_for_attribute_names<'a>(
+    attribute_name_list: &[String],
+    relation: &'a PgRelation,
+) -> PgTupleDesc<'a> {
     let relation_tupledesc = relation.tuple_desc();
 
     if attribute_name_list.is_empty() {

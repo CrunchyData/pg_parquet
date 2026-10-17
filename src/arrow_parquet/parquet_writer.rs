@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
-use object_store::buffered::BufWriter;
 use parquet::{
-    arrow::AsyncArrowWriter,
+    arrow::{async_writer::AsyncFileWriter, AsyncArrowWriter},
     file::properties::{EnabledStatistics, WriterProperties},
 };
 use pgrx::{pg_sys::Datum, PgTupleDesc};
@@ -14,6 +13,7 @@ use crate::{
         column_selection::leaf_column_paths,
         compression::PgParquetCompressionWithLevel,
         field_ids::validate_field_ids,
+        parquet_shared_upload::stash_range_metadata,
         pg_to_arrow::context::collect_pg_to_arrow_attribute_contexts,
         schema::parse_schema::{
             parquet_schema_string_from_attributes, parse_arrow_schema_from_attributes,
@@ -38,7 +38,7 @@ pub(crate) const DEFAULT_ROW_GROUP_SIZE: i64 = 122880;
 pub(crate) const DEFAULT_ROW_GROUP_SIZE_BYTES: i64 = DEFAULT_ROW_GROUP_SIZE * 1024;
 
 pub(crate) struct ParquetWriterContext {
-    parquet_writer: AsyncArrowWriter<BufWriter>,
+    parquet_writer: AsyncArrowWriter<Box<dyn AsyncFileWriter>>,
     schema: SchemaRef,
     attribute_contexts: Vec<PgToArrowAttributeContext>,
     options: CopyToParquetOptions,
@@ -174,7 +174,7 @@ impl ParquetWriterContext {
 
     // finalize flushes the in progress rows to a new row group and finally writes metadata to the file.
     pub(crate) fn finalize(&mut self) {
-        PG_BACKEND_TOKIO_RUNTIME
+        let metadata = PG_BACKEND_TOKIO_RUNTIME
             .block_on(self.parquet_writer.finish())
             .unwrap_or_else(|e| {
                 panic!(
@@ -182,6 +182,11 @@ impl ParquetWriterContext {
                     object_store_error_message(e)
                 )
             });
+
+        // a range of a parallel COPY TO wrote its rows into the destination's own upload
+        // rather than into a file of its own, so the leader is left to write a footer that
+        // covers every range, which is what the metadata of this one says where to find
+        stash_range_metadata(&metadata);
     }
 
     pub(crate) fn bytes_written(&self) -> usize {

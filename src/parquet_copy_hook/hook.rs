@@ -37,6 +37,7 @@ use super::{
         infer_column_definitions, is_create_table_from_parquet_stmt, table_already_exists,
         table_created_in_this_transaction, validate_create_table_from_parquet_stmt,
     },
+    parallel_copy_to::try_parallel_copy_to,
 };
 
 pub(crate) static ENABLE_PARQUET_COPY_HOOK: GucSetting<bool> = GucSetting::<bool>::new(true);
@@ -56,7 +57,7 @@ pub(crate) extern "C-unwind" fn init_parquet_copy_hook() {
     }
 }
 
-fn process_copy_to_parquet(
+pub(crate) fn process_copy_to_parquet(
     p_stmt: &PgBox<PlannedStmt>,
     query_string: &CStr,
     params: &PgBox<ParamListInfoData>,
@@ -76,6 +77,12 @@ fn process_copy_to_parquet(
     ensure_access_privilege_to_uri(&uri_info, copy_from);
 
     validate_copy_to_options(p_stmt, &uri_info);
+
+    // a COPY TO that can be split into ctid ranges is written by parallel workers instead,
+    // one part per range, and the parts are spliced into the destination at the end
+    if let Some(nprocessed) = try_parallel_copy_to(p_stmt, &uri_info) {
+        return nprocessed;
+    }
 
     let file_size_bytes = copy_to_stmt_file_size_bytes(p_stmt);
     let field_ids = copy_to_stmt_field_ids(p_stmt);

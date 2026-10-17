@@ -4,7 +4,7 @@ use pgrx::{
     ereport, is_a,
     pg_sys::{
         makeRangeVar, A_Star, ColumnRef, CommandTag, CopyStmt, CreateNewPortal, DestReceiver,
-        GetActiveSnapshot, Node,
+        GetActiveSnapshot, IsInParallelMode, Node,
         NodeTag::{self, T_CopyStmt},
         ParamListInfoData, PlannedStmt, PortalDefineQuery, PortalDrop, PortalRun, PortalStart,
         QueryCompletion, QueryEnvironment, RawStmt, ResTarget, SelectStmt, CURSOR_OPT_PARALLEL_OK,
@@ -62,12 +62,15 @@ pub(crate) fn execute_copy_to_with_dest_receiver(
             .pop()
             .expect("rewritten query is empty");
 
-        let plan = pg_plan_query(
-            query,
-            std::ptr::null(),
-            CURSOR_OPT_PARALLEL_OK as _,
-            params.as_ptr(),
-        );
+        // a parallel COPY TO runs this per ctid range, in the leader and in its workers,
+        // which are already in parallel mode and so cannot plan a parallel query of their own
+        let cursor_options = if IsInParallelMode() {
+            0
+        } else {
+            CURSOR_OPT_PARALLEL_OK as _
+        };
+
+        let plan = pg_plan_query(query, std::ptr::null(), cursor_options, params.as_ptr());
 
         let portal = CreateNewPortal();
         let mut portal = PgBox::from_pg(portal);

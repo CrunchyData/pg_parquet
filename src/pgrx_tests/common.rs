@@ -1,7 +1,9 @@
 use std::fs::File;
 use std::marker::PhantomData;
 use std::path::Path;
+use std::process::{Child, Command};
 use std::sync::Arc;
+use std::time::Duration;
 use std::{collections::HashMap, fmt::Debug};
 
 use crate::arrow_parquet::uri_utils::{parquet_metadata_from_uri, ParsedUriInfo};
@@ -58,6 +60,26 @@ pub(crate) fn test_pg_port() -> String {
     Spi::get_one::<String>("SELECT current_setting('port')")
         .expect("failed to read the test instance port")
         .expect("port setting is unset")
+}
+
+// psql runs the given commands in a session of its own and returns what they printed, for
+// the commands a test needs outside of its own transaction
+pub(crate) fn psql(port: &str, commands: &[&str]) -> String {
+    let mut psql = Command::new("psql");
+    psql.args(["-h", "localhost", "-p", port, "-d", "pgrx_tests", "-At"]);
+
+    for command in commands {
+        psql.args(["-c", command]);
+    }
+
+    let output = psql.output().expect("failed to run psql");
+    assert!(
+        output.status.success(),
+        "psql failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    String::from_utf8(output.stdout).expect("psql printed invalid utf8")
 }
 
 pub(crate) struct FileCleanup {
@@ -540,7 +562,12 @@ pub(crate) fn copy_to_helper(uri: &str) {
 // geospatial column of the test file stores. A None crs means that the column uses the default
 // crs of the parquet geospatial types, which is lon/lat on the WGS84 ellipsoid.
 pub(crate) fn geospatial_crs_by_column() -> HashMap<String, Option<String>> {
-    let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
+    geospatial_crs_by_column_of(LOCAL_TEST_FILE_PATH)
+}
+
+// geospatial_crs_by_column_of is geospatial_crs_by_column for a file other than the test file
+pub(crate) fn geospatial_crs_by_column_of(uri: &str) -> HashMap<String, Option<String>> {
+    let uri_info = ParsedUriInfo::try_from(uri).unwrap();
     let parquet_metadata = parquet_metadata_from_uri(&uri_info);
 
     let mut crs_by_column = HashMap::new();
@@ -556,4 +583,53 @@ pub(crate) fn geospatial_crs_by_column() -> HashMap<String, Option<String>> {
     }
 
     crs_by_column
+}
+
+// the rows of the table an interrupted copy reads. Every payload is drawn at random, which
+// leaves the writer nothing to compress away, so the table is large enough for the copy of it
+// to still be running when the test interrupts it.
+pub(crate) const INTERRUPTED_TABLE_ROWS: i64 = 200_000;
+
+// COPY_START_TIMEOUT is how long a copy started in another session is given to reach the
+// point it is worth interrupting at
+pub(crate) const COPY_START_TIMEOUT: Duration = Duration::from_secs(60);
+
+// create_interruptible_table creates the table an interrupted copy reads in a session of
+// its own, so that the session that copies it can see it
+pub(crate) fn create_interruptible_table(table: &str) {
+    let port = test_pg_port();
+
+    psql(
+        &port,
+        &[&format!(
+            "DROP TABLE IF EXISTS {table};
+             CREATE TABLE {table} (id bigint, payload text);
+             INSERT INTO {table}
+             SELECT g, md5(random()::text) || md5(random()::text) ||
+                       md5(random()::text) || md5(random()::text) ||
+                       md5(random()::text) || md5(random()::text) ||
+                       md5(random()::text) || md5(random()::text)
+             FROM generate_series(1, {INTERRUPTED_TABLE_ROWS}) g;"
+        )],
+    );
+}
+
+pub(crate) fn drop_interruptible_table(table: &str) {
+    let port = test_pg_port();
+
+    psql(&port, &[&format!("DROP TABLE IF EXISTS {table};")]);
+}
+
+// copy_session_output closes the input of the session, which is what makes psql exit, and
+// returns everything it printed
+pub(crate) fn copy_session_output(mut copy: Child) -> String {
+    drop(copy.stdin.take());
+
+    let output = copy.wait_with_output().expect("failed to wait for psql");
+
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
 }

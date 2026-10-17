@@ -79,8 +79,11 @@ pub(crate) fn create_azure_object_store(uri: &Url) -> ObjectStoreWithExpiration 
     // object store handles refreshing bearer token, so we do not need to handle expiry here
     let expire_at = None;
 
+    let object_store = Arc::new(object_store);
+
     ObjectStoreWithExpiration {
-        object_store: Arc::new(object_store),
+        multipart_store: Some(object_store.clone()),
+        object_store,
         expire_at,
     }
 }

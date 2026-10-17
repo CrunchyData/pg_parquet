@@ -28,6 +28,7 @@ pub(crate) fn create_http_object_store(uri: &Url) -> ObjectStoreWithExpiration {
 
     ObjectStoreWithExpiration {
         object_store: Arc::new(object_store),
+        multipart_store: None,
         expire_at,
     }
 }
