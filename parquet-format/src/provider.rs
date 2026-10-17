@@ -67,6 +67,30 @@ fn read_metadata<R: ChunkReader>(reader: &R) -> Result<ParquetMetaData> {
         .map_err(|e| format!("not a readable parquet file: {e}"))
 }
 
+/// How many rows a reader should decode at a time.
+///
+/// An Arrow array addresses its values with `i32` offsets, so a batch whose byte-array column
+/// holds more than 2 GB cannot be built at all — upstream fails it with "index overflow
+/// decoding byte array". A file with such a column is therefore read a row at a time, which is
+/// slow and is the only thing that works; everything else is read in the default batches.
+fn reader_batch_size(metadata: &ParquetMetaData) -> Option<usize> {
+    const MAX_ARROW_ARRAY_SIZE: i64 = i32::MAX as i64;
+
+    let mut column_sizes = metadata.row_groups().iter().flat_map(|row_group| {
+        row_group.columns().iter().map(|column| {
+            // the unencoded size when the footer records it, and the compressed-pages figure as
+            // the only other thing there is to go on
+            column
+                .unencoded_byte_array_data_bytes()
+                .unwrap_or(column.uncompressed_size())
+        })
+    });
+
+    column_sizes
+        .any(|column_size| column_size > MAX_ARROW_ARRAY_SIZE)
+        .then_some(1)
+}
+
 /// A reader over a file, built with the schema the file should be *read* with rather than
 /// always the one it declares — see [`crate::schema_hint`] for the two cases where those
 /// differ. A file with neither pays only the metadata load, which the reader does anyway.
@@ -221,7 +245,13 @@ impl FormatProvider for Parquet {
     ) -> Result<Box<dyn RecordBatchReader + Send>> {
         // `Bytes` rather than a copy: the reader holds it for as long as it needs, and a clone
         // of one is a refcount bump
-        Ok(Box::new(builder(data)?.build().map_err(|e| {
+        let mut builder = builder(data)?;
+
+        if let Some(batch_size) = reader_batch_size(builder.metadata()) {
+            builder = builder.with_batch_size(batch_size);
+        }
+
+        Ok(Box::new(builder.build().map_err(|e| {
             format!("could not read the parquet file: {e}")
         })?))
     }
@@ -257,6 +287,10 @@ impl FormatProvider for Parquet {
                     .map(|split| split as usize)
                     .collect(),
             );
+        }
+
+        if let Some(batch_size) = reader_batch_size(builder.metadata()) {
+            builder = builder.with_batch_size(batch_size);
         }
 
         Ok(Box::new(builder.build().map_err(|e| {

@@ -51,7 +51,9 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "failed to get object store metadata")]
+    // a backslash makes this no file and no valid pattern either, so what the user hears is
+    // that the file is missing
+    #[should_panic(expected = "there is no file at /tmp/pg_parquet_test/du**\\mm*y1.parquet")]
     fn test_path_with_special_chars() {
         let filename = "/tmp/pg_parquet_test/du**\\mm*y1.parquet";
         let _file = FileCleanup::new(filename);
