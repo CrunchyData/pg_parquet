@@ -1412,7 +1412,7 @@ dependencies = [
 [[package]]
 name = "format-registry"
 version = "0.1.0"
-source = "git+ssh://git@github.com/CrunchyData/pg_arrow_base.git?branch=main#c8cd859558729463e20319710d5f87964f81cb4c"
+source = "git+ssh://git@github.com/CrunchyData/pg_arrow_base.git?branch=main#16883e73305bf5e4fd92eb9dcb96bce69282dd06"
 dependencies = [
  "arrow",
  "bytes",

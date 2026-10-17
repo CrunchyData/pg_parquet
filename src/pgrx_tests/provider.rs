@@ -25,4 +25,20 @@ mod tests {
 
         assert_eq!(extensions.as_deref(), Some("parquet"));
     }
+
+    #[pg_test]
+    fn test_the_base_knows_parquet_reads_parts_and_writes_streaming() {
+        Spi::run("CREATE EXTENSION IF NOT EXISTS pg_arrow_base CASCADE").unwrap();
+
+        // the descriptor's three optional slots, as the base sees them: a null in any of them is
+        // a silently slower statement rather than an error, so it is asserted rather than
+        // assumed. These are the capabilities the base dispatches on when it serves parquet.
+        let capabilities = Spi::get_one::<String>(
+            "SELECT reads_ranges || ',' || writes_streaming
+             FROM arrow.formats() WHERE format = 'parquet'",
+        )
+        .expect("failed to read the listing");
+
+        assert_eq!(capabilities.as_deref(), Some("true,true"));
+    }
 }
