@@ -1,3 +1,4 @@
+pub(crate) mod copy_cleanup;
 pub(crate) mod copy_from;
 pub(crate) mod copy_from_program;
 pub(crate) mod copy_from_stdin;
@@ -10,4 +11,5 @@ pub(crate) mod copy_to_stdout;
 pub(crate) mod copy_utils;
 pub(crate) mod create_table;
 pub(crate) mod hook;
+pub(crate) mod parallel_copy_to;
 pub(crate) mod pg_compat;

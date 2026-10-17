@@ -1,6 +1,8 @@
 use std::{
+    cell::RefCell,
     ffi::{c_char, CStr},
     path::Path,
+    rc::Rc,
 };
 
 use parquet::file::properties::DEFAULT_BLOOM_FILTER_FPP;
@@ -21,6 +23,33 @@ use super::{
 };
 
 pub(crate) const INVALID_FILE_SIZE_BYTES: i64 = 0;
+
+// FileIdClaim hands out the ids of the files written into a folder destination, which is
+// what a copy with file_size_bytes writes. A copy that runs in a single process numbers its
+// own files, and a parallel COPY TO installs a claim of its own so that the participants,
+// which write into one folder without knowing of each other, cannot take the same id.
+pub(crate) trait FileIdClaim {
+    fn claim_file_id(&self) -> i64;
+}
+
+thread_local! {
+    static INSTALLED_FILE_ID_CLAIM: RefCell<Option<Rc<dyn FileIdClaim>>> =
+        const { RefCell::new(None) };
+}
+
+// install_file_id_claim makes the given claim the source of the file ids of every folder
+// destination written in this process, until uninstall_file_id_claim is called
+pub(crate) fn install_file_id_claim(claim: Rc<dyn FileIdClaim>) {
+    INSTALLED_FILE_ID_CLAIM.with_borrow_mut(|installed| *installed = Some(claim));
+}
+
+pub(crate) fn uninstall_file_id_claim() {
+    INSTALLED_FILE_ID_CLAIM.with_borrow_mut(|installed| *installed = None);
+}
+
+fn claimed_file_id() -> Option<i64> {
+    INSTALLED_FILE_ID_CLAIM.with_borrow(|installed| Some(installed.as_ref()?.claim_file_id()))
+}
 
 // number of the tuples that are collected before the written bytes are reported again
 const BYTES_PROGRESS_INTERVAL: i64 = 1024;
@@ -166,7 +195,7 @@ impl CopyToParquetSplitDestReceiver {
 
         let parent_folder = Path::new(uri);
 
-        let file_id = self.current_child_id;
+        let file_id = claimed_file_id().unwrap_or(self.current_child_id);
 
         let child_uri = parent_folder.join(format!("data_{file_id}.parquet"));
 

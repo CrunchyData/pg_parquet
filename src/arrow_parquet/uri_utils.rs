@@ -10,6 +10,7 @@ use parquet::{
     arrow::{
         arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions},
         async_reader::{AsyncFileReader, ParquetRecordBatchStream},
+        async_writer::AsyncFileWriter,
         ArrowSchemaConverter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
     },
     errors::{ParquetError, Result as ParquetResult},
@@ -29,8 +30,9 @@ use pgrx::{
 use url::Url;
 
 use crate::{
-    arrow_parquet::schema::parse_schema::{
-        schema_with_int96_as_micros, schema_without_dictionaries,
+    arrow_parquet::{
+        parquet_shared_upload::shared_upload_writer,
+        schema::parse_schema::{schema_with_int96_as_micros, schema_without_dictionaries},
     },
     object_store::{
         aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
@@ -128,7 +130,7 @@ impl ParsedUriInfo {
         parsed_uri
     }
 
-    fn is_std_inout(&self) -> bool {
+    pub(crate) fn is_std_inout(&self) -> bool {
         self.tmp_fd.is_some() && !self.is_program
     }
 
@@ -250,44 +252,28 @@ pub(crate) fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaDescrip
 }
 
 pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<ParquetMetaData> {
-    let copy_from = true;
-    let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
+    let (_, reader_metadata, _) = open_parquet_file(uri_info).unwrap_or_else(|e| panic!("{e}"));
 
-    PG_BACKEND_TOKIO_RUNTIME.block_on(async {
-        let object_store_meta = parquet_object_store
-            .head(&location)
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "failed to get object store metadata for uri {}: {}",
-                    uri_info.uri,
-                    object_store_error_message(e)
-                )
-            });
-
-        let parquet_object_reader =
-            ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
-
-        let builder = ParquetRecordBatchStreamBuilder::new(parquet_object_reader)
-            .await
-            .unwrap_or_else(|e| panic!("{}", e));
-
-        builder.metadata().to_owned()
-    })
+    reader_metadata.metadata().to_owned()
 }
 
 // default # of records per batch during arrow-parquet conversions (RecordBatch api)
 pub(crate) const RECORD_BATCH_SIZE: i64 = 1024;
 
-// parquet_reader_from_uri creates a reader for the given uri. It also returns the number of the
-// rows that the file has since the row count is only reachable from the reader's builder.
-pub(crate) fn parquet_reader_from_uri(
+// open_parquet_file reads everything that the readers of one file share: a handle to the
+// file's bytes, the metadata to read it with, and the batch size that its columns call for.
+// None of it differs between the row groups of the file, which is what lets a parallel COPY
+// FROM worker read all of its row groups without going back to the footer.
+fn open_parquet_file(
     uri_info: &ParsedUriInfo,
-) -> Result<(ParquetRecordBatchStream<ParquetObjectStoreReader>, i64), String> {
+) -> Result<(ParquetObjectStoreReader, ArrowReaderMetadata, usize), String> {
     let copy_from = true;
+
+    // the object store is created before the runtime is entered, since creating one blocks on
+    // the runtime itself, e.g. to resolve the credentials an object store uri is reached with
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
-    PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+    PG_BACKEND_TOKIO_RUNTIME.block_on(async move {
         let object_store_meta = parquet_object_store.head(&location).await.map_err(|e| {
             format!(
                 "failed to get object store metadata for uri {}: {}",
@@ -296,70 +282,72 @@ pub(crate) fn parquet_reader_from_uri(
             )
         })?;
 
-        let parquet_object_reader = ParquetObjectStoreReader::new(
-            parquet_object_store.clone(),
-            location.clone(),
-            object_store_meta.size,
-        );
+        let mut object_reader =
+            ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
 
-        let builder = ParquetRecordBatchStreamBuilder::new(parquet_object_reader)
-            .await
-            .unwrap_or_else(|e| panic!("{}", e));
+        let reader_metadata = parquet_reader_metadata(&mut object_reader).await;
 
-        // the reader's own schema is not always the one to read the file with: the Parquet
-        // dictionary decoder cannot build a dictionary of all value types, and an INT96
-        // column needs its resolution hinted
-        let schema_hint = {
-            let file_schema = builder.schema();
-            let file_metadata = builder.metadata().file_metadata();
+        pgrx::debug2!("Converted arrow schema is: {}", reader_metadata.schema());
 
-            let without_dictionaries = schema_without_dictionaries(file_schema);
-            let hint_base = without_dictionaries.as_deref().unwrap_or(file_schema);
+        let batch_size = calculate_reader_batch_size(reader_metadata.metadata());
 
-            schema_with_int96_as_micros(hint_base, file_metadata).or(without_dictionaries)
-        };
-
-        let builder = match schema_hint {
-            Some(schema) => {
-                let options = ArrowReaderOptions::new().with_schema(schema);
-
-                match ArrowReaderMetadata::try_new(builder.metadata().clone(), options) {
-                    Ok(reader_metadata) => {
-                        let parquet_object_reader = ParquetObjectStoreReader::new(
-                            parquet_object_store,
-                            location,
-                            object_store_meta.size,
-                        );
-
-                        ParquetRecordBatchStreamBuilder::new_with_metadata(
-                            parquet_object_reader,
-                            reader_metadata,
-                        )
-                    }
-                    // keep the reader's own schema if it rejects the hinted one
-                    Err(e) => {
-                        pgrx::debug2!("Schema hint is rejected: {}", e);
-
-                        builder
-                    }
-                }
-            }
-            None => builder,
-        };
-
-        pgrx::debug2!("Converted arrow schema is: {}", builder.schema());
-
-        let batch_size = calculate_reader_batch_size(builder.metadata());
-
-        let total_rows = builder.metadata().file_metadata().num_rows();
-
-        let reader = builder
-            .with_batch_size(batch_size)
-            .build()
-            .unwrap_or_else(|e| panic!("{}", e));
-
-        Ok((reader, total_rows))
+        Ok((object_reader, reader_metadata, batch_size))
     })
+}
+
+// parquet_reader_metadata reads the file's footer and settles which schema to read the file
+// with: the file's own schema is not always the one, since the Parquet dictionary decoder
+// cannot build a dictionary of all value types, and an INT96 column needs its resolution
+// hinted.
+async fn parquet_reader_metadata(
+    object_reader: &mut ParquetObjectStoreReader,
+) -> ArrowReaderMetadata {
+    let reader_metadata = ArrowReaderMetadata::load_async(object_reader, ArrowReaderOptions::new())
+        .await
+        .unwrap_or_else(|e| panic!("{}", e));
+
+    let schema_hint = {
+        let file_schema = reader_metadata.schema();
+        let file_metadata = reader_metadata.metadata().file_metadata();
+
+        let without_dictionaries = schema_without_dictionaries(file_schema);
+        let hint_base = without_dictionaries.as_deref().unwrap_or(file_schema);
+
+        schema_with_int96_as_micros(hint_base, file_metadata).or(without_dictionaries)
+    };
+
+    let Some(schema) = schema_hint else {
+        return reader_metadata;
+    };
+
+    let options = ArrowReaderOptions::new().with_schema(schema);
+
+    match ArrowReaderMetadata::try_new(reader_metadata.metadata().clone(), options) {
+        Ok(hinted_metadata) => hinted_metadata,
+        // keep the file's own schema if it rejects the hinted one
+        Err(e) => {
+            pgrx::debug2!("Schema hint is rejected: {}", e);
+
+            reader_metadata
+        }
+    }
+}
+
+// parquet_reader_from_uri creates a reader over the whole file. It also returns the number of
+// the rows that the file has since the row count is only reachable from the reader's builder.
+pub(crate) fn parquet_reader_from_uri(
+    uri_info: &ParsedUriInfo,
+) -> Result<(ParquetRecordBatchStream<ParquetObjectStoreReader>, i64), String> {
+    let (object_reader, reader_metadata, batch_size) = open_parquet_file(uri_info)?;
+
+    let total_rows = reader_metadata.metadata().file_metadata().num_rows();
+
+    let reader = ParquetRecordBatchStreamBuilder::new_with_metadata(object_reader, reader_metadata)
+        .with_batch_size(batch_size)
+        .build()
+        .unwrap_or_else(|e| panic!("{}", e));
+
+    Ok((reader, total_rows))
 }
 
 fn calculate_reader_batch_size(metadata: &Arc<ParquetMetaData>) -> usize {
@@ -387,11 +375,8 @@ pub(crate) fn parquet_writer_from_uri(
     uri_info: &ParsedUriInfo,
     arrow_schema: SchemaRef,
     writer_props: WriterProperties,
-) -> AsyncArrowWriter<BufWriter> {
-    let copy_from = false;
-    let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
-
-    let parquet_object_writer = BufWriter::new(parquet_object_store, location);
+) -> AsyncArrowWriter<Box<dyn AsyncFileWriter>> {
+    let parquet_object_writer = parquet_sink_from_uri(uri_info);
 
     AsyncArrowWriter::try_new(parquet_object_writer, arrow_schema, Some(writer_props))
         .unwrap_or_else(|e| {
@@ -400,6 +385,22 @@ pub(crate) fn parquet_writer_from_uri(
                 uri_info.uri, e
             )
         })
+}
+
+// parquet_sink_from_uri is what the parquet writer of the given uri writes its bytes into. A
+// range of a parallel COPY TO writes into the destination's own multipart upload, which the
+// participant that claimed the range shares with the other ranges it claims, so that the
+// bytes of the copy are uploaded once and by the participant that wrote them. Everything
+// else writes the destination on its own.
+fn parquet_sink_from_uri(uri_info: &ParsedUriInfo) -> Box<dyn AsyncFileWriter> {
+    if let Some(shared_upload_writer) = shared_upload_writer(&uri_as_string(&uri_info.uri)) {
+        return shared_upload_writer;
+    }
+
+    let copy_from = false;
+    let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
+
+    Box::new(BufWriter::new(parquet_object_store, location))
 }
 
 pub(crate) fn ensure_access_privilege_to_uri(uri_info: &ParsedUriInfo, copy_from: bool) {
@@ -471,7 +472,7 @@ pub(crate) struct ParquetObjectStoreReader {
 }
 
 impl ParquetObjectStoreReader {
-    fn new(object_store: Arc<dyn ObjectStore>, location: Path, file_size: u64) -> Self {
+    pub(crate) fn new(object_store: Arc<dyn ObjectStore>, location: Path, file_size: u64) -> Self {
         Self {
             object_store,
             location,

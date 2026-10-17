@@ -36,6 +36,7 @@ pub(crate) fn create_local_file_object_store(
 
     ObjectStoreWithExpiration {
         object_store: Arc::new(object_store),
+        multipart_store: None,
         expire_at,
     }
 }

@@ -3,6 +3,7 @@ use std::sync::LazyLock;
 
 use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
+use parquet_copy_hook::parallel_copy_to::{MAX_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS_LIMIT};
 use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
 use pgrx::memcxt::PgMemoryContexts;
 use pgrx::pg_sys::AsPgCStr;
@@ -52,7 +53,27 @@ pub extern "C-unwind" fn _PG_init() {
                 &ENABLE_PARQUET_COPY_HOOK,
                 GucContext::Userset,
                 GucFlags::default(),
-            )
+            );
+
+            GucRegistry::define_int_guc(
+                CStr::from_ptr("pg_parquet.max_parallel_workers".as_pg_cstr()),
+                CStr::from_ptr(
+                    "Maximum number of parallel workers for a COPY TO or COPY FROM parquet"
+                        .as_pg_cstr(),
+                ),
+                CStr::from_ptr(
+                    "A COPY TO has the workers write the rows of the table into parts next \
+                     to the destination, which are merged into it, and a COPY FROM has them \
+                     decode the row groups of the file the leader inserts. The request is \
+                     capped to the server's max_parallel_workers. 0 disables both."
+                        .as_pg_cstr(),
+                ),
+                &MAX_PARALLEL_WORKERS,
+                0,
+                MAX_PARALLEL_WORKERS_LIMIT,
+                GucContext::Userset,
+                GucFlags::default(),
+            );
         });
     };
 
