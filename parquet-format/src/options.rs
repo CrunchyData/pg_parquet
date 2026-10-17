@@ -5,7 +5,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use arrow_schema::Schema;
-use format_registry::options::FormatOptions;
+use format_registry::options::{FormatOptions, FILE_NAME_OPTION};
 use format_registry::Result;
 use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use parquet::file::properties::{
@@ -20,13 +20,6 @@ use crate::field_ids::FieldIds;
 /// Parquet's own default row group size, and the byte budget that goes with it.
 pub const DEFAULT_ROW_GROUP_SIZE: usize = 122880;
 pub const DEFAULT_ROW_GROUP_SIZE_BYTES: usize = DEFAULT_ROW_GROUP_SIZE * 1024;
-
-/// The option the base sets to the name of the file being written, so that a format whose
-/// defaults depend on it can see it. Parquet's do: `orders.parquet.zst` means zstd.
-///
-/// Not a user option — it is never offered to [`crate::provider::Parquet::validate_option`],
-/// and a statement cannot write one, since `__` is reserved for the base.
-pub const FILE_NAME_OPTION: &str = "__file_name";
 
 pub const COMPRESSIONS: &[&str] = &[
     "uncompressed",

@@ -10,13 +10,12 @@ use arrow::array::{new_null_array, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::record_batch::RecordBatchReader;
 use bytes::Bytes;
-use format_registry::options::FormatOptions;
+use format_registry::options::{FormatOptions, FILE_NAME_OPTION};
 use format_registry::provider::{ByteSink, ByteSource, FormatProvider};
 use format_registry::Result;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::field_ids::{stamp_field_ids, FieldIds};
-use crate::options::FILE_NAME_OPTION;
 use crate::provider::Parquet;
 
 /// A `ByteSink` that keeps the file, so a streaming write can be read back.
