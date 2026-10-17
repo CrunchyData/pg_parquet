@@ -27,6 +27,9 @@ arrow = {version = "60", default-features = false}
 arrow-cast = {version = "60", default-features = false}
 arrow-schema = {version = "60", default-features = false, features = ["canonical_extension_types"]}
 bytes = "1"
+# tier 2, for the registration ABI only: the descriptor this extension publishes and the
+# adapters behind the base's byte source and sink.
+format-registry = {git = "ssh://git@github.com/CrunchyData/pg_arrow_base.git", branch = "main"}
 futures = "0.3"
 glob = "0.3"
 libc = {version = "0.2", default-features = false }
@@ -49,6 +52,8 @@ parquet = {version = "60", default-features = false, features = [
     "geospatial",
 ]}
 parquet-geospatial = "60"
+# the format itself: no pgrx, no object store, tested with plain `cargo test`
+parquet-format = {path = "parquet-format"}
 pgrx = "=0.19.3"
 serde = "1"
 serde_json = "1"

@@ -11,4 +11,5 @@ mod copy_type_roundtrip;
 mod create_table_from;
 mod gucs;
 mod object_store;
+mod provider;
 mod udfs;
