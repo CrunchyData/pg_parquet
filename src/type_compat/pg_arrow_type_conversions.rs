@@ -12,8 +12,8 @@ use pgrx::{
 // Postgres stores -infinity as the minimum of the underlying integer, but DuckDB reserves
 // that value for its NULL and fails to read it back. We write one above the minimum, which is
 // what DuckDB writes for -infinity, and we read both of them back as -infinity.
-const NEG_INFINITY_DATE: i32 = i32::MIN + 1;
-const NEG_INFINITY_TIMESTAMP: i64 = i64::MIN + 1;
+pub(crate) const NEG_INFINITY_DATE: i32 = i32::MIN + 1;
+pub(crate) const NEG_INFINITY_TIMESTAMP: i64 = i64::MIN + 1;
 
 // PG epoch (2000-01-01) is 10957 days after the Unix epoch (1970-01-01) parquet counts from
 const MICROS_BETWEEN_UNIX_AND_PG_EPOCH: i64 = 10957 * 24 * 60 * 60 * 1_000_000;
@@ -25,22 +25,11 @@ pub(crate) fn date_to_i32(date: Date) -> i32 {
         return NEG_INFINITY_DATE;
     }
 
-    let date_as_bytes: Vec<u8> = unsafe {
-        direct_function_call(pg_sys::date_send, &[date.into_datum()])
-            .expect("cannot convert date to bytes")
-    };
-
-    let pg_epoch_days = i32::from_be_bytes(
-        date_as_bytes[0..4]
-            .try_into()
-            .unwrap_or_else(|e| panic!("{}", e)),
-    );
-
     // PG epoch is (2000-01-01). Convert it to Unix epoch (1970-01-01). +10957 days. The day
     // count is shifted rather than the date itself, because PG date arithmetic cannot
     // represent a date within 10957 days of its own maximum, while the day count of every
     // PG date leaves room for the shift in an i32.
-    pg_epoch_days + 10957
+    date.to_unix_epoch_days()
 }
 
 pub(crate) fn i32_to_date(i32_date: i32) -> Date {
@@ -262,6 +251,81 @@ fn error_if_special_numeric(numeric: AnyNumeric) {
         "Special numeric values like NaN, Inf, -Inf are not allowed for numeric type during copy to parquet",
         "Use float types instead.",
     );
+    }
+}
+
+// numeric_datum_to_i128 decodes a numeric datum into the i128 that the arrow decimal
+// column expects, reading PG's base-10000 digit array in place. It returns None when the
+// value needs the general path: NaN and +-Inf, the long header format, a scale that would
+// lose digits, or an i128 overflow.
+pub(crate) fn numeric_datum_to_i128(datum: pg_sys::Datum, scale: u32) -> Option<i128> {
+    const NUMERIC_SIGN_MASK: u16 = 0xC000;
+    const NUMERIC_SPECIAL: u16 = 0xC000;
+    const NUMERIC_SHORT: u16 = 0x8000;
+    const NUMERIC_SHORT_SIGN_MASK: u16 = 0x2000;
+    const NUMERIC_SHORT_WEIGHT_SIGN_MASK: u16 = 0x0040;
+    const NUMERIC_SHORT_WEIGHT_MASK: u16 = 0x003F;
+
+    unsafe {
+        let varlena = pg_sys::pg_detoast_datum_packed(datum.cast_mut_ptr());
+
+        let data = pgrx::varlena::vardata_any(varlena).cast::<u8>();
+        let len = pgrx::varlena::varsize_any_exhdr(varlena);
+
+        if len < 2 {
+            return None;
+        }
+
+        let header = (data as *const u16).read_unaligned();
+
+        if header & NUMERIC_SIGN_MASK == NUMERIC_SPECIAL {
+            return None;
+        }
+
+        // the long header format holds a weight or a display scale that the short one cannot,
+        // which takes a value wider than the 38 digits of a decimal128 column, so it is left
+        // to the general path rather than decoded here
+        if header & NUMERIC_SHORT == 0 {
+            return None;
+        }
+
+        let is_negative = header & NUMERIC_SHORT_SIGN_MASK != 0;
+
+        let mut weight = (header & NUMERIC_SHORT_WEIGHT_MASK) as i32;
+
+        if header & NUMERIC_SHORT_WEIGHT_SIGN_MASK != 0 {
+            weight |= !(NUMERIC_SHORT_WEIGHT_MASK as i32);
+        }
+
+        let digits_offset = 2;
+
+        let ndigits = (len - digits_offset) / 2;
+
+        let mut acc: i128 = 0;
+
+        for i in 0..ndigits {
+            let digit = (data.add(digits_offset + i * 2) as *const i16).read_unaligned();
+            acc = acc.checked_mul(10_000)?.checked_add(digit as i128)?;
+        }
+
+        // acc holds the digits shifted left by (ndigits - 1 - weight) base-10000 places,
+        // so the decimal exponent still owed to reach 10^scale is:
+        let exponent = scale as i32 - 4 * (ndigits as i32 - 1 - weight);
+
+        let scaled = if exponent >= 0 {
+            acc.checked_mul(10_i128.checked_pow(exponent as u32)?)?
+        } else {
+            let divisor = 10_i128.checked_pow((-exponent) as u32)?;
+
+            // the general path would round here, so leave it to numeric_out
+            if acc % divisor != 0 {
+                return None;
+            }
+
+            acc / divisor
+        };
+
+        Some(if is_negative { -scaled } else { scaled })
     }
 }
 

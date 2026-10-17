@@ -4,13 +4,13 @@ use std::{
 };
 
 use pg_sys::{
-    get_typlenbyval, slot_getallattrs, toast_raw_datum_size, AllocSetContextCreateExtended,
-    AsPgCStr, BlessTupleDesc, CommandDest, CurrentMemoryContext, Datum, DestReceiver,
-    HeapTupleData, List, MemoryContext, MemoryContextAllocZero, MemoryContextDelete,
+    datumCopy, get_typlenbyval, slot_getallattrs, toast_raw_datum_size,
+    AllocSetContextCreateExtended, AsPgCStr, BlessTupleDesc, CommandDest, CurrentMemoryContext,
+    Datum, DestReceiver, MemoryContext, MemoryContextAllocZero, MemoryContextDelete,
     MemoryContextReset, TupleDesc, TupleTableSlot, ALLOCSET_DEFAULT_INITSIZE,
     ALLOCSET_DEFAULT_MAXSIZE, ALLOCSET_DEFAULT_MINSIZE, VARHDRSZ,
 };
-use pgrx::{prelude::*, FromDatum, PgList, PgMemoryContexts, PgTupleDesc};
+use pgrx::{prelude::*, FromDatum, PgMemoryContexts, PgTupleDesc};
 
 use crate::{
     arrow_parquet::{
@@ -31,7 +31,9 @@ pub(crate) struct CopyToParquetDestReceiver {
     dest: DestReceiver,
     natts: usize,
     tupledesc: TupleDesc,
-    collected_tuples: *mut List,
+    // collected_columns stages the datums of the current batch column by column, so that the
+    // arrow conversion can read a whole column without re-reading a heap tuple per row.
+    collected_columns: *mut CollectedColumns,
     collected_tuple_count: i64,
     collected_tuple_size: i64,
     collected_tuple_column_sizes: *mut i64,
@@ -46,11 +48,72 @@ pub(crate) struct CopyToParquetDestReceiver {
     total_bytes_written: i64,
 }
 
+// CollectedColumns holds the staged datums of the current batch, one Vec per attribute, plus the
+// type information needed to copy a datum into the row group memory context. typlen and typbyval
+// are looked up once per COPY rather than once per datum.
+pub(crate) struct CollectedColumns {
+    columns: Vec<Vec<Option<Datum>>>,
+    typlens: Vec<i16>,
+    typbyvals: Vec<bool>,
+}
+
+impl CollectedColumns {
+    fn new(tupledesc: &PgTupleDesc) -> Self {
+        let natts = tupledesc.len();
+
+        let mut typlens = Vec::with_capacity(natts);
+        let mut typbyvals = Vec::with_capacity(natts);
+
+        for idx in 0..natts {
+            let typoid = tupledesc
+                .get(idx)
+                .expect("cannot get attribute")
+                .type_oid()
+                .value();
+
+            let mut typlen = -1_i16;
+            let mut typbyval = false;
+            unsafe { get_typlenbyval(typoid, &mut typlen, &mut typbyval) };
+
+            typlens.push(typlen);
+            typbyvals.push(typbyval);
+        }
+
+        Self {
+            columns: vec![Vec::new(); natts],
+            typlens,
+            typbyvals,
+        }
+    }
+
+    fn clear(&mut self) {
+        for column in self.columns.iter_mut() {
+            column.clear();
+        }
+    }
+}
+
 impl CopyToParquetDestReceiver {
-    fn collect_tuple(&mut self, tuple: PgHeapTuple<AllocatedByRust>, tuple_column_sizes: Vec<i32>) {
-        let mut tuples = unsafe { PgList::from_pg(self.collected_tuples) };
-        tuples.push(tuple.into_pg());
-        self.collected_tuples = tuples.into_pg();
+    // collect_datums copies the slot's datums into the row group memory context, column by column.
+    // By-reference datums are copied since the slot's memory is reused for the next tuple.
+    fn collect_datums(&mut self, datums: &[Option<Datum>], tuple_column_sizes: Vec<i32>) {
+        let collected_columns = unsafe {
+            self.collected_columns
+                .as_mut()
+                .expect("collected columns are not found")
+        };
+
+        for (idx, datum) in datums.iter().enumerate() {
+            let datum = datum.map(|datum| {
+                if collected_columns.typbyvals[idx] {
+                    datum
+                } else {
+                    unsafe { datumCopy(datum, false, collected_columns.typlens[idx] as _) }
+                }
+            });
+
+            collected_columns.columns[idx].push(datum);
+        }
 
         let column_sizes = unsafe {
             std::slice::from_raw_parts_mut(self.collected_tuple_column_sizes, self.natts)
@@ -69,11 +132,17 @@ impl CopyToParquetDestReceiver {
     }
 
     fn reset_collected_tuples(&mut self) {
+        unsafe {
+            self.collected_columns
+                .as_mut()
+                .expect("collected columns are not found")
+                .clear()
+        };
+
         unsafe { MemoryContextReset(self.row_group_memory_context) };
 
         self.collected_tuple_count = 0;
         self.collected_tuple_size = 0;
-        self.collected_tuples = PgList::<HeapTupleData>::new().into_pg();
         self.collected_tuple_column_sizes = unsafe {
             MemoryContextAllocZero(
                 self.row_group_memory_context,
@@ -114,27 +183,18 @@ impl CopyToParquetDestReceiver {
     fn write_tuples_to_parquet(&mut self) {
         debug_assert!(!self.tupledesc.is_null());
 
-        let tupledesc = unsafe { PgTupleDesc::from_pg_unchecked(self.tupledesc) };
-
-        let tuples = unsafe { PgList::from_pg(self.collected_tuples) };
-        let tuples = tuples
-            .iter_ptr()
-            .map(|tup_ptr: *mut HeapTupleData| unsafe {
-                if tup_ptr.is_null() {
-                    None
-                } else {
-                    let tup = PgHeapTuple::from_heap_tuple(tupledesc.clone(), tup_ptr).into_owned();
-                    Some(tup)
-                }
-            })
-            .collect::<Vec<_>>();
+        let collected_columns = unsafe {
+            self.collected_columns
+                .as_ref()
+                .expect("collected columns are not found")
+        };
 
         let current_parquet_writer_context = unsafe {
             self.parquet_writer_context
                 .as_mut()
                 .expect("parquet writer context is not found")
         };
-        current_parquet_writer_context.write_tuples(tuples);
+        current_parquet_writer_context.write_columns(&collected_columns.columns);
 
         self.reset_collected_tuples();
     }
@@ -180,6 +240,14 @@ impl CopyToParquetDestReceiver {
     }
 
     pub(crate) fn cleanup(&mut self) {
+        if !self.collected_columns.is_null() {
+            let collected_columns = unsafe { Box::from_raw(self.collected_columns) };
+
+            self.collected_columns = std::ptr::null_mut();
+
+            drop(collected_columns);
+        }
+
         if !self.parquet_writer_context.is_null() {
             let parquet_writer_context = unsafe { Box::from_raw(self.parquet_writer_context) };
 
@@ -222,7 +290,7 @@ pub(crate) extern "C-unwind" fn copy_startup(
 
     // update the parquet dest receiver's missing fields
     parquet_dest.tupledesc = tupledesc.as_ptr();
-    parquet_dest.collected_tuples = PgList::<HeapTupleData>::new().into_pg();
+    parquet_dest.collected_columns = Box::into_raw(Box::new(CollectedColumns::new(&tupledesc)));
     parquet_dest.collected_tuple_column_sizes = unsafe {
         MemoryContextAllocZero(
             parquet_dest.row_group_memory_context,
@@ -313,9 +381,7 @@ pub(crate) extern "C-unwind" fn copy_receive(
                 .map(|(datum, is_null)| if *is_null { None } else { Some(*datum) })
                 .collect();
 
-            let tupledesc = PgTupleDesc::from_pg_unchecked(parquet_dest.tupledesc);
-
-            let column_sizes = tuple_column_sizes(&datums, &tupledesc);
+            let column_sizes = parquet_dest.tuple_column_sizes(&datums);
 
             // we use arrow arrays as intermediate format when writing to parquet.
             // To not hit into arrow array size limit, write the tuples before
@@ -324,10 +390,7 @@ pub(crate) extern "C-unwind" fn copy_receive(
                 parquet_dest.write_tuples_to_parquet();
             }
 
-            let heap_tuple = PgHeapTuple::from_datums(tupledesc, datums)
-                .unwrap_or_else(|e| panic!("failed to create heap tuple from datums: {e}"));
-
-            parquet_dest.collect_tuple(heap_tuple, column_sizes);
+            parquet_dest.collect_datums(&datums, column_sizes);
 
             if parquet_dest.collected_tuple_count == parquet_dest.target_batch_size {
                 parquet_dest.write_tuples_to_parquet();
@@ -360,42 +423,46 @@ pub(crate) extern "C-unwind" fn copy_shutdown(dest: *mut DestReceiver) {
 #[pg_guard]
 pub(crate) extern "C-unwind" fn copy_destroy(_dest: *mut DestReceiver) {}
 
-fn tuple_column_sizes(tuple_datums: &[Option<Datum>], tupledesc: &PgTupleDesc) -> Vec<i32> {
-    let mut column_sizes = vec![];
+impl CopyToParquetDestReceiver {
+    fn tuple_column_sizes(&self, tuple_datums: &[Option<Datum>]) -> Vec<i32> {
+        let typlens = &unsafe {
+            self.collected_columns
+                .as_ref()
+                .expect("collected columns are not found")
+        }
+        .typlens;
 
-    for (idx, column_datum) in tuple_datums.iter().enumerate() {
-        if column_datum.is_none() {
-            column_sizes.push(0);
-            continue;
+        let mut column_sizes = Vec::with_capacity(tuple_datums.len());
+
+        for (idx, column_datum) in tuple_datums.iter().enumerate() {
+            if column_datum.is_none() {
+                column_sizes.push(0);
+                continue;
+            }
+
+            let column_datum = column_datum.as_ref().expect("column datum is None");
+
+            let typlen = typlens[idx];
+
+            let column_size = if typlen == -1 {
+                (unsafe { toast_raw_datum_size(*column_datum) }) as i32 - VARHDRSZ as i32
+            } else if typlen == -2 {
+                // cstring
+                let cstring = unsafe {
+                    CString::from_datum(*column_datum, false)
+                        .expect("cannot get cstring from datum")
+                };
+                cstring.as_bytes().len() as i32 + 1
+            } else {
+                // fixed size type
+                typlen as i32
+            };
+
+            column_sizes.push(column_size);
         }
 
-        let column_datum = column_datum.as_ref().expect("column datum is None");
-
-        let attribute = tupledesc.get(idx).expect("cannot get attribute");
-
-        let typoid = attribute.type_oid();
-
-        let mut typlen = -1_i16;
-        let mut typbyval = false;
-        unsafe { get_typlenbyval(typoid.value(), &mut typlen, &mut typbyval) };
-
-        let column_size = if typlen == -1 {
-            (unsafe { toast_raw_datum_size(*column_datum) }) as i32 - VARHDRSZ as i32
-        } else if typlen == -2 {
-            // cstring
-            let cstring = unsafe {
-                CString::from_datum(*column_datum, false).expect("cannot get cstring from datum")
-            };
-            cstring.as_bytes().len() as i32 + 1
-        } else {
-            // fixed size type
-            typlen as i32
-        };
-
-        column_sizes.push(column_size);
+        column_sizes
     }
-
-    column_sizes
 }
 
 // create_copy_to_parquet_dest_receiver creates a new CopyToParquetDestReceiver that can be
@@ -443,7 +510,7 @@ pub(crate) extern "C-unwind" fn create_copy_to_parquet_dest_receiver(
     parquet_dest.parquet_writer_context = std::ptr::null_mut();
     parquet_dest.natts = 0;
     parquet_dest.collected_tuple_count = 0;
-    parquet_dest.collected_tuples = std::ptr::null_mut();
+    parquet_dest.collected_columns = std::ptr::null_mut();
     parquet_dest.collected_tuple_column_sizes = std::ptr::null_mut();
     parquet_dest.target_batch_size = 0;
     parquet_dest.copy_options = options;
