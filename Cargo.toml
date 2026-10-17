@@ -14,30 +14,33 @@ crate-type = ["cdylib"]
 
 [features]
 default = ["pg19"]
-pg19 = ["pgrx/pg19", "pgrx-tests/pg19"]
-pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
-pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
-pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
-pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
-pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
-pg_test = []
+pg19 = ["pgrx/pg19", "pgrx-tests/pg19", "pg-arrow-convert?/pg19"]
+pg18 = ["pgrx/pg18", "pgrx-tests/pg18", "pg-arrow-convert?/pg18"]
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17", "pg-arrow-convert?/pg17"]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16", "pg-arrow-convert?/pg16"]
+pg15 = ["pgrx/pg15", "pgrx-tests/pg15", "pg-arrow-convert?/pg15"]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14", "pg-arrow-convert?/pg14"]
+# the suites assert against the *same* conversion rules the base applies, so they borrow
+# pg-arrow-convert rather than carry a copy of the pg<->arrow types. Test-only: the provider
+# itself never links it, which is the rule the architecture is built on.
+pg_test = ["pg-arrow-convert", "arrow-cast", "object_store", "parquet-geospatial"]
 
 [dependencies]
 arrow = {version = "60", default-features = false}
-arrow-cast = {version = "60", default-features = false}
+arrow-cast = {version = "60", default-features = false, optional = true}
 arrow-schema = {version = "60", default-features = false, features = ["canonical_extension_types"]}
 bytes = "1"
 # tier 2, for the registration ABI only: the descriptor this extension publishes and the
 # adapters behind the base's byte source and sink.
 format-registry = {git = "ssh://git@github.com/CrunchyData/pg_arrow_base.git", branch = "main"}
-futures = "0.3"
-glob = "0.3"
-libc = {version = "0.2", default-features = false }
-object_store = {version = "0.14", default-features = false, features = ["aws", "azure", "fs", "gcp", "http"]}
-# the object store access layer: uri parsing, credentials, clients and their cache. Shared
-# with pg_object_store and with every other extension that reaches an object store.
-object-store-core = {git = "ssh://git@github.com/CrunchyData/pg_object_store.git", branch = "main"}
-once_cell = "1"
+# test-only: a suite reaches a bucket directly to set one up
+object_store = {version = "0.14", default-features = false, features = ["aws", "azure", "fs", "gcp", "http"], optional = true}
+# tier 1, for the UDFs that read a footer from a uri: the ABI declaration and the marshalling
+# over it. The object store itself — uris, credentials, clients, the runtime — stays inside
+# pg_object_store and is reached by calling it.
+object-store-client = {git = "ssh://git@github.com/CrunchyData/pg_object_store.git", branch = "main"}
+# tier 2's conversion crate, for the test suites only: see the pg_test feature.
+pg-arrow-convert = {git = "ssh://git@github.com/CrunchyData/pg_arrow_base.git", branch = "main", default-features = false, optional = true}
 parquet = {version = "60", default-features = false, features = [
     "arrow",
     "crc",
@@ -51,13 +54,11 @@ parquet = {version = "60", default-features = false, features = [
     "arrow_canonical_extension_types",
     "geospatial",
 ]}
-parquet-geospatial = "60"
+parquet-geospatial = {version = "60", optional = true}
 # the format itself: no pgrx, no object store, tested with plain `cargo test`
 parquet-format = {path = "parquet-format"}
 pgrx = "=0.19.3"
-serde = "1"
 serde_json = "1"
-url = "2"
 
 [dev-dependencies]
 pgrx-tests = "=0.19.3"

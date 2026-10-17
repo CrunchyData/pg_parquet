@@ -4,8 +4,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Debug};
 
-use crate::arrow_parquet::uri_utils::{parquet_metadata_from_uri, ParsedUriInfo};
-use crate::type_compat::map::Map;
+use crate::store::parquet_metadata_from_uri;
+use pg_arrow_convert::type_compat::fallback_to_text::reset_fallback_to_text_context;
+use pg_arrow_convert::type_compat::map::Map;
 
 use arrow::array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
@@ -84,9 +85,40 @@ impl Drop for FileCleanup {
     }
 }
 
+/// Primes this binary's copy of the fallback-to-text context from a table's column `a`.
+///
+/// A type with no arrow mapping of its own crosses as text through the type's own input and
+/// output functions, and `pg-arrow-convert` keeps those in a static. The COPY that these suites
+/// run fills the static inside `pg_arrow_base`, while a `FallbackToText` read back here goes
+/// through the copy of the crate this test binary links, which nothing has filled. So the suite
+/// primes its own, from the column it is about to read.
+fn prime_fallback_to_text(table_name: &str) {
+    // an array of a fallback type reads its elements, so the element type is the one whose
+    // input and output functions are wanted
+    let query = format!(
+        "SELECT CASE WHEN t.typlen = -1 AND t.typelem <> 0 THEN t.typelem ELSE a.atttypid END \
+           AS typoid, a.atttypmod AS typmod \
+         FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid \
+         WHERE a.attrelid = '{table_name}'::regclass AND a.attname = 'a'"
+    );
+
+    let (typoid, typmod) = Spi::connect(|client| {
+        let tuple_table = client.select(&query, None, &[]).unwrap();
+        let row = tuple_table.first();
+
+        (
+            row.get_by_name::<Oid, _>("typoid").unwrap(),
+            row.get_by_name::<i32, _>("typmod").unwrap(),
+        )
+    });
+
+    if let (Some(typoid), Some(typmod)) = (typoid, typmod) {
+        reset_fallback_to_text_context(typoid, typmod);
+    }
+}
+
 pub(crate) struct TestTable<T: IntoDatum + FromDatum> {
     uri: String,
-    uri_pattern: Option<String>,
     order_by_col: String,
     copy_to_options: HashMap<String, CopyOptionValue>,
     copy_from_options: HashMap<String, CopyOptionValue>,
@@ -121,7 +153,6 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
 
         Self {
             uri,
-            uri_pattern: None,
             order_by_col,
             copy_to_options,
             copy_from_options,
@@ -155,16 +186,13 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
         self
     }
 
-    pub(crate) fn with_uri_pattern(mut self, uri_pattern: String) -> Self {
-        self.uri_pattern = Some(uri_pattern);
-        self
-    }
-
     pub(crate) fn insert(&self, insert_command: &str) {
         Spi::run(insert_command).unwrap();
     }
 
     fn select_all(&self, table_name: &str) -> Vec<(Option<T>,)> {
+        prime_fallback_to_text(table_name);
+
         let select_command = format!(
             "SELECT a FROM {} ORDER BY {};",
             table_name, self.order_by_col
@@ -201,13 +229,7 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
     }
 
     pub(crate) fn copy_from_parquet(&self, table_name: &str) {
-        let uri = if let Some(uri_pattern) = &self.uri_pattern {
-            uri_pattern
-        } else {
-            &self.uri
-        };
-
-        let mut copy_from_query = format!("COPY {} FROM '{}'", table_name, uri);
+        let mut copy_from_query = format!("COPY {} FROM '{}'", table_name, self.uri);
 
         if !self.copy_from_options.is_empty() {
             copy_from_query.push_str(" WITH (");
@@ -540,8 +562,7 @@ pub(crate) fn copy_to_helper(uri: &str) {
 // geospatial column of the test file stores. A None crs means that the column uses the default
 // crs of the parquet geospatial types, which is lon/lat on the WGS84 ellipsoid.
 pub(crate) fn geospatial_crs_by_column() -> HashMap<String, Option<String>> {
-    let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
-    let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+    let parquet_metadata = parquet_metadata_from_uri(LOCAL_TEST_FILE_PATH);
 
     let mut crs_by_column = HashMap::new();
 

@@ -330,7 +330,16 @@ pub(crate) fn fpp(options: &FormatOptions) -> Result<Option<f64>> {
 }
 
 pub(crate) fn selection(options: &FormatOptions, name: &str) -> Result<Option<ColumnSelection>> {
-    options.get(name).map(|value| value.parse()).transpose()
+    // the parse does not know which of the two selection options it is parsing, and a message
+    // that does not name the option is a message a statement with both cannot act on
+    options
+        .get(name)
+        .map(|value| {
+            value
+                .parse()
+                .map_err(|e| format!("invalid value for \"{name}\": {e}"))
+        })
+        .transpose()
 }
 
 pub(crate) fn field_ids(options: &FormatOptions) -> Result<Option<FieldIds>> {

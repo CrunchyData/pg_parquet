@@ -6,6 +6,9 @@
 //! so [`StreamingParquetSink`] is the form a `COPY TO` actually takes — the buffered one exists
 //! for `open_writer`, which the base only calls for a format that cannot stream.
 //!
+//! Both also install the geospatial statistics accumulator factory before the first writer
+//! exists, which is where upstream requires it to happen.
+//!
 //! Row group sizing is upstream's: `max_row_group_row_count` and `max_row_group_bytes` are set
 //! from the statement's options, and parquet splits a batch across row groups itself rather
 //! than overshooting to the end of one, which is what `pg_parquet` 0.6's flush-after-each-batch
@@ -20,12 +23,16 @@ use format_registry::Result;
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
+use crate::geospatial_stats::install_geospatial_stats_accumulator_factory;
+
 pub struct BufferedParquetSink {
     writer: ArrowWriter<Vec<u8>>,
 }
 
 impl BufferedParquetSink {
     pub fn new(schema: SchemaRef, properties: WriterProperties) -> Result<Self> {
+        install_geospatial_stats_accumulator_factory();
+
         let writer = ArrowWriter::try_new(Vec::new(), schema, Some(properties))
             .map_err(|e| format!("could not start a parquet file: {e}"))?;
 
@@ -56,6 +63,8 @@ impl StreamingParquetSink {
         properties: WriterProperties,
         sink: Box<dyn ByteSink>,
     ) -> Result<Self> {
+        install_geospatial_stats_accumulator_factory();
+
         let writer = ArrowWriter::try_new(SinkWrite { sink }, schema, Some(properties))
             .map_err(|e| format!("could not start a parquet file: {e}"))?;
 
@@ -66,6 +75,13 @@ impl StreamingParquetSink {
 impl StreamingSink for StreamingParquetSink {
     fn write_batch(&mut self, batch: &RecordBatch) -> Result<()> {
         write_batch(&mut self.writer, batch)
+    }
+
+    /// Everything the parquet writer has serialized, including the row groups still inside its
+    /// own buffer: the base only sees bytes once that buffer spills, and a file smaller than it
+    /// would otherwise report no progress at all.
+    fn bytes_written(&self) -> Option<i64> {
+        Some(self.writer.bytes_written() as i64)
     }
 
     fn finish(self: Box<Self>) -> Result<()> {

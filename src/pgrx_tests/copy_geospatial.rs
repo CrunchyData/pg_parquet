@@ -11,7 +11,7 @@ mod tests {
         extension_exists, extension_version, geospatial_crs_by_column,
         write_record_batch_to_parquet_file, TestTable, LOCAL_TEST_FILE_PATH,
     };
-    use crate::type_compat::geometry::{Geography, Geometry};
+    use pg_arrow_convert::type_compat::geometry::{Geography, Geometry};
 
     fn postgis_missing() -> bool {
         !extension_exists("postgis") || *extension_version("postgis") < *"3.4"

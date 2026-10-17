@@ -8,12 +8,12 @@ mod tests {
         timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult, TestTable,
         LOCAL_TEST_FILE_PATH,
     };
-    use crate::type_compat::fallback_to_text::FallbackToText;
-    use crate::type_compat::geometry::{Geography, Geometry};
-    use crate::type_compat::map::Map;
+    use pg_arrow_convert::type_compat::fallback_to_text::FallbackToText;
+    use pg_arrow_convert::type_compat::geometry::{Geography, Geometry};
+    use pg_arrow_convert::type_compat::map::Map;
     #[cfg(not(pre_pg19))]
-    use crate::type_compat::oid8::Oid8;
-    use crate::type_compat::pg_arrow_type_conversions::{
+    use pg_arrow_convert::type_compat::oid8::Oid8;
+    use pg_arrow_convert::type_compat::pg_arrow_type_conversions::{
         date_to_i32, i32_to_date, i64_to_timestamp, i64_to_timestamptz, timestamp_to_i64,
         timestamptz_to_i64, DEFAULT_UNBOUNDED_NUMERIC_PRECISION, DEFAULT_UNBOUNDED_NUMERIC_SCALE,
     };

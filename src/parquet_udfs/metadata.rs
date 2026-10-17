@@ -3,10 +3,8 @@ use pgrx::{iter::TableIterator, name, pg_extern, pg_schema, JsonB};
 use serde_json::{json, Map, Value};
 
 use crate::{
-    arrow_parquet::uri_utils::{
-        ensure_access_privilege_to_uri, parquet_metadata_from_uri, uri_as_string, ParsedUriInfo,
-    },
     parquet_udfs::stats::{stats_max_value_to_pg_str, stats_min_value_to_pg_str},
+    store::parquet_metadata_from_uri,
 };
 
 #[pg_schema]
@@ -44,12 +42,9 @@ mod parquet {
             name!(total_uncompressed_size, i64),
         ),
     > {
-        let uri_info = ParsedUriInfo::try_from(uri.as_str()).unwrap_or_else(|e| {
-            panic!("{}", e.to_string());
-        });
-
-        ensure_access_privilege_to_uri(&uri_info, true);
-        let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+        // the privilege check and the footer read are both in here: a uri is tier 1's
+        // question, and the answer to this one is three ranges rather than a file
+        let parquet_metadata = parquet_metadata_from_uri(&uri);
 
         let mut rows = vec![];
 
@@ -108,7 +103,7 @@ mod parquet {
                 let total_uncompressed_size = column.uncompressed_size();
 
                 let row = (
-                    uri_as_string(&uri_info.uri),
+                    uri.clone(),
                     row_group_id as i64,
                     row_group_num_rows,
                     row_group_num_columns,
@@ -152,12 +147,9 @@ mod parquet {
             name!(format_version, String),
         ),
     > {
-        let uri_info = ParsedUriInfo::try_from(uri.as_str()).unwrap_or_else(|e| {
-            panic!("{}", e.to_string());
-        });
-
-        ensure_access_privilege_to_uri(&uri_info, true);
-        let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+        // the privilege check and the footer read are both in here: a uri is tier 1's
+        // question, and the answer to this one is three ranges rather than a file
+        let parquet_metadata = parquet_metadata_from_uri(&uri);
 
         let created_by = parquet_metadata
             .file_metadata()
@@ -171,7 +163,7 @@ mod parquet {
         let format_version = parquet_metadata.file_metadata().version().to_string();
 
         let row = (
-            uri_as_string(&uri_info.uri),
+            uri.clone(),
             created_by,
             num_rows,
             num_row_groups,
@@ -192,12 +184,9 @@ mod parquet {
             name!(value, Option<Vec<u8>>),
         ),
     > {
-        let uri_info = ParsedUriInfo::try_from(uri.as_str()).unwrap_or_else(|e| {
-            panic!("{}", e.to_string());
-        });
-
-        ensure_access_privilege_to_uri(&uri_info, true);
-        let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+        // the privilege check and the footer read are both in here: a uri is tier 1's
+        // question, and the answer to this one is three ranges rather than a file
+        let parquet_metadata = parquet_metadata_from_uri(&uri);
 
         let kv_metadata = parquet_metadata.file_metadata().key_value_metadata();
 
@@ -213,7 +202,7 @@ mod parquet {
             let key = kv.key.as_bytes().to_owned();
             let value = kv.value.as_ref().map(|v| v.as_bytes().to_owned());
 
-            let row = (uri_as_string(&uri_info.uri), key, value);
+            let row = (uri.clone(), key, value);
 
             rows.push(row);
         }

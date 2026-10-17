@@ -36,7 +36,9 @@ use format_registry::abi::{
     PG_ARROW_PROVIDER_VERSION,
 };
 use format_registry::options::FormatOptions;
-use format_registry::provider::{FormatProvider, RecordBatchSink, StreamingSink};
+use format_registry::provider::{
+    check_exportable_schema, FileInfo, FormatProvider, RecordBatchSink, StreamingSink,
+};
 use format_registry::Result;
 use parquet_format::{Parquet, FILE_EXTENSIONS, FORMAT_NAME, SPLIT_LABEL};
 use pgrx::pg_sys::palloc;
@@ -67,6 +69,8 @@ pub(crate) static PROVIDER: PgArrowProviderV1 = PgArrowProviderV1 {
     open_ranged_reader: Some(parquet_open_ranged_reader),
     open_streaming_writer: Some(parquet_open_streaming_writer),
     finish_streaming_writer: Some(parquet_finish_streaming_writer),
+    streaming_writer_bytes_written: Some(parquet_streaming_writer_bytes_written),
+    ranged_file_info: Some(parquet_ranged_file_info),
     reserved: [std::ptr::null(); 4],
 };
 
@@ -218,6 +222,8 @@ unsafe extern "C-unwind" fn parquet_schema(
 
         let schema = Parquet.schema(bytes(data, len)?)?;
 
+        check_exportable_schema(&schema)?;
+
         let exported = FFI_ArrowSchema::try_from(schema.as_ref())
             .map_err(|e| format!("could not export the schema across the boundary: {e}"))?;
 
@@ -287,34 +293,58 @@ unsafe extern "C-unwind" fn parquet_file_info(
 
         let info = Parquet.file_info(bytes(data, len)?)?;
 
-        let mut flat = PgArrowFileInfoV1 {
-            // static, so the caller may read it after this context is gone
-            split_label: SPLIT.as_ptr(),
-            ..PgArrowFileInfoV1::default()
-        };
-
-        if let Some(rows) = info.num_rows {
-            flat.has_num_rows = true;
-            flat.num_rows = rows;
-        }
-
-        if let Some(splits) = info.num_splits {
-            flat.has_num_splits = true;
-            flat.num_splits = splits;
-        }
-
-        if let Some(compression) = info.compression {
-            flat.compression = palloc_cstring(&compression);
-        }
-
-        if let Some(version) = info.format_version {
-            flat.format_version = palloc_cstring(&version);
-        }
-
-        std::ptr::write(out, flat);
+        std::ptr::write(out, flatten_file_info(info));
 
         Ok(PGARROW_OK)
     })
+}
+
+/// The same, for a file nobody is holding: the footer is fetched through the base's source.
+unsafe extern "C-unwind" fn parquet_ranged_file_info(
+    source: *const PgArrowByteSourceV1,
+    out: *mut PgArrowFileInfoV1,
+    error: *mut *mut c_char,
+) -> i32 {
+    guard(error, || {
+        if out.is_null() {
+            return Err("the parquet provider was given nowhere to put the file info".to_string());
+        }
+
+        let info = Parquet.ranged_file_info(Arc::new(CByteSource::new(source)?))?;
+
+        std::ptr::write(out, flatten_file_info(info));
+
+        Ok(PGARROW_OK)
+    })
+}
+
+/// A [`FileInfo`] in the flat shape the ABI carries, with the strings palloc'd for the caller.
+unsafe fn flatten_file_info(info: FileInfo) -> PgArrowFileInfoV1 {
+    let mut flat = PgArrowFileInfoV1 {
+        // static, so the caller may read it after this context is gone
+        split_label: SPLIT.as_ptr(),
+        ..PgArrowFileInfoV1::default()
+    };
+
+    if let Some(rows) = info.num_rows {
+        flat.has_num_rows = true;
+        flat.num_rows = rows;
+    }
+
+    if let Some(splits) = info.num_splits {
+        flat.has_num_splits = true;
+        flat.num_splits = splits;
+    }
+
+    if let Some(compression) = info.compression {
+        flat.compression = palloc_cstring(&compression);
+    }
+
+    if let Some(version) = info.format_version {
+        flat.format_version = palloc_cstring(&version);
+    }
+
+    flat
 }
 
 unsafe extern "C-unwind" fn parquet_open_reader(
@@ -339,6 +369,10 @@ unsafe extern "C-unwind" fn parquet_open_reader(
         // through here at all: it takes the ranged reader below, which has no whole-file buffer
         // to copy.
         let reader = Parquet.open_reader(Bytes::copy_from_slice(bytes(data, len)?), &options)?;
+
+        // checked here rather than left to the export, which reports a name it cannot put in a
+        // C string from inside the stream, where the field it came from is no longer known
+        check_exportable_schema(&reader.schema())?;
 
         // as for the schema: the caller's stream is an empty one that owns nothing
         std::ptr::write(out, FFI_ArrowArrayStream::new(reader));
@@ -371,6 +405,8 @@ unsafe extern "C-unwind" fn parquet_open_ranged_reader(
         let splits = (split_begin >= 0).then_some(split_begin..split_end);
 
         let reader = Parquet.open_ranged_reader(source, &options, splits)?;
+
+        check_exportable_schema(&reader.schema())?;
 
         std::ptr::write(out, FFI_ArrowArrayStream::new(reader));
 
@@ -516,6 +552,19 @@ unsafe extern "C-unwind" fn parquet_finish_streaming_writer(
 
         Ok(PGARROW_OK)
     })
+}
+
+/// How much of the file the streaming writer has produced. A negative number for anything
+/// else, which is how the ABI says "this writer does not count".
+unsafe extern "C-unwind" fn parquet_streaming_writer_bytes_written(handle: *mut c_void) -> i64 {
+    if handle.is_null() {
+        return -1;
+    }
+
+    match &*(handle as *mut Writer) {
+        Writer::Streaming(sink) => sink.bytes_written().unwrap_or(-1),
+        Writer::Buffered(_) => -1,
+    }
 }
 
 unsafe extern "C-unwind" fn parquet_close_writer(handle: *mut c_void) {

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
 use parquet::basic::LogicalType;
 use parquet::geospatial::accumulator::{
@@ -14,11 +14,20 @@ use parquet_geospatial::interval::IntervalTrait;
 // the deepest geometry collection nesting that we walk while validating a wkb payload
 const MAX_WKB_NESTING_DEPTH: u32 = 64;
 
-// installs the accumulator factory that computes the geospatial statistics of the geometry and
-// geography columns. it must be called before any parquet writer is created.
-pub(crate) fn init_geospatial_stats_accumulator_factory() {
-    init_geo_stats_accumulator_factory(Arc::new(BoundableWkbGeoStatsAccumulatorFactory {}))
-        .expect("failed to install the geospatial statistics accumulator factory");
+/// Installs the accumulator factory that computes the geospatial statistics of the geometry and
+/// geography columns, once per process.
+///
+/// Upstream's factory is a process-wide global that refuses to be set twice, so every writer
+/// asks and the first one wins. It has to be installed before a writer exists, which is why
+/// this is called from [`crate::writer`] rather than from an init the extension has to
+/// remember.
+pub fn install_geospatial_stats_accumulator_factory() {
+    static INSTALLED: Once = Once::new();
+
+    INSTALLED.call_once(|| {
+        init_geo_stats_accumulator_factory(Arc::new(BoundableWkbGeoStatsAccumulatorFactory {}))
+            .expect("nothing else installs a geospatial statistics accumulator factory");
+    });
 }
 
 // parquet can only compute the bounding box of the geometry types that the parquet geospatial

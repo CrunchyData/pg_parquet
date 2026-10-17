@@ -10,12 +10,15 @@ use format_registry::options::FormatOptions;
 use format_registry::provider::StreamingSink;
 use format_registry::provider::{ByteSink, ByteSource, FileInfo, FormatProvider, RecordBatchSink};
 use format_registry::Result;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::{
+    ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::reader::ChunkReader;
 
 use crate::field_ids::stamp_field_ids;
 use crate::options::{WriteOptions, COMPRESSIONS, PARQUET_VERSIONS};
+use crate::schema_hint::schema_hint;
 use crate::source::SourceChunkReader;
 use crate::writer::{BufferedParquetSink, StreamingParquetSink};
 
@@ -64,9 +67,29 @@ fn read_metadata<R: ChunkReader>(reader: &R) -> Result<ParquetMetaData> {
         .map_err(|e| format!("not a readable parquet file: {e}"))
 }
 
+/// A reader over a file, built with the schema the file should be *read* with rather than
+/// always the one it declares — see [`crate::schema_hint`] for the two cases where those
+/// differ. A file with neither pays only the metadata load, which the reader does anyway.
 fn builder<R: ChunkReader + 'static>(reader: R) -> Result<ParquetRecordBatchReaderBuilder<R>> {
-    ParquetRecordBatchReaderBuilder::try_new(reader)
-        .map_err(|e| format!("not a readable parquet file: {e}"))
+    let metadata = ArrowReaderMetadata::load(&reader, ArrowReaderOptions::new())
+        .map_err(|e| format!("not a readable parquet file: {e}"))?;
+
+    let hint = schema_hint(metadata.schema(), metadata.metadata().file_metadata());
+
+    let metadata = match hint {
+        // the hint is a correction, not a cast: if upstream will not read the file with it, the
+        // file's own schema is still the right thing to read with
+        Some(schema) => ArrowReaderMetadata::try_new(
+            metadata.metadata().clone(),
+            ArrowReaderOptions::new().with_schema(schema),
+        )
+        .unwrap_or(metadata),
+        None => metadata,
+    };
+
+    Ok(ParquetRecordBatchReaderBuilder::new_with_metadata(
+        reader, metadata,
+    ))
 }
 
 /// The writer properties and the schema that go with a set of write options. Shared by the two
@@ -83,6 +106,35 @@ fn writer_setup(
     let properties = write_options.writer_properties(&schema)?;
 
     Ok((schema, properties))
+}
+
+/// What a parquet footer says about its file. Taken out of the trait method because the footer
+/// reaches this crate two ways — out of a buffer the base holds, and through a `ByteSource` — and
+/// the answer must not depend on which.
+fn file_info(metadata: &ParquetMetaData) -> FileInfo {
+    let file_metadata = metadata.file_metadata();
+
+    // the codec is per column chunk, so "the file's compression" is only well defined when
+    // every chunk agrees; a file written by something that mixed them reports none
+    let mut compressions = metadata
+        .row_groups()
+        .iter()
+        .flat_map(|row_group| row_group.columns())
+        .map(|column| column.compression().to_string());
+
+    let first = compressions.next();
+    let compression = match first {
+        Some(ref codec) if compressions.all(|other| &other == codec) => first,
+        _ => None,
+    };
+
+    FileInfo {
+        num_rows: Some(file_metadata.num_rows()),
+        num_splits: Some(metadata.num_row_groups() as i64),
+        split_label: Some(SPLIT_LABEL.to_string()),
+        compression,
+        format_version: Some(format!("v{}", file_metadata.version())),
+    }
 }
 
 impl FormatProvider for Parquet {
@@ -150,31 +202,17 @@ impl FormatProvider for Parquet {
     /// Everything here is in the footer, so none of it is `None`: a parquet file knows its row
     /// count, its row groups and what it was compressed with.
     fn file_info(&self, data: &[u8]) -> Result<FileInfo> {
-        let metadata = metadata(data)?;
-        let file_metadata = metadata.file_metadata();
-
-        // the codec is per column chunk, so "the file's compression" is only well defined when
-        // every chunk agrees; a file written by something that mixed them reports none
-        let mut compressions = metadata
-            .row_groups()
-            .iter()
-            .flat_map(|row_group| row_group.columns())
-            .map(|column| column.compression().to_string());
-
-        let first = compressions.next();
-        let compression = match first {
-            Some(ref codec) if compressions.all(|other| &other == codec) => first,
-            _ => None,
-        };
-
-        Ok(FileInfo {
-            num_rows: Some(file_metadata.num_rows()),
-            num_splits: Some(metadata.num_row_groups() as i64),
-            split_label: Some(SPLIT_LABEL.to_string()),
-            compression,
-            format_version: Some(format!("v{}", file_metadata.version())),
-        })
+        Ok(file_info(&metadata(data)?))
     }
+
+    /// The same footer, fetched through the base's source instead: a `COPY FROM` never holds
+    /// the file, and this is where its row count comes from.
+    fn ranged_file_info(&self, source: Arc<dyn ByteSource>) -> Result<FileInfo> {
+        let reader = SourceChunkReader::new(source)?;
+
+        Ok(file_info(&read_metadata(&reader)?))
+    }
+
 
     fn open_reader(
         &self,

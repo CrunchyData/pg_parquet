@@ -1,30 +1,17 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
-use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
 use format_registry::abi::{
     PgArrowRegistryApiV1, PGARROW_OK, PG_ARROW_REGISTRY_MAGIC, PG_ARROW_REGISTRY_RENDEZVOUS_KEY,
     PG_ARROW_REGISTRY_VERSION,
 };
-use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
-use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
-use pgrx::memcxt::PgMemoryContexts;
 use pgrx::pg_sys::{find_rendezvous_variable, load_file, AsPgCStr};
-use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry};
+use pgrx::prelude::*;
 
-mod arrow_parquet;
 mod descriptor;
-mod parquet_copy_hook;
 mod parquet_udfs;
 #[cfg(any(test, feature = "pg_test"))]
 mod pgrx_tests;
-mod pgrx_utils;
-mod type_compat;
-
-// re-export external api
-#[allow(unused_imports)]
-pub use crate::arrow_parquet::compression::PgParquetCompression;
-#[allow(unused_imports)]
-pub use crate::parquet_copy_hook::copy_to_split_dest_receiver::create_copy_to_parquet_split_dest_receiver;
+mod store;
 
 pgrx::pg_module_magic!();
 
@@ -103,46 +90,20 @@ fn register_provider() {
     }
 }
 
+/// Registering the format is all there is to do.
+///
+/// Everything that used to be here — the `COPY` hook, the GUC that turned it off, the trace
+/// sink for the object store — belongs to a tier that owns it now. `COPY ... WITH (format
+/// 'parquet')` is served by `pg_arrow_base`'s hook over the provider registered below, and the
+/// object store is `pg_object_store`'s, including the tracing. What is left of this extension
+/// is the format itself (`parquet-format/`), the descriptor that publishes it, and the UDFs
+/// that answer parquet-only questions about a file.
+///
+/// `shared_preload_libraries` is no longer required either: a provider is loaded on demand by
+/// the base the first time a session names its format.
 #[pg_guard]
 pub extern "C-unwind" fn _PG_init() {
-    if !unsafe { pgrx::pg_sys::process_shared_preload_libraries_in_progress } {
-        panic!("pg_parquet must be loaded via shared_preload_libraries. Add 'pg_parquet' to shared_preload_libraries in postgresql.conf and restart Postgres.");
-    }
-
-    unsafe {
-        PgMemoryContexts::TopMemoryContext.switch_to(|_| {
-            GucRegistry::define_bool_guc(
-                CStr::from_ptr("pg_parquet.enable_copy_hooks".as_pg_cstr()),
-                CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
-                CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
-                &ENABLE_PARQUET_COPY_HOOK,
-                GucContext::Userset,
-                GucFlags::default(),
-            )
-        });
-    };
-
-    MarkGUCPrefixReserved("pg_parquet");
-
-    // before the hook below, so that pg_arrow_base's own ProcessUtility hook ends up *under*
-    // this one: a `COPY ... 'x.parquet'` is still served by the code it was served by before
-    // this extension became a provider, and the base's path is reached only by a statement that
-    // names a format the old hook does not know
     register_provider();
-
-    init_parquet_copy_hook();
-
-    // object-store-core traces nowhere unless a host says where. Ours is ereport(DEBUG2),
-    // which is where the "credentials for <bucket> expired" message used to be written.
-    object_store_core::runtime::set_trace_sink(|message| {
-        pgrx::ereport!(
-            PgLogLevel::DEBUG2,
-            PgSqlErrorCode::ERRCODE_WARNING,
-            message.to_string()
-        );
-    });
-
-    init_geospatial_stats_accumulator_factory();
 }
 
 /// This module is required by `cargo pgrx test` invocations.
@@ -154,14 +115,11 @@ pub mod pg_test {
     }
 
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        // return any postgresql.conf settings that are required for your tests
+        // the COPY hook is the base's, and it has to be installed at load time, so the base is
+        // what this suite preloads. pg_parquet itself is loaded on demand, the same way it is
+        // in a cluster that never touched shared_preload_libraries.
         vec![
-            "shared_preload_libraries = 'pgaudit,pg_parquet'",
-            // for as long as this extension still carries its own COPY hook: loading the base
-            // installs that hook too, and two of them on one `COPY` is one too many. Off here
-            // means the statements in this suite are served by exactly the code that served
-            // them before pg_parquet became a provider. It goes when the old hook does.
-            "arrow.enable_copy_hooks = off",
+            "shared_preload_libraries = 'pgaudit,pg_arrow_base'",
             "pgaudit.log = 'write'",
         ]
     }

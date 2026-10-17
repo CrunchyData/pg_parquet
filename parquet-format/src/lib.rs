@@ -32,14 +32,21 @@
 //! - **Options worth having.** Compression and its level, row group sizing, the writer version,
 //!   per-column bloom filters and dictionaries, and Iceberg field ids.
 //!
+//! Geospatial statistics are here for the same reason ([`geospatial_stats`]): a bounding box in
+//! a column chunk's metadata is part of the parquet file layout, and postgis has geometry types
+//! whose wkb upstream's bounder misreads rather than rejects, so the check is the format's own.
+//!
 //! Field ids are the one option that is about the *schema* rather than about the encoding, and
 //! they are stamped here rather than in tier 2 ([`field_ids`]): `PARQUET:field_id` is a parquet
 //! metadata key, so tier 2's schema builder has no business knowing it exists.
 
 pub mod column_selection;
 pub mod field_ids;
+/// The geospatial statistics a geometry or geography column gets while it is written.
+pub mod geospatial_stats;
 pub mod options;
 pub mod provider;
+pub mod schema_hint;
 pub mod source;
 pub mod writer;
 

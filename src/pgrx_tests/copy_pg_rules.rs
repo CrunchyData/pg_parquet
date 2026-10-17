@@ -2,7 +2,8 @@
 mod tests {
     use pgrx::{datum::UnboxDatum, pg_sys, pg_test, IntoDatum, Spi};
 
-    use crate::{pgrx_tests::common::LOCAL_TEST_FILE_PATH, pgrx_utils::AnyArrayDatum};
+    use crate::pgrx_tests::common::LOCAL_TEST_FILE_PATH;
+    use pg_arrow_convert::pgrx_utils::AnyArrayDatum;
 
     #[pg_test]
     fn test_nested_copy_to_stmts() {
@@ -102,7 +103,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "COPY FROM parquet with generated columns is not supported")]
+    #[should_panic(expected = "COPY FROM a file into generated columns is not supported")]
     fn test_copy_from_by_position_with_generated_columns_not_supported() {
         Spi::run("DROP TABLE IF EXISTS test_table;").unwrap();
 
@@ -564,7 +565,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "permission denied to COPY to a file")]
+    #[should_panic(expected = "permission denied to write")]
     fn test_with_no_write_files_privilege() {
         let create_table = "create table test_table(id int);";
         Spi::run(create_table).unwrap();
@@ -583,7 +584,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "permission denied to COPY from a file")]
+    #[should_panic(expected = "permission denied to read")]
     fn test_with_no_read_files_privilege() {
         let create_table = "create table test_table(id int);";
         Spi::run(create_table).unwrap();

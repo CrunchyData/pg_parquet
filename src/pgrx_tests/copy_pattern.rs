@@ -5,7 +5,7 @@ mod tests {
     use crate::pgrx_tests::common::FileCleanup;
 
     #[pg_test]
-    #[should_panic(expected = "EOF: file size of 2 is less than footer")]
+    #[should_panic(expected = "Parquet file too small")]
     fn test_non_parquet_path_in_pattern() {
         let filename1 = "/tmp/pg_parquet_test/dummy1.parquet";
         let filename2 = "/tmp/pg_parquet_test/dummy2.csv";
