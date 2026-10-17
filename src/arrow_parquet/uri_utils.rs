@@ -3,9 +3,7 @@ use std::{ffi::CStr, fs::File, ops::Range, os::fd::FromRawFd, panic, sync::Arc};
 use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
 use futures::{future::BoxFuture, FutureExt, TryFutureExt};
-use object_store::{
-    buffered::BufWriter, path::Path, ObjectStore, ObjectStoreExt, ObjectStoreScheme,
-};
+use object_store::{path::Path, ObjectStore, ObjectStoreExt, ObjectStoreScheme};
 use parquet::{
     arrow::{
         arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions},
@@ -32,6 +30,7 @@ use url::Url;
 use crate::{
     arrow_parquet::{
         parquet_shared_upload::shared_upload_writer,
+        parquet_single_upload::single_upload_writer,
         schema::parse_schema::{schema_with_int96_as_micros, schema_without_dictionaries},
     },
     object_store::{
@@ -391,7 +390,8 @@ pub(crate) fn parquet_writer_from_uri(
 // range of a parallel COPY TO writes into the destination's own multipart upload, which the
 // participant that claimed the range shares with the other ranges it claims, so that the
 // bytes of the copy are uploaded once and by the participant that wrote them. Everything
-// else writes the destination on its own.
+// else writes the destination on its own, in which case the write is registered for cleanup:
+// a copy that is interrupted in the middle of one has an upload to give up.
 fn parquet_sink_from_uri(uri_info: &ParsedUriInfo) -> Box<dyn AsyncFileWriter> {
     if let Some(shared_upload_writer) = shared_upload_writer(&uri_as_string(&uri_info.uri)) {
         return shared_upload_writer;
@@ -400,7 +400,7 @@ fn parquet_sink_from_uri(uri_info: &ParsedUriInfo) -> Box<dyn AsyncFileWriter> {
     let copy_from = false;
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
-    Box::new(BufWriter::new(parquet_object_store, location))
+    single_upload_writer(parquet_object_store, location)
 }
 
 pub(crate) fn ensure_access_privilege_to_uri(uri_info: &ParsedUriInfo, copy_from: bool) {

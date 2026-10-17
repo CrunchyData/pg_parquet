@@ -9,6 +9,7 @@ pub(crate) mod match_by;
 pub(crate) mod parquet_concat;
 pub(crate) mod parquet_reader;
 pub(crate) mod parquet_shared_upload;
+pub(crate) mod parquet_single_upload;
 pub(crate) mod parquet_version;
 pub(crate) mod parquet_writer;
 pub(crate) mod pg_to_arrow;

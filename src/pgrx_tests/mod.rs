@@ -1,4 +1,5 @@
 mod common;
+mod copy_cleanup;
 mod copy_from_coerce;
 mod copy_geospatial;
 mod copy_options;
