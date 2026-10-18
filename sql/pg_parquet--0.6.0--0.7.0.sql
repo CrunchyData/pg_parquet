@@ -22,7 +22,8 @@ BEGIN
 END;
 $$;
 
--- listing a uri has nothing to do with parquet; it is object_store.list(TEXT) now
+-- listing a uri has nothing to do with parquet. arrow.list(TEXT) is the closest equivalent --
+-- it names the format of every file it lists -- and object_store.list(TEXT) is the plain one.
 DROP FUNCTION IF EXISTS parquet."list"(TEXT);
 
 -- The privilege to read or write a uri is object_store_read and object_store_write now.

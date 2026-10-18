@@ -7,6 +7,28 @@
 
 `pg_parquet` is a PostgreSQL extension that allows you to read and write [Parquet files](https://parquet.apache.org), which are located in `S3`, `Azure Blob Storage`, `Google Cloud Storage`, `http(s) endpoints` or `file system`, from PostgreSQL via `COPY TO/FROM` commands. It depends on [Apache Arrow](https://arrow.apache.org/rust/arrow/) project to read and write Parquet files and [pgrx](https://github.com/pgcentralfoundation/pgrx) project to extend PostgreSQL's `COPY` command.
 
+`pg_parquet` is the Parquet provider of a three-extension stack, and installs the other two with it:
+
+| extension | what it owns |
+|---|---|
+| [`pg_object_store`](https://github.com/CrunchyData/pg_object_store) | uris, credentials, object store clients and the roles that govern reaching one |
+| [`pg_arrow_base`](https://github.com/CrunchyData/pg_arrow_base) | the `COPY` hook, schema inference, the Postgres ⇄ Arrow conversion and the `arrow.*` functions |
+| `pg_parquet` | reading and writing the Parquet format itself |
+
+Everything below works as it did before that split, with the exceptions called out in place: the roles are `object_store_read` and `object_store_write`, the `COPY` hook's GUC is `arrow.enable_copy_hooks`, inferred composite types land in `arrow_structs`, and listing a uri is `arrow.list()`.
+[`pg_arrow`](https://github.com/CrunchyData/pg_arrow) is the same stack's Arrow IPC provider, and can be installed alongside this one.
+
+Upgrading an existing installation needs the other two extensions created first, because `ALTER EXTENSION ... UPDATE` does not install what
+a new version requires:
+
+```sql
+CREATE EXTENSION pg_object_store;
+CREATE EXTENSION pg_arrow_base;
+ALTER EXTENSION pg_parquet UPDATE;
+```
+
+The update moves the grants of the old roles to the new ones, drops the functions that moved, and reports anything it had to leave behind.
+
 ```sql
 -- Copy a query result into Parquet in S3
 COPY (SELECT * FROM table) TO 's3://mybucket/data.parquet' WITH (format 'parquet');
@@ -25,7 +47,7 @@ COPY table FROM 's3://mybucket/data.parquet' WITH (format 'parquet');
   - [Inspect Parquet schema](#inspect-parquet-schema)
   - [Inspect Parquet metadata](#inspect-parquet-metadata)
   - [Inspect Parquet column statistics](#inspect-parquet-column-statistics)
-  - [List and read Parquet files from uri pattern](#list-and-read-parquet-files-from-uri-pattern)
+  - [List the files under a uri](#list-the-files-under-a-uri)
   - [Monitor COPY progress](#monitor-copy-progress)
 - [Object Store Support](#object-store-support)
 - [Copy Options](#copy-options)
@@ -55,17 +77,28 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 # configure pgrx
 > cargo pgrx init --pg"${PG_MAJOR}" $(which pg_config)
 
-# append the extension to shared_preload_libraries 
-> echo "shared_preload_libraries = 'pg_parquet'" >> ~/.pgrx/data-"${PG_MAJOR}"/postgresql.conf
+# append the extension to shared_preload_libraries
+> echo "shared_preload_libraries = 'pg_arrow_base, pg_object_store'" >> ~/.pgrx/data-"${PG_MAJOR}"/postgresql.conf
+
+# build and install the two extensions below this one first, from their own repos
+> for repo in pg_object_store pg_arrow_base; do
+>     git clone https://github.com/CrunchyData/"${repo}".git
+>     (cd "${repo}" && cargo pgrx install --release --pg-config "$(which pg_config)")
+> done
 
 # initialize a data directory, build and install the extension (to the targets specified by configured pg_config), then connects to a session
 > cargo pgrx run --features pg"${PG_MAJOR}"
 # alternatively you can only build and install the extension (pass --release flag for production binary)
 > cargo pgrx install --release --features pg"${PG_MAJOR}"
 
-# create the extension in the database
-psql> "CREATE EXTENSION pg_parquet;"
+# create the extension in the database, with the two it requires
+psql> "CREATE EXTENSION pg_parquet CASCADE;"
 ```
+
+> [!NOTE]
+> `pg_arrow_base` installs the `ProcessUtility` hook that `COPY ... TO/FROM '<uri>'` goes through, and it has to be loaded when the hook is
+> installed, so it belongs in `shared_preload_libraries` rather than `pg_parquet`. `pg_parquet` itself is loaded on demand, the first time a
+> session names `format 'parquet'` or a `.parquet` uri.
 
 > [!NOTE]
 > `pgrx` installs the extension into the directories of the `pg_config` that it is configured with, which are owned by `root` for a packaged `Postgres`. `cargo pgrx install` can be told to use `sudo` for that, but `cargo pgrx run` has no such flag and instead needs those directories to be writable, as shown below. Alternatively, `cargo pgrx init --pg"${PG_MAJOR}" download` has `pgrx` build its own `Postgres` under `~/.pgrx`, which belongs to you and needs no root permissions at all.
@@ -143,11 +176,12 @@ SELECT * FROM product_inferred_example;
 ```
 
 > [!NOTE]
-> If the inferred column is of composite type, a new type will be created named as `parquet_structs.struct_<hash>`. Hash is determined by
+> If the inferred column is of composite type, a new type will be created named as `arrow_structs.struct_<hash>`. Hash is determined by
 field types and names of the composite type. The type is created by the user that runs the command, so that user needs `CREATE` privilege
-on the `parquet_structs` schema, which the extension grants to `public`. The generated types are not dropped together with the table.
-The `parquet_structs` schema belongs to the extension, so `DROP EXTENSION pg_parquet` reports the dependency while any table still has such
-a column, and `DROP EXTENSION pg_parquet CASCADE` drops those columns along with the types. Drop or alter the columns first.
+on the `arrow_structs` schema, which `pg_arrow_base` grants to `public`. The generated types are not dropped together with the table.
+The `arrow_structs` schema belongs to `pg_arrow_base` -- the types are the same whichever format inferred them -- so `DROP EXTENSION
+pg_arrow_base` reports the dependency while any table still has such a column, and `DROP EXTENSION pg_arrow_base CASCADE` drops those
+columns along with the types. Drop or alter the columns first.
 
 > [!NOTE]
 > Postgres has no unsigned integers, so an unsigned column is inferred as the next wider type e.g. `uint32` as `bigint` and `uint64`
@@ -274,27 +308,32 @@ SELECT * FROM parquet.column_stats('/tmp/product_example.parquet')
 (13 rows)
 ```
 
-### List and read Parquet files from uri pattern
+### List the files under a uri
 
-You can call `SELECT * FROM parquet.list(<uri_pattern>)` to see all uris that matches with the uri pattern.
-Uri pattern can resolve `**` for directories and `*` for words in the uri.
+You can call `SELECT * FROM arrow.list(<uri>)` to see the files under a uri, with the format each
+one is recognized as. It is `pg_arrow_base`'s function rather than `pg_parquet`'s, because
+listing a prefix is not a Parquet operation; `format` is NULL for a file no loaded provider
+claims, which is how to see that half a prefix is unreadable.
 
 
 ```sql
 COPY (SELECT i FROM generate_series(1, 1000000) i) TO '/tmp/some/test.parquet' with (file_size_bytes '1MB');
 COPY 1000000
 
-SELECT * FROM parquet.list('/tmp/some/**/*.parquet');
-                  uri                  |  size
----------------------------------------+---------
- /tmp/some/test.parquet/data_4.parquet |  100162
- /tmp/some/test.parquet/data_3.parquet | 1486916
- /tmp/some/test.parquet/data_2.parquet | 1486916
- /tmp/some/test.parquet/data_0.parquet | 1486920
- /tmp/some/test.parquet/data_1.parquet | 1486916
+SELECT * FROM arrow.list('/tmp/some/test.parquet');
+               location                | size_bytes | format
+---------------------------------------+------------+---------
+ /tmp/some/test.parquet/data_0.parquet |    1486736 | parquet
+ /tmp/some/test.parquet/data_1.parquet |    1486732 | parquet
+ /tmp/some/test.parquet/data_2.parquet |    1486732 | parquet
+ /tmp/some/test.parquet/data_3.parquet |    1486732 | parquet
+ /tmp/some/test.parquet/data_4.parquet |     100160 | parquet
 (5 rows)
 
 ```
+
+A uri *pattern*, with `**` for directories and `*` for words, is still resolved by `COPY FROM`
+itself, as below.
 
 Uri pattern is also supported by `COPY FROM` for all supported object stores except `http(s)` endpoints.
 ```sql
@@ -329,23 +368,19 @@ The byte counters mean different things for the two directions:
 `pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage`, `http(s)` and `Google Cloud Storage` object stores.
 
 > [!NOTE]
-> To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
-> Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
+> To be able to write into an object store location, you need to grant the `object_store_write` role to your current postgres user.
+> Similarly, to read from an object store location, you need to grant the `object_store_read` role to your current postgres user.
+> These roles belong to `pg_object_store` and govern every extension that reaches a uri through it. They replace
+> `parquet_object_store_write` and `parquet_object_store_read`; upgrading `pg_parquet` grants the new role to every member of the old one.
 
 Reaching an object store — parsing a uri, resolving credentials from the environment and from
 the cloud vendors' own config files, building the client and caching it per bucket until its
 credentials expire — is not specific to Parquet, so it lives in
-[`object-store-core`](https://github.com/CrunchyData/pg_object_store), which `pg_parquet` links.
-Nothing about the uris, the credentials, the roles or the error messages changes with that: it
-is the same code, in a crate that `pg_object_store` and every other Arrow-backed format
-extension share instead of vendoring their own copy.
-
-`object-store-core` is a library, not an extension, so installing `pg_parquet` still installs
-nothing else and still defines its own roles. An extension that only needs bytes in and bytes
-out can instead go through `pg_object_store`'s C vtable and share one client cache with the
-rest of the cluster; `pg_parquet` cannot, because it reads a Parquet file by fetching the
-footer and then individual row groups, which needs the `ObjectStore` handle itself rather than
-a byte-range call.
+[`pg_object_store`](https://github.com/CrunchyData/pg_object_store), which `pg_parquet` requires.
+Nothing about the uris, the credentials or the error messages changes with that: it is the same
+code, in one extension that every Arrow-backed format extension shares instead of vendoring its
+own copy. One client cache per session serves all of them, so a credential is resolved once no
+matter how many formats a session touches.
 
 #### S3 Storage
 
@@ -499,8 +534,10 @@ Durations are given with a unit, e.g. `30s`, `5m` or `1m30s`. Booleans are given
 - `match_by <string>`: method to match Parquet file fields to PostgreSQL table columns. The available methods are `position` and `name`. The default method is `position`. You can set it to `name` to match the columns by their name rather than by their position in the schema (default). Match by `name` is useful when field order differs between the Parquet file and the table, but their names match. It also matches the fields of the composite type columns by name.
 
 ## Configuration
-There is currently only one GUC parameter to enable/disable the `pg_parquet`:
-- `pg_parquet.enable_copy_hooks`: you can set this parameter to `on` or `off` to enable or disable the `pg_parquet` extension. The default value is `on`.
+`pg_parquet` has no GUC parameters of its own. The `COPY` hook and the object store client belong to the extensions below it, and so do their settings:
+- `arrow.enable_copy_hooks` (`pg_arrow_base`, default `on`): whether a `COPY` naming a uri and a registered format is served by this stack at all. It is read when the library is loaded, so turning it on wants `pg_arrow_base` in `shared_preload_libraries`. This replaces `pg_parquet.enable_copy_hooks`.
+- `arrow.default_format` (`pg_arrow_base`, default empty): the format to assume when the statement names none and the uri's extension implies none.
+- `object_store.enable_store_cache` (`pg_object_store`, default `on`): whether a resolved object store client is reused for the rest of the session.
 
 ## Supported Types
 `pg_parquet` has rich type support, including PostgreSQL's primitive, array, and composite types. Below is the table of the supported types in PostgreSQL and their corresponding Parquet types.
