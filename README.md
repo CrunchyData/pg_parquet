@@ -537,6 +537,7 @@ Durations are given with a unit, e.g. `30s`, `5m` or `1m30s`. Booleans are given
 `pg_parquet` has no GUC parameters of its own. The `COPY` hook and the object store client belong to the extensions below it, and so do their settings:
 - `arrow.enable_copy_hooks` (`pg_arrow_base`, default `on`): whether a `COPY` naming a uri and a registered format is served by this stack at all. It is read when the library is loaded, so turning it on wants `pg_arrow_base` in `shared_preload_libraries`. This replaces `pg_parquet.enable_copy_hooks`.
 - `arrow.default_format` (`pg_arrow_base`, default empty): the format to assume when the statement names none and the uri's extension implies none.
+- `arrow.max_parallel_workers` (`pg_arrow_base`, default `0`): how many workers a `COPY` may use, capped to the server's `max_parallel_workers`. A `COPY TO` with `file_size_bytes` has each worker write whole files of its own into the destination folder, and a `COPY FROM` has them decode the row groups of the file the leader inserts, in the order the file holds them. Anything the workers cannot be given — a `COPY (SELECT ..) TO`, a `TO PROGRAM`, a single file rather than a folder, a table with a row trigger or a column left to a default — is copied by a single process. This replaces `pg_parquet.max_parallel_workers`.
 - `object_store.enable_store_cache` (`pg_object_store`, default `on`): whether a resolved object store client is reused for the rest of the session.
 
 ## Supported Types

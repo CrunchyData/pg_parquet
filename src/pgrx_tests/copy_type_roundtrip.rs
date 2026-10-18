@@ -1361,6 +1361,16 @@ mod tests {
         test_table.assert_expected_and_result_rows();
     }
 
+    // a numeric with a typmod is decoded by the in place path, which leaves a special value
+    // to the general path, where it is rejected the same way an unbounded one is
+    #[pg_test]
+    #[should_panic = "Special numeric values like NaN, Inf, -Inf are not allowed"]
+    fn test_bounded_numeric_nan() {
+        let test_table = TestTable::<AnyNumeric>::new("numeric(9,4)".into());
+        test_table.insert("INSERT INTO test_expected (a) VALUES ('NaN');");
+        test_table.assert_expected_and_result_rows();
+    }
+
     #[pg_test]
     #[should_panic = "Special numeric values like NaN, Inf, -Inf are not allowed"]
     fn test_numeric_inf() {

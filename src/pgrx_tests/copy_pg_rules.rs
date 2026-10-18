@@ -704,4 +704,93 @@ mod tests {
 
         assert_eq!(array.into_datum(), Some(pg_sys::Datum::null()));
     }
+
+    #[pg_test]
+    #[should_panic(expected = "cannot copy from sequence \"test_sequence\"")]
+    fn test_copy_to_sequence() {
+        Spi::run("create sequence test_sequence;").unwrap();
+
+        // success via query form
+        let copy_to_parquet =
+            format!("copy (select last_value from test_sequence) to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        // should fail with the sequence itself
+        let copy_to_parquet = format!("copy test_sequence to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    // PG 18 is the first version to read a populated matview rather than refuse the relation
+    // kind outright, which pg_parquet follows
+    #[cfg(not(pre_pg18))]
+    #[pg_test]
+    fn test_copy_to_materialized_view() {
+        Spi::run("create table test_table(id int);").unwrap();
+        Spi::run("insert into test_table select i from generate_series(1, 10) i;").unwrap();
+        Spi::run("create materialized view test_matview as select * from test_table;").unwrap();
+
+        let copy_to_parquet = format!("copy test_matview to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        Spi::run("create table matview_result(id int);").unwrap();
+        let copy_from_parquet = format!("copy matview_result from '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from_parquet).unwrap();
+
+        let total_rows = Spi::get_one::<i64>("select count(*) from matview_result;")
+            .unwrap()
+            .unwrap();
+        assert_eq!(total_rows, 10);
+    }
+
+    #[cfg(pre_pg18)]
+    #[pg_test]
+    #[should_panic(expected = "cannot copy from materialized view \"test_matview\"")]
+    fn test_copy_to_materialized_view() {
+        Spi::run("create table test_table(id int);").unwrap();
+        Spi::run("insert into test_table select i from generate_series(1, 10) i;").unwrap();
+        Spi::run("create materialized view test_matview as select * from test_table;").unwrap();
+
+        let copy_to_parquet = format!("copy test_matview to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    // a matview created WITH NO DATA holds no rows to read, which PG 18 is the first to say
+    // rather than to return an empty copy for
+    #[cfg(not(pre_pg18))]
+    #[pg_test]
+    #[should_panic(expected = "cannot copy from unpopulated materialized view \"test_matview\"")]
+    fn test_copy_to_unpopulated_materialized_view() {
+        Spi::run("create table test_table(id int);").unwrap();
+        Spi::run("create materialized view test_matview as select * from test_table with no data;")
+            .unwrap();
+
+        let copy_to_parquet = format!("copy test_matview to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "cannot copy from foreign table \"test_foreign_table\"")]
+    fn test_copy_to_foreign_table() {
+        Spi::run("create extension if not exists file_fdw;").unwrap();
+        Spi::run("create server test_file_server foreign data wrapper file_fdw;").unwrap();
+
+        std::fs::write("/tmp/pg_parquet_test_foreign_table.csv", "1\n2\n3\n")
+            .expect("failed to write the csv the foreign table reads");
+
+        Spi::run(
+            "create foreign table test_foreign_table (id int)
+             server test_file_server
+             options (filename '/tmp/pg_parquet_test_foreign_table.csv', format 'csv');",
+        )
+        .unwrap();
+
+        // success via query form
+        let copy_to_parquet =
+            format!("copy (select * from test_foreign_table) to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        // should fail with the foreign table itself
+        let copy_to_parquet = format!("copy test_foreign_table to '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_parquet).unwrap();
+    }
 }
