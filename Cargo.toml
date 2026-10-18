@@ -23,18 +23,18 @@ pg14 = ["pgrx/pg14", "pgrx-tests/pg14", "pg-arrow-convert?/pg14"]
 # the suites assert against the *same* conversion rules the base applies, so they borrow
 # pg-arrow-convert rather than carry a copy of the pg<->arrow types. Test-only: the provider
 # itself never links it, which is the rule the architecture is built on.
-pg_test = ["pg-arrow-convert", "arrow-cast", "object_store", "parquet-geospatial"]
+pg_test = ["pg-arrow-convert", "arrow-cast", "arrow-schema", "parquet-geospatial"]
 
 [dependencies]
-arrow = {version = "60", default-features = false}
+# ffi: the descriptor hands the base record batches over the Arrow C Data Interface
+arrow = {version = "60", default-features = false, features = ["ffi"]}
 arrow-cast = {version = "60", default-features = false, optional = true}
-arrow-schema = {version = "60", default-features = false, features = ["canonical_extension_types"]}
+# test-only, like arrow-cast: the suites build Arrow schemas to assert against
+arrow-schema = {version = "60", default-features = false, features = ["canonical_extension_types"], optional = true}
 bytes = "1"
 # tier 2, for the registration ABI only: the descriptor this extension publishes and the
 # adapters behind the base's byte source and sink.
 format-registry = {git = "ssh://git@github.com/CrunchyData/pg_arrow_base.git", branch = "main"}
-# test-only: a suite reaches a bucket directly to set one up
-object_store = {version = "0.14", default-features = false, features = ["aws", "azure", "fs", "gcp", "http"], optional = true}
 # tier 1, for the UDFs that read a footer from a uri: the ABI declaration and the marshalling
 # over it. The object store itself — uris, credentials, clients, the runtime — stays inside
 # pg_object_store and is reached by calling it.
@@ -50,7 +50,6 @@ parquet = {version = "60", default-features = false, features = [
     "simdutf8",
     "lz4",
     "zstd",
-    "object_store",
     "arrow_canonical_extension_types",
     "geospatial",
 ]}
