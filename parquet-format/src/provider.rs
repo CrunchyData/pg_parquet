@@ -237,7 +237,6 @@ impl FormatProvider for Parquet {
         Ok(file_info(&read_metadata(&reader)?))
     }
 
-
     fn open_reader(
         &self,
         data: Bytes,

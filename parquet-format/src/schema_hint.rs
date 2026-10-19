@@ -87,10 +87,7 @@ fn field_without_dictionary(field: &FieldRef) -> Option<FieldRef> {
 /// 1677..2262. Hive, Impala and Spark write their timestamps as `INT96` and record no Arrow
 /// schema that would hint the resolution, so the wrapped value would be read as a real
 /// timestamp.
-fn schema_with_int96_as_micros(
-    schema: &Schema,
-    file_metadata: &FileMetaData,
-) -> Option<SchemaRef> {
+fn schema_with_int96_as_micros(schema: &Schema, file_metadata: &FileMetaData) -> Option<SchemaRef> {
     // a file that records an Arrow schema declares the resolution of its timestamps, down to
     // an INT96 column - pyarrow records seconds, milliseconds or microseconds for one - and
     // parquet-rs applies what it finds, so there is no default to correct

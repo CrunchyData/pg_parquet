@@ -150,5 +150,7 @@ pub(crate) fn parquet_metadata_from_uri(uri: &str) -> Arc<ParquetMetaData> {
 /// repetition and converted types included, which is what makes this different from
 /// `arrow.schema`.
 pub(crate) fn parquet_schema_from_uri(uri: &str) -> Arc<SchemaDescriptor> {
-    parquet_metadata_from_uri(uri).file_metadata().schema_descr_ptr()
+    parquet_metadata_from_uri(uri)
+        .file_metadata()
+        .schema_descr_ptr()
 }

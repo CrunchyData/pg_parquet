@@ -36,6 +36,7 @@ use format_registry::abi::{
     PG_ARROW_PROVIDER_VERSION,
 };
 use format_registry::options::FormatOptions;
+use format_registry::panic_guard::panic_guarded;
 use format_registry::provider::{
     check_exportable_schema, FileInfo, FormatProvider, RecordBatchSink, StreamingSink,
 };
@@ -375,6 +376,10 @@ unsafe extern "C-unwind" fn parquet_open_reader(
         check_exportable_schema(&reader.schema())?;
 
         // as for the schema: the caller's stream is an empty one that owns nothing
+        // arrow's stream callbacks cannot carry a panic, so one in the reader would abort the
+        // backend rather than fail the statement
+        let reader = panic_guarded(reader)?;
+
         std::ptr::write(out, FFI_ArrowArrayStream::new(reader));
 
         Ok(PGARROW_OK)
@@ -407,6 +412,10 @@ unsafe extern "C-unwind" fn parquet_open_ranged_reader(
         let reader = Parquet.open_ranged_reader(source, &options, splits)?;
 
         check_exportable_schema(&reader.schema())?;
+
+        // arrow's stream callbacks cannot carry a panic, so one in the reader would abort the
+        // backend rather than fail the statement
+        let reader = panic_guarded(reader)?;
 
         std::ptr::write(out, FFI_ArrowArrayStream::new(reader));
 

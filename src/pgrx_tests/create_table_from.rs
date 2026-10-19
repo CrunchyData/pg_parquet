@@ -997,9 +997,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(
-        expected = "cannot create a table from a file when the table inherits columns"
-    )]
+    #[should_panic(expected = "cannot create a table from a file when the table inherits columns")]
     fn test_create_table_inherits() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_inherits");
@@ -1226,9 +1224,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(
-        expected = "file has more than one field named \"a\" in the struct \"s\""
-    )]
+    #[should_panic(expected = "file has more than one field named \"a\" in the struct \"s\"")]
     fn test_create_table_struct_with_duplicate_field_names() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_struct_duplicate_field_names");
@@ -1422,7 +1418,8 @@ mod tests {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         assert!(
-            stderr.contains("pg_arrow_base can handle this CREATE TABLE command but is not enabled"),
+            stderr
+                .contains("pg_arrow_base can handle this CREATE TABLE command but is not enabled"),
             "the extension warning is missing from the psql output: {stderr}"
         );
 
@@ -1958,7 +1955,10 @@ mod tests {
             "failed to create the latin1 database: {create_database_stderr}"
         );
 
-        psql(test_database, "CREATE EXTENSION IF NOT EXISTS pg_parquet CASCADE");
+        psql(
+            test_database,
+            "CREATE EXTENSION IF NOT EXISTS pg_parquet CASCADE",
+        );
 
         // the field name is utf-8 in the file while the identifier has to be in the encoding of
         // the database, so the name is rejected rather than stored as its raw utf-8 bytes

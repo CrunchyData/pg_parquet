@@ -8,9 +8,6 @@ mod tests {
         extension_exists, int96_timestamp, write_int96_timestamps_to_parquet,
         write_record_batch_to_parquet, write_record_batch_to_parquet_file, LOCAL_TEST_FILE_PATH,
     };
-    use pg_arrow_convert::type_compat::pg_arrow_type_conversions::{
-        date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
-    };
     use arrow::array::{
         ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray,
@@ -24,6 +21,9 @@ mod tests {
     use arrow::datatypes::i256;
     use arrow::datatypes::{Int32Type, UInt16Type};
     use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+    use pg_arrow_convert::type_compat::pg_arrow_type_conversions::{
+        date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
+    };
     use pgrx::pg_test;
     use pgrx::{
         datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
@@ -1077,9 +1077,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(
-        expected = "type mismatch for column \"location\" between table and file"
-    )]
+    #[should_panic(expected = "type mismatch for column \"location\" between table and file")]
     fn test_type_mismatch_between_parquet_and_table() {
         let create_types = "create type dog as (name text, age int);
                             create type person as (id bigint, name text, dogs dog[]);

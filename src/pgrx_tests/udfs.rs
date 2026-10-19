@@ -1010,5 +1010,4 @@ mod tests {
 
         Spi::run("DROP TABLE column_stats_test; DROP TYPE person;").unwrap();
     }
-
 }

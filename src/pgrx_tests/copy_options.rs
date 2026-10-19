@@ -525,8 +525,16 @@ mod tests {
 
             // a split keeps the suffix the statement wrote, so a ".parquet.gz" uri splits into
             // ".parquet.gz" files: the codec is part of what the name says the file is
-            let suffix = match parent_folder.file_name().unwrap().to_str().unwrap().find('.') {
-                Some(dot) => parent_folder.file_name().unwrap().to_str().unwrap()[dot..].to_string(),
+            let suffix = match parent_folder
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .find('.')
+            {
+                Some(dot) => {
+                    parent_folder.file_name().unwrap().to_str().unwrap()[dot..].to_string()
+                }
                 None => ".parquet".to_string(),
             };
 
