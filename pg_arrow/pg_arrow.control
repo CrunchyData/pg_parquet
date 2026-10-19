@@ -1,0 +1,6 @@
+comment = 'the Arrow IPC file and stream formats, for COPY and the arrow.* functions'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/pg_arrow'
+relocatable = false
+superuser = true
+requires = 'pg_arrow_base'

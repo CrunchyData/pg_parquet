@@ -15,6 +15,9 @@ members = [
     "format-registry",
     "pg-arrow-convert",
     "pg_arrow_base",
+    # tier 3: the format providers. pg_parquet is the root package, below.
+    "arrow-ipc-format",
+    "pg_arrow",
 ]
 resolver = "2"
 
@@ -34,6 +37,9 @@ object-store-core = { path = "object-store-core", version = "0.1.0" }
 # free of pgrx: a provider that could reach Postgres internals is a provider that would.
 format-registry = { path = "format-registry", version = "0.1.0" }
 pg-arrow-convert = { path = "pg-arrow-convert", version = "0.1.0", default-features = false }
+
+# tier 3: the Arrow IPC format, behind the pg_arrow extension
+arrow-ipc-format = { path = "arrow-ipc-format", version = "0.1.0" }
 
 # ffi: a record batch crosses between two `.so`s over the Arrow C Data Interface. A member that
 # needs more of arrow than this asks for it on top.
