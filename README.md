@@ -7,16 +7,16 @@
 
 `pg_parquet` is a PostgreSQL extension that allows you to read and write [Parquet files](https://parquet.apache.org), which are located in `S3`, `Azure Blob Storage`, `Google Cloud Storage`, `http(s) endpoints` or `file system`, from PostgreSQL via `COPY TO/FROM` commands. It depends on [Apache Arrow](https://arrow.apache.org/rust/arrow/) project to read and write Parquet files and [pgrx](https://github.com/pgcentralfoundation/pgrx) project to extend PostgreSQL's `COPY` command.
 
-`pg_parquet` is the Parquet provider of a three-extension stack, and installs the other two with it:
+`pg_parquet` is the Parquet provider of a tiered stack, and this repository holds all of it. Each extension is a crate of one workspace, and `make install` installs every one of them, because `CREATE EXTENSION pg_parquet` needs the two tiers below it:
 
-| extension | what it owns |
-|---|---|
-| [`pg_object_store`](https://github.com/CrunchyData/pg_object_store) | uris, credentials, object store clients and the roles that govern reaching one |
-| [`pg_arrow_base`](https://github.com/CrunchyData/pg_arrow_base) | the `COPY` hook, schema inference, the Postgres ⇄ Arrow conversion and the `arrow.*` functions |
-| `pg_parquet` | reading and writing the Parquet format itself |
+| extension | directory | what it owns |
+|---|---|---|
+| `pg_object_store` | [`pg_object_store/`](pg_object_store/README.md) | uris, credentials, object store clients and the roles that govern reaching one |
+| `pg_arrow_base` | [`pg_arrow_base/`](pg_arrow_base/README.md) | the `COPY` hook, schema inference, the Postgres ⇄ Arrow conversion and the `arrow.*` functions |
+| `pg_parquet` | `src/`, [`parquet-format/`](parquet-format/) | reading and writing the Parquet format itself |
+| `pg_arrow` | [`pg_arrow/`](pg_arrow/README.md) | the same stack's Arrow IPC provider, installed alongside this one and optional |
 
 Everything below works as it did before that split, with the exceptions called out in place: the roles are `object_store_read` and `object_store_write`, the `COPY` hook's GUC is `arrow.enable_copy_hooks`, inferred composite types land in `arrow_structs`, and listing a uri is `arrow.list()`.
-[`pg_arrow`](https://github.com/CrunchyData/pg_arrow) is the same stack's Arrow IPC provider, and can be installed alongside this one.
 
 Upgrading an existing installation needs the other two extensions created first, because `ALTER EXTENSION ... UPDATE` does not install what
 a new version requires:
@@ -80,16 +80,13 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 # append the extension to shared_preload_libraries
 > echo "shared_preload_libraries = 'pg_arrow_base, pg_object_store'" >> ~/.pgrx/data-"${PG_MAJOR}"/postgresql.conf
 
-# build and install the two extensions below this one first, from their own repos
-> for repo in pg_object_store pg_arrow_base; do
->     git clone https://github.com/CrunchyData/"${repo}".git
->     (cd "${repo}" && cargo pgrx install --release --pg-config "$(which pg_config)")
-> done
+# build and install every extension of the stack: the two tiers below this one, this one, and
+# the Arrow IPC provider beside it. A `cargo pgrx install` on its own installs only pg_parquet,
+# which leaves a cluster where CREATE EXTENSION pg_parquet cannot find what it requires.
+> make install
 
-# initialize a data directory, build and install the extension (to the targets specified by configured pg_config), then connects to a session
+# alternatively, initialize a data directory, build and install, then connect to a session
 > cargo pgrx run --features pg"${PG_MAJOR}"
-# alternatively you can only build and install the extension (pass --release flag for production binary)
-> cargo pgrx install --release --features pg"${PG_MAJOR}"
 
 # create the extension in the database, with the two it requires
 psql> "CREATE EXTENSION pg_parquet CASCADE;"
@@ -534,11 +531,13 @@ Durations are given with a unit, e.g. `30s`, `5m` or `1m30s`. Booleans are given
 - `match_by <string>`: method to match Parquet file fields to PostgreSQL table columns. The available methods are `position` and `name`. The default method is `position`. You can set it to `name` to match the columns by their name rather than by their position in the schema (default). Match by `name` is useful when field order differs between the Parquet file and the table, but their names match. It also matches the fields of the composite type columns by name.
 
 ## Configuration
-`pg_parquet` has no GUC parameters of its own. The `COPY` hook and the object store client belong to the extensions below it, and so do their settings:
+`pg_parquet` has no GUC parameters of its own beyond the two deprecated aliases at the end of this section. The `COPY` hook and the object store client belong to the extensions below it, and so do their settings:
 - `arrow.enable_copy_hooks` (`pg_arrow_base`, default `on`): whether a `COPY` naming a uri and a registered format is served by this stack at all. It is read when the library is loaded, so turning it on wants `pg_arrow_base` in `shared_preload_libraries`. This replaces `pg_parquet.enable_copy_hooks`.
 - `arrow.default_format` (`pg_arrow_base`, default empty): the format to assume when the statement names none and the uri's extension implies none.
 - `arrow.max_parallel_workers` (`pg_arrow_base`, default `0`): how many workers a `COPY` may use, capped to the server's `max_parallel_workers`. A `COPY TO` with `file_size_bytes` has each worker write whole files of its own into the destination folder, and a `COPY FROM` has them decode the row groups of the file the leader inserts, in the order the file holds them. Anything the workers cannot be given — a `COPY (SELECT ..) TO`, a `TO PROGRAM`, a single file rather than a folder, a table with a row trigger or a column left to a default — is copied by a single process. This replaces `pg_parquet.max_parallel_workers`.
 - `object_store.enable_store_cache` (`pg_object_store`, default `on`): whether a resolved object store client is reused for the rest of the session.
+
+`pg_parquet.enable_copy_hooks` and `pg_parquet.max_parallel_workers` are still accepted, so a configuration file written for 0.6.0 keeps working: setting either to something other than its default is the cluster's starting value for the `arrow.*` setting above that replaced it. They are deprecated, they apply to every format rather than only to parquet, and they are read when the library loads — a `SET` of one during a session changes nothing.
 
 ## Supported Types
 `pg_parquet` has rich type support, including PostgreSQL's primitive, array, and composite types. Below is the table of the supported types in PostgreSQL and their corresponding Parquet types.
