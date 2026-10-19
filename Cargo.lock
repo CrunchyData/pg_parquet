@@ -216,7 +216,7 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "bytes",
- "format-registry 0.1.0",
+ "format-registry",
 ]
 
 [[package]]
@@ -2696,7 +2696,7 @@ dependencies = [
  "arrow",
  "arrow-ipc-format",
  "bytes",
- "format-registry 0.1.0",
+ "format-registry",
  "pgrx",
  "pgrx-tests",
 ]

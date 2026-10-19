@@ -106,8 +106,10 @@ impl ParallelCopyToShared {
     }
 
     unsafe fn statement(shared: *const Self) -> String {
-        let bytes =
-            std::slice::from_raw_parts(shared.add(1) as *const u8, (*shared).statement_len as usize);
+        let bytes = std::slice::from_raw_parts(
+            shared.add(1) as *const u8,
+            (*shared).statement_len as usize,
+        );
 
         std::str::from_utf8(bytes)
             .expect("parallel COPY TO shared state is not valid utf-8")
@@ -126,10 +128,7 @@ impl FileIdClaim for DsmFileIdClaim {
 
 /// Runs the statement with parallel workers, or returns `None` when it is not one this path can
 /// handle — in which case the caller carries it out in this process, as it always did.
-pub(crate) fn try_parallel_copy_to(
-    p_stmt: &PgBox<PlannedStmt>,
-    plan: &CopyToPlan,
-) -> Option<u64> {
+pub(crate) fn try_parallel_copy_to(p_stmt: &PgBox<PlannedStmt>, plan: &CopyToPlan) -> Option<u64> {
     let nworkers = requested_parallel_workers();
 
     if nworkers <= 0 {
@@ -188,8 +187,12 @@ fn parallel_copy_to_relation(p_stmt: &PgBox<PlannedStmt>) -> Option<PgRelation> 
         return None;
     }
 
-    let relation =
-        unsafe { PgRelation::with_lock(copy_stmt::relation_oid(p_stmt), copy_stmt::lock_mode(p_stmt)) };
+    let relation = unsafe {
+        PgRelation::with_lock(
+            copy_stmt::relation_oid(p_stmt),
+            copy_stmt::lock_mode(p_stmt),
+        )
+    };
 
     let relation_form = unsafe { *relation.rd_rel };
 
@@ -212,12 +215,7 @@ fn parallel_copy_to_relation(p_stmt: &PgBox<PlannedStmt>) -> Option<PgRelation> 
 
 /// Sets up the shared memory, launches the workers, claims ranges in the leader as well, and
 /// returns the number of rows every participant copied.
-fn run_parallel_copy_to(
-    nworkers: i32,
-    nranges: u32,
-    pages_per_range: u32,
-    statement: &str,
-) -> u64 {
+fn run_parallel_copy_to(nworkers: i32, nranges: u32, pages_per_range: u32, statement: &str) -> u64 {
     let (pcxt, shared) = unsafe {
         pg_sys::EnterParallelMode();
 

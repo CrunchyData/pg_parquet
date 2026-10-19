@@ -382,8 +382,7 @@ extern "C-unwind" fn arrow_copy_hook(
         let params = unsafe { PgBox::from_pg(params) };
         let query_env = unsafe { PgBox::from_pg(query_env) };
 
-        let nprocessed =
-            execute_recognized(&planned, query_string_cstr, &params, &query_env, stmt);
+        let nprocessed = execute_recognized(&planned, query_string_cstr, &params, &query_env, stmt);
 
         // core COPY reports the rows it moved, and a client that parses the tag for a count
         // should not be able to tell which code moved them

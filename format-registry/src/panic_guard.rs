@@ -120,9 +120,8 @@ mod tests {
         let mut reader = panic_guarded(Box::new(PanicsOnTheSecondBatch { batches_left: 1 }))
             .expect("the schema is readable");
 
-        assert_eq!(
+        assert!(
             reader.next().expect("a first batch").is_ok(),
-            true,
             "the good batch"
         );
 
