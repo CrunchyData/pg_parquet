@@ -16,7 +16,7 @@ bytes = "1"
 
 # tier 2, for the trait and the registration ABI only. A provider depends on this and on
 # nothing else of ours: no pgrx of tier 2's, no pg_object_store.
-format-registry = { git = "ssh://git@github.com/CrunchyData/pg_arrow_base.git", branch = "main" }
+format-registry.workspace = true
 
 parquet = { version = "60", default-features = false, features = [
     "arrow",

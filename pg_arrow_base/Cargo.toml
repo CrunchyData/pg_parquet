@@ -1,0 +1,44 @@
+[package]
+name = "pg_arrow_base"
+description = "Postgres extension that owns the Arrow file format substrate: the registry, the COPY hook, the pg<->arrow mapping"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = ["pg19"]
+pg19 = ["pgrx/pg19", "pgrx-tests/pg19", "pg-arrow-convert/pg19"]
+pg18 = ["pgrx/pg18", "pgrx-tests/pg18", "pg-arrow-convert/pg18"]
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17", "pg-arrow-convert/pg17"]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16", "pg-arrow-convert/pg16"]
+pg15 = ["pgrx/pg15", "pgrx-tests/pg15", "pg-arrow-convert/pg15"]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14", "pg-arrow-convert/pg14"]
+pg_test = []
+
+[dependencies]
+format-registry.workspace = true
+# the conversion lives in its own crate because it speaks pg_sys and so builds per major; it is
+# compiled into this extension and into nothing else
+pg-arrow-convert.workspace = true
+
+object-store-client.workspace = true
+
+arrow.workspace = true
+arrow-cast = { version = "60", default-features = false }
+arrow-schema = { version = "60", default-features = false, features = ["canonical_extension_types"] }
+bytes.workspace = true
+# COPY FROM '<uri with a * in it>': tier 1 lists a literal prefix, the pattern is matched here
+glob = "0.3"
+# COPY ... TO/FROM PROGRAM: the pipe Postgres opens is a FILE*, and the descriptor behind it is
+# what a transfer is driven through
+libc = "0.2"
+pgrx.workspace = true
+
+[build-dependencies]
+cfg_aliases = "0.2"
+
+[dev-dependencies]
+pgrx-tests = "=0.19.3"

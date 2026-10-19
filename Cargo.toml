@@ -11,6 +11,10 @@ members = [
     "object-store-client",
     "object-store-core",
     "pg_object_store",
+    # tier 2: the COPY hook, the format registry, the pg <-> arrow mapping
+    "format-registry",
+    "pg-arrow-convert",
+    "pg_arrow_base",
 ]
 resolver = "2"
 
@@ -26,6 +30,14 @@ license-file = "LICENSE"
 object-store-client = { path = "object-store-client", version = "0.1.0" }
 object-store-core = { path = "object-store-core", version = "0.1.0" }
 
+# tier 2, by path. `format-registry` is the one crate a provider links, and is deliberately
+# free of pgrx: a provider that could reach Postgres internals is a provider that would.
+format-registry = { path = "format-registry", version = "0.1.0" }
+pg-arrow-convert = { path = "pg-arrow-convert", version = "0.1.0", default-features = false }
+
+# ffi: a record batch crosses between two `.so`s over the Arrow C Data Interface. A member that
+# needs more of arrow than this asks for it on top.
+arrow = { version = "60", default-features = false, features = ["ffi"] }
 aws-config = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
 aws-credential-types = { version = "1", default-features = false }
 azure_storage = { version = "0.21", default-features = false }
@@ -63,20 +75,20 @@ pg_test = ["pg-arrow-convert", "arrow-cast", "arrow-schema", "parquet-geospatial
 
 [dependencies]
 # ffi: the descriptor hands the base record batches over the Arrow C Data Interface
-arrow = {version = "60", default-features = false, features = ["ffi"]}
+arrow.workspace = true
 arrow-cast = {version = "60", default-features = false, optional = true}
 # test-only, like arrow-cast: the suites build Arrow schemas to assert against
 arrow-schema = {version = "60", default-features = false, features = ["canonical_extension_types"], optional = true}
-bytes = "1"
+bytes.workspace = true
 # tier 2, for the registration ABI only: the descriptor this extension publishes and the
 # adapters behind the base's byte source and sink.
-format-registry = {git = "ssh://git@github.com/CrunchyData/pg_arrow_base.git", branch = "main"}
+format-registry.workspace = true
 # tier 1, for the UDFs that read a footer from a uri: the ABI declaration and the marshalling
 # over it. The object store itself — uris, credentials, clients, the runtime — stays inside
 # pg_object_store and is reached by calling it.
 object-store-client.workspace = true
 # tier 2's conversion crate, for the test suites only: see the pg_test feature.
-pg-arrow-convert = {git = "ssh://git@github.com/CrunchyData/pg_arrow_base.git", branch = "main", default-features = false, optional = true}
+pg-arrow-convert = {workspace = true, optional = true}
 parquet = {version = "60", default-features = false, features = [
     "arrow",
     "crc",
@@ -92,7 +104,7 @@ parquet = {version = "60", default-features = false, features = [
 parquet-geospatial = {version = "60", optional = true}
 # the format itself: no pgrx, no object store, tested with plain `cargo test`
 parquet-format = {path = "parquet-format"}
-pgrx = "=0.19.3"
+pgrx.workspace = true
 serde_json = "1"
 
 [dev-dependencies]

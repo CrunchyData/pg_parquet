@@ -1412,7 +1412,6 @@ dependencies = [
 [[package]]
 name = "format-registry"
 version = "0.1.0"
-source = "git+ssh://git@github.com/CrunchyData/pg_arrow_base.git?branch=main#b0cc576b25b9a79f63c3c371bbf472583a58041f"
 dependencies = [
  "arrow",
  "bytes",
@@ -2667,7 +2666,6 @@ dependencies = [
 [[package]]
 name = "pg-arrow-convert"
 version = "0.1.0"
-source = "git+ssh://git@github.com/CrunchyData/pg_arrow_base.git?branch=main#b0cc576b25b9a79f63c3c371bbf472583a58041f"
 dependencies = [
  "arrow",
  "arrow-cast",
@@ -2677,6 +2675,24 @@ dependencies = [
  "parquet-geospatial",
  "pgrx",
  "serde_json",
+]
+
+[[package]]
+name = "pg_arrow_base"
+version = "0.1.0"
+dependencies = [
+ "arrow",
+ "arrow-cast",
+ "arrow-schema",
+ "bytes",
+ "cfg_aliases",
+ "format-registry",
+ "glob",
+ "libc",
+ "object-store-client",
+ "pg-arrow-convert",
+ "pgrx",
+ "pgrx-tests",
 ]
 
 [[package]]

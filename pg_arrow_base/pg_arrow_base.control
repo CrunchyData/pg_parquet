@@ -1,0 +1,6 @@
+comment = 'the shared substrate Arrow-backed file format extensions are written against'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/pg_arrow_base'
+relocatable = false
+superuser = true
+requires = 'pg_object_store'
