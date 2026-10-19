@@ -1,0 +1,5 @@
+comment = 'object store access for Postgres extensions: uris, credentials, clients'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/pg_object_store'
+relocatable = false
+superuser = true
