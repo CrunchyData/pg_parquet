@@ -8,7 +8,9 @@ use pgrx::pg_sys::{find_rendezvous_variable, load_file, AsPgCStr};
 use pgrx::prelude::*;
 
 mod descriptor;
+mod legacy_gucs;
 mod parquet_udfs;
+mod pg_compat;
 #[cfg(any(test, feature = "pg_test"))]
 mod pgrx_tests;
 mod store;
@@ -101,8 +103,14 @@ fn register_provider() {
 ///
 /// `shared_preload_libraries` is no longer required either: a provider is loaded on demand by
 /// the base the first time a session names its format.
+///
+/// The one thing still kept here that is not the format is the pair of 0.6.0 GUCs, which name
+/// settings the base owns now. They are defined before the base is resolved because one of
+/// them decides whether the base installs a hook at all. See `legacy_gucs`.
 #[pg_guard]
 pub extern "C-unwind" fn _PG_init() {
+    legacy_gucs::define_and_forward();
+
     register_provider();
 }
 

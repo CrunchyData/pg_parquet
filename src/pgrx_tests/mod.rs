@@ -9,5 +9,6 @@ mod copy_progress;
 mod copy_stdin_out;
 mod copy_type_roundtrip;
 mod create_table_from;
+mod legacy_gucs;
 mod provider;
 mod udfs;
