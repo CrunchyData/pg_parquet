@@ -753,8 +753,10 @@ pub(crate) fn matching_objects(uri: &str) -> Option<Vec<(String, i64)>> {
     // match inside it, which is the usual shape. A recursive list of that prefix would walk
     // every subtree under it — on a local filesystem one unreadable directory nowhere near the
     // match then fails the statement, and on an object store every key under the prefix is
-    // paged through to be filtered out again
-    let listed = if uri[slash + 1..].contains('/') {
+    // paged through to be filtered out again. A remainder that spans a `/`, or a `**` that
+    // matches one itself, does reach deeper, so those are listed recursively.
+    let remainder = &uri[slash + 1..];
+    let listed = if remainder.contains('/') || remainder.contains("**") {
         object_store::list(prefix_uri)
     } else {
         object_store::list_shallow(prefix_uri)

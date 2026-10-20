@@ -116,9 +116,10 @@ check-with-coverage: install stop-containers start-containers
 	done && \
 	cargo llvm-cov report --lcov > lcov.info
 
-# A name filter that matches nothing still exits 0, and the ~50 cloud tests these four targets
-# select have not been ported out of 0.6.0 yet: they run zero tests and pass. Whichever tier
-# ends up owning them, these need `--package` and a filter that matches.
+# One emulator at a time, for working on that store: the filter selects the end to end tests of
+# `src/pgrx_tests/object_store.rs`, whose names start with the scheme for exactly this reason. A
+# filter that matches nothing would still exit 0, so a renamed test silently stops being tested
+# here -- `make check` runs all of them with every container up and is the gate.
 check-s3: install stop-minio start-minio
 	cargo pgrx test --package pg_parquet pg$(PG_MAJOR) test_s3 --no-default-features
 

@@ -119,6 +119,9 @@ fn prime_fallback_to_text(table_name: &str) {
 
 pub(crate) struct TestTable<T: IntoDatum + FromDatum> {
     uri: String,
+    // the COPY FROM reads this instead of uri when it is set, which is how a test writes one
+    // file and reads it back through a glob that has to match it
+    uri_pattern: Option<String>,
     order_by_col: String,
     copy_to_options: HashMap<String, CopyOptionValue>,
     copy_from_options: HashMap<String, CopyOptionValue>,
@@ -153,6 +156,7 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
 
         Self {
             uri,
+            uri_pattern: None,
             order_by_col,
             copy_to_options,
             copy_from_options,
@@ -183,6 +187,11 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
 
     pub(crate) fn with_uri(mut self, uri: String) -> Self {
         self.uri = uri;
+        self
+    }
+
+    pub(crate) fn with_uri_pattern(mut self, uri_pattern: String) -> Self {
+        self.uri_pattern = Some(uri_pattern);
         self
     }
 
@@ -229,7 +238,9 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
     }
 
     pub(crate) fn copy_from_parquet(&self, table_name: &str) {
-        let mut copy_from_query = format!("COPY {} FROM '{}'", table_name, self.uri);
+        let uri = self.uri_pattern.as_ref().unwrap_or(&self.uri);
+
+        let mut copy_from_query = format!("COPY {} FROM '{}'", table_name, uri);
 
         if !self.copy_from_options.is_empty() {
             copy_from_query.push_str(" WITH (");
