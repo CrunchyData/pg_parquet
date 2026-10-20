@@ -240,7 +240,11 @@ pub(crate) fn recognize(p_stmt: &PgBox<PlannedStmt>) -> Option<ArrowCopyStmt> {
         Some(format) => {
             let format = format.to_ascii_lowercase();
 
-            if matches!(format.as_str(), "csv" | "text" | "binary") {
+            // a format core has is core's, unless the end is one only this stack can serve:
+            // `COPY t TO '/tmp/x.parquet' WITH (format csv)` is a statement about a parquet file
+            // whose format is wrong, and core would write csv under that name instead of saying
+            // so. Everything core cannot reach at all is in the same position.
+            if core_has_format(&format) && !names_our_end(&endpoint) {
                 return None;
             }
         }
@@ -279,6 +283,30 @@ pub(crate) fn recognize(p_stmt: &PgBox<PlannedStmt>) -> Option<ArrowCopyStmt> {
         unhonoured_core_options: unhonoured_core_options(copy_stmt.options),
         is_from: copy_stmt.is_from,
     })
+}
+
+/// Whether core `COPY` has a format of this name itself.
+fn core_has_format(format: &str) -> bool {
+    // PostgreSQL 19 writes json itself, and a `.json` uri in that format is core's statement
+    #[cfg(not(pre_pg19))]
+    const CORE_FORMATS: &[&str] = &["csv", "text", "binary", "json"];
+    #[cfg(pre_pg19)]
+    const CORE_FORMATS: &[&str] = &["csv", "text", "binary"];
+
+    CORE_FORMATS.contains(&format)
+}
+
+/// Whether the end of the statement is one this stack owns: a uri a provider claims by its
+/// extension, or one in a scheme only tier 1 can reach. Stdio and a program are neither -- core
+/// serves both, in any format it has.
+fn names_our_end(endpoint: &Endpoint) -> bool {
+    let path = endpoint.path_for_inference();
+
+    if registry::lookup_by_path(path).is_some() || names_a_store(path) {
+        return true;
+    }
+
+    registry::inferable_extension(path).is_some() && providers::load_by_path(path).is_some()
 }
 
 /// Whether a uri names a store this stack can reach. A bare path never does: one with nothing
