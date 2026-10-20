@@ -27,11 +27,22 @@ mod tests {
 
     // what MarkGUCPrefixReserved buys: without it this SET succeeds as a placeholder and the
     // session goes on believing the hook is off
+    #[cfg(not(pre_pg15))]
     #[pg_test]
     #[should_panic(
         expected = "invalid configuration parameter name \"pg_parquet.enabl_copy_hooks\""
     )]
     fn test_a_typo_under_the_prefix_is_rejected() {
+        Spi::run("SET pg_parquet.enabl_copy_hooks = off").unwrap();
+    }
+
+    // PostgreSQL 14's `EmitWarningsOnPlaceholders` only warns about the placeholders that were
+    // already set when the library loaded; reserving the prefix against a later `SET` is what
+    // PostgreSQL 15 added with the rename. So a typo is still accepted there, and asserting that
+    // is what keeps the version difference from reading like a regression.
+    #[cfg(pre_pg15)]
+    #[pg_test]
+    fn test_a_typo_under_the_prefix_is_a_placeholder_before_pg15() {
         Spi::run("SET pg_parquet.enabl_copy_hooks = off").unwrap();
     }
 }
