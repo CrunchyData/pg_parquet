@@ -4,7 +4,7 @@ mod tests {
 
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
-        extension_exists, extension_version, geospatial_crs_by_column,
+        create_postgis, extension_exists, extension_version, geospatial_crs_by_column,
         timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult, TestTable,
         LOCAL_TEST_FILE_PATH,
     };
@@ -1386,8 +1386,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let test_table = TestTable::<Geometry>::new("geometry".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (ST_GeomFromText('POINT(1 1)')),
@@ -1404,8 +1403,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let test_table = TestTable::<Vec<Option<Geometry>>>::new("geometry[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array[ST_GeomFromText('POINT(1 1)'), ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null), (array[]::geometry[]);");
@@ -1419,8 +1417,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let test_table = TestTable::<Geography>::new("geography".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (ST_GeogFromText('POINT(1 1)')),
@@ -1437,8 +1434,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let test_table = TestTable::<Vec<Option<Geography>>>::new("geography[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array[ST_GeogFromText('POINT(1 1)'), ST_GeogFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null), (array[]::geography[]);");
@@ -1452,8 +1448,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let copy_to_query = format!(
             "COPY (SELECT ST_GeomFromText('POINT(1 1)')::geometry(point) as no_srid,
@@ -1516,8 +1511,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let copy_to_query = format!(
             "COPY (SELECT ST_GeomFromText('POINT(1 2)') as a, 1 as b

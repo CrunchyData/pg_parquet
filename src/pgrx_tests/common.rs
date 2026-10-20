@@ -6,6 +6,7 @@ use std::{collections::HashMap, fmt::Debug};
 
 use crate::store::parquet_metadata_from_uri;
 use pg_arrow_convert::type_compat::fallback_to_text::reset_fallback_to_text_context;
+use pg_arrow_convert::type_compat::geometry::reset_postgis_context;
 use pg_arrow_convert::type_compat::map::Map;
 
 use arrow::array::RecordBatch;
@@ -406,6 +407,35 @@ pub(crate) fn timetz_array_to_utc_time_array(
             .map(|timetz| timetz.map(|timetz| timetz.to_utc()))
             .collect(),
     )
+}
+
+/// Recreates postgis, and reinitializes *this* library's view of it.
+///
+/// `pg-arrow-convert` is a test-only dependency of this crate, so the test build of
+/// `pg_parquet.so` carries its own copy of that crate's postgis context: the one `pg_arrow_base`
+/// resets when a `COPY` starts lives in a different library and is a different object. A test
+/// that converts a geometry datum in Rust reads ours, which nothing else would ever initialize,
+/// and recreating the extension changes the oids it caches -- so it is reset on every create.
+pub(crate) fn create_postgis_in(schema: Option<&str>) {
+    let create = match schema {
+        Some(schema) => format!(
+            "DROP SCHEMA IF EXISTS {0} CASCADE; CREATE SCHEMA {0};
+             CREATE EXTENSION postgis SCHEMA {0};",
+            spi::quote_identifier(schema)
+        ),
+        None => "CREATE EXTENSION postgis;".to_string(),
+    };
+
+    Spi::run(&format!(
+        "DROP EXTENSION IF EXISTS postgis CASCADE; {create}"
+    ))
+    .unwrap();
+
+    reset_postgis_context();
+}
+
+pub(crate) fn create_postgis() {
+    create_postgis_in(None);
 }
 
 pub(crate) fn extension_exists(extension_name: &str) -> bool {

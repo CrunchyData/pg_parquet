@@ -8,17 +8,14 @@ mod tests {
     use pgrx::{pg_test, Spi};
 
     use crate::pgrx_tests::common::{
-        extension_exists, extension_version, geospatial_crs_by_column,
-        write_record_batch_to_parquet_file, TestTable, LOCAL_TEST_FILE_PATH,
+        create_postgis, create_postgis_in, extension_exists, extension_version,
+        geospatial_crs_by_column, write_record_batch_to_parquet_file, TestTable,
+        LOCAL_TEST_FILE_PATH,
     };
     use pg_arrow_convert::type_compat::geometry::{Geography, Geometry};
 
     fn postgis_missing() -> bool {
         !extension_exists("postgis") || *extension_version("postgis") < *"3.4"
-    }
-
-    fn create_postgis() {
-        Spi::run("DROP EXTENSION IF EXISTS postgis CASCADE; CREATE EXTENSION postgis;").unwrap();
     }
 
     fn bbox_text(column: &str) -> Option<String> {
@@ -1216,13 +1213,7 @@ mod tests {
             return;
         }
 
-        Spi::run(
-            "DROP EXTENSION IF EXISTS postgis CASCADE;
-             DROP SCHEMA IF EXISTS gis CASCADE;
-             CREATE SCHEMA gis;
-             CREATE EXTENSION postgis SCHEMA gis;",
-        )
-        .unwrap();
+        create_postgis_in(Some("gis"));
 
         // a plain copy must keep working even though postgis is not on the search path
         Spi::run("SET search_path TO pg_catalog, public;").unwrap();
