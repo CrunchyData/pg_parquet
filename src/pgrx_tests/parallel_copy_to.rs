@@ -1181,6 +1181,30 @@ mod tests {
             assert_eq!(file_metadata(LOCAL_TEST_FILE_PATH).0, WIDE_TABLE_ROWS);
             assert_eq!(part_files(LOCAL_TEST_FILE_PATH), Vec::<String>::new());
         }
+
+        // a role that holds select on the columns it copies but not on the relation itself,
+        // which the ctid of the per range statement would be refused
+        {
+            let _file = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+            Spi::run(
+                "CREATE ROLE column_select_only;
+                 GRANT pg_write_server_files TO column_select_only;
+                 GRANT SELECT (id) ON wide_table TO column_select_only;
+                 SET ROLE column_select_only;",
+            )
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY wide_table (id) TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+            ))
+            .unwrap();
+
+            Spi::run("RESET ROLE;").unwrap();
+
+            assert_eq!(file_metadata(LOCAL_TEST_FILE_PATH).0, WIDE_TABLE_ROWS);
+            assert_eq!(part_files(LOCAL_TEST_FILE_PATH), Vec::<String>::new());
+        }
     }
 
     // an http uri takes no multipart upload, which is what the splice is streamed into, so

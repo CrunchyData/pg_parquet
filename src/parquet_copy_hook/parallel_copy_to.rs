@@ -17,10 +17,10 @@ use pgrx::{
     pg_sys::{
         self, defGetString, dsm_segment, pg_atomic_fetch_add_u32, pg_atomic_fetch_add_u64,
         pg_atomic_init_u32, pg_atomic_init_u64, pg_atomic_read_u64, pg_atomic_uint32,
-        pg_atomic_uint64, quote_identifier, quote_literal_cstr, quote_qualified_identifier, shm_mq,
-        shm_mq_handle, shm_mq_iovec, shm_mq_result, shm_toc, AsPgCStr, CmdType, CopyStmt, DefElem,
-        Node, NodeTag, PlannedStmt, RawStmt, HEAP_TABLE_AM_OID, RELKIND_RELATION,
-        RELPERSISTENCE_TEMP,
+        pg_atomic_uint64, pg_class_aclcheck, quote_identifier, quote_literal_cstr,
+        quote_qualified_identifier, shm_mq, shm_mq_handle, shm_mq_iovec, shm_mq_result, shm_toc,
+        AclResult, AsPgCStr, CmdType, CopyStmt, DefElem, GetUserId, Node, NodeTag, PlannedStmt,
+        RawStmt, ACL_SELECT, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP,
     },
     GucSetting, PgBox, PgList, PgMemoryContexts, PgRelation, PgTryBuilder,
 };
@@ -346,6 +346,18 @@ fn parallel_copy_to_relation(p_stmt: &PgBox<PlannedStmt>) -> Option<PgRelation> 
     // row level security rewrites the scan into a subquery holding the policy quals, which
     // a ctid range qual can no longer be pushed into as a tid range scan
     if relation_form.relrowsecurity || relation_form.relforcerowsecurity {
+        return None;
+    }
+
+    // the statement of a range reads ctid, which needs select on the relation itself, while
+    // the command it comes from only needs it on the columns it names. A role that holds the
+    // column privileges alone keeps the single process path, rather than being refused the
+    // copy it is allowed to run.
+    let allowed = unsafe {
+        pg_class_aclcheck(relation.oid(), GetUserId(), ACL_SELECT as _) == AclResult::ACLCHECK_OK
+    };
+
+    if !allowed {
         return None;
     }
 
