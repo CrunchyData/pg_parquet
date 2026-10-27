@@ -443,7 +443,10 @@ fn unbounded_numeric_target(
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => return Some(DataType::Utf8),
         // a negative scale has no Postgres representation to preserve, so such a decimal is
         // read as the default unbounded numeric type like before
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale)
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale)
             if *scale >= 0 =>
         {
             (*precision as u32, *scale as u32)
