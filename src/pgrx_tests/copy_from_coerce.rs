@@ -1944,6 +1944,44 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_coerce_narrow_decimal_into_unbounded_numeric() {
+        // the narrow decimal types are adopted by an unbounded "numeric" too. A "Decimal32"
+        // always fits the default "numeric(38,9)", a "Decimal64" has the scale to lose digits
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Decimal64(18, 12), true),
+            Field::new("y", DataType::Decimal32(9, 9), true),
+        ]));
+
+        let x = Arc::new(
+            Decimal64Array::from(vec![1_000_000_000_001_i64])
+                .with_precision_and_scale(18, 12)
+                .unwrap(),
+        );
+
+        let y = Arc::new(
+            Decimal32Array::from(vec![123_456_789_i32])
+                .with_precision_and_scale(9, 9)
+                .unwrap(),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x numeric, y numeric)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT x::text = '1.000000000001'
+                AND y::text = '0.123456789' FROM test_table",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+    }
+
+    #[pg_test]
     fn test_coerce_text_into_unbounded_numeric() {
         // a numeric with a precision above Postgres' decimal limit is written as text, which an
         // unbounded "numeric" parses instead of casting it to the default "numeric(38,9)"
