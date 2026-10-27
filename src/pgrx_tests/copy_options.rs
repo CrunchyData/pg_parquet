@@ -1,6 +1,6 @@
 #[pgrx::pg_schema]
 mod tests {
-    use std::{cmp::Ordering, collections::HashMap, path::Path};
+    use std::{cmp::Ordering, collections::HashMap, path::Path, process::Command};
 
     use parquet::file::metadata::ColumnChunkMetaData;
     use pgrx::{pg_test, Spi};
@@ -8,8 +8,8 @@ mod tests {
     use crate::{
         arrow_parquet::uri_utils::{parquet_metadata_from_uri, ParsedUriInfo},
         pgrx_tests::common::{
-            create_crunchy_map_type, extension_exists, CopyOptionValue, FileCleanup, TestTable,
-            LOCAL_TEST_FILE_PATH,
+            create_crunchy_map_type, extension_exists, test_pg_port, CopyOptionValue, FileCleanup,
+            TestTable, LOCAL_TEST_FILE_PATH,
         },
         PgParquetCompression,
     };
@@ -296,6 +296,45 @@ mod tests {
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
+    }
+
+    // a size turns the destination into a folder the copy creates files under, which stdout
+    // is not, so it is rejected rather than failing on the temp file that backs stdout.
+    // The copy runs via psql, since SPI does not accept a COPY TO STDOUT.
+    #[pg_test]
+    fn test_file_size_bytes_with_stdout() {
+        let output = Command::new("psql")
+            .args(["-h", "localhost", "-p", &test_pg_port()])
+            .args(["-d", "pgrx_tests", "-At"])
+            .args([
+                "-c",
+                "COPY (SELECT i FROM generate_series(1, 10) i)
+                 TO STDOUT WITH (format parquet, file_size_bytes '1MB');",
+            ])
+            .output()
+            .expect("failed to run psql");
+
+        assert!(!output.status.success(), "the copy was expected to fail");
+        assert!(output.stdout.is_empty(), "the copy wrote to stdout");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("file_size_bytes is not supported for COPY TO STDOUT."),
+            "unexpected error: {stderr}"
+        );
+    }
+
+    // same for a program, which reads what the copy streams to it rather than owning a folder
+    #[pg_test]
+    #[should_panic(expected = "file_size_bytes is not supported for COPY TO PROGRAM.")]
+    fn test_file_size_bytes_with_program() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        Spi::run(&format!(
+            "COPY (SELECT i FROM generate_series(1, 10) i)
+             TO PROGRAM 'cat > {LOCAL_TEST_FILE_PATH}' WITH (format parquet, file_size_bytes '1MB');",
+        ))
+        .unwrap();
     }
 
     #[pg_test]

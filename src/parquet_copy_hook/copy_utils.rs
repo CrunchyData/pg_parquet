@@ -85,6 +85,16 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
 
         parse_file_size(file_size_bytes)
             .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {e}"));
+
+        // the size cuts the rows into the files of a folder, so the destination has to be a uri
+        // the copy can create files under. Neither stdout nor a program is one.
+        if copy_stmt_is_std_inout(p_stmt) {
+            panic!("file_size_bytes is not supported for COPY TO STDOUT.");
+        }
+
+        if copy_stmt_program(p_stmt).is_some() {
+            panic!("file_size_bytes is not supported for COPY TO PROGRAM.");
+        }
     }
 
     let field_ids_option = copy_stmt_get_option(p_stmt, "field_ids");
