@@ -835,6 +835,108 @@ mod tests {
         assert_eq!(inner_value, (Some(3), Some(4)));
     }
 
+    // the values of a struct's field are rounded for the type of the field at the same position
+    // in the target type, so a composite type that holds its attributes in another order than
+    // the file holds its fields must not round a field's values for another field's type
+    #[pg_test]
+    fn test_coerce_struct_fields_by_name_rounds_the_matched_field() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("a", DataType::Float64, false),
+                    Field::new("b", DataType::Utf8, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![2.7]));
+        let b: ArrayRef = Arc::new(StringArray::from(vec!["hello"]));
+
+        let x = Arc::new(StructArray::try_from(vec![("a", a), ("b", b)]).unwrap());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        // the attributes are in the other order than the file's fields, and only "a" is read
+        // into an integer
+        let create_type = "CREATE TYPE test_type AS (b text, a int)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+
+        // 2.7 rounds to 3, the way float8::int4 does
+        let value =
+            Spi::get_two::<i32, &str>("SELECT (x).a, (x).b FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(3), Some("hello")));
+    }
+
+    // a struct field whose name is longer than the identifier length limit matches an attribute
+    // only once it is truncated, which is not a name arrow-cast can match, so it casts the
+    // fields of the struct by position. The target type then has to hold its fields in the order
+    // the file holds them, or the values land in the wrong attributes.
+    #[pg_test]
+    fn test_coerce_struct_fields_with_long_names_by_name() {
+        let first_name = format!("{}1_in_the_file", "a".repeat(62));
+        let truncated_first_name = format!("{}1", "a".repeat(62));
+        let second_name = format!("{}2_in_the_file", "a".repeat(62));
+        let truncated_second_name = format!("{}2", "a".repeat(62));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new(&first_name, DataType::Int32, false),
+                    Field::new(&second_name, DataType::Int32, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let first: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let second: ArrayRef = Arc::new(Int32Array::from(vec![2]));
+
+        let x = Arc::new(
+            StructArray::try_from(vec![
+                (first_name.as_str(), first),
+                (second_name.as_str(), second),
+            ])
+            .unwrap(),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        // the attributes are in the other order than the file's fields
+        let create_type = format!(
+            "CREATE TYPE test_type AS (\"{truncated_second_name}\" bigint, \
+             \"{truncated_first_name}\" bigint)"
+        );
+        Spi::run(&create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_two::<i64, i64>(&format!(
+            "SELECT (x).\"{truncated_first_name}\", (x).\"{truncated_second_name}\"
+             FROM test_table LIMIT 1"
+        ))
+        .unwrap();
+        assert_eq!(value, (Some(1), Some(2)));
+    }
+
     #[pg_test]
     fn test_coerce_list_of_struct() {
         // [STRUCT {a: UINT16, b: UINT16}] => test_type {a: int, b: bigint}[]

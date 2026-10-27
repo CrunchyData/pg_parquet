@@ -314,14 +314,14 @@ fn coercion_target(
             for (field_idx, (to_field, to_attribute)) in
                 to_fields.iter().zip(attributes.iter()).enumerate()
             {
-                let from_field = match match_by {
-                    MatchBy::Position => &from_fields[field_idx],
+                let (from_field_idx, from_field) = match match_by {
+                    MatchBy::Position => (field_idx, &from_fields[field_idx]),
 
                     // arrow-cast reorders the struct fields by name as long as all
                     // target fields are found in the file's struct
                     // the attribute names of a composite type are truncated to the identifier
                     // length limit, so the parquet field names must be truncated to match them
-                    MatchBy::Name => from_fields.iter().find(|from_field| {
+                    MatchBy::Name => from_fields.iter().enumerate().find(|(_, from_field)| {
                         truncate_identifier_like_postgres(from_field.name(), false)
                             == *to_field.name()
                     })?,
@@ -335,10 +335,25 @@ fn coercion_target(
                     match_by,
                 )?;
 
-                target_fields.push(to_field.as_ref().clone().with_data_type(target_type));
+                target_fields.push((
+                    from_field_idx,
+                    to_field.as_ref().clone().with_data_type(target_type),
+                ));
             }
 
-            Some(DataType::Struct(target_fields.into()))
+            // a target field keeps the position of the field it takes its data from, because the
+            // fields of the file's struct and the fields of the target type are lined up by
+            // position twice: arrow-cast casts them in order whenever it cannot match every
+            // target field by name, which a truncated attribute name prevents, and the rounding
+            // of the children of a struct follows the positions as well
+            target_fields.sort_by_key(|(from_field_idx, _)| *from_field_idx);
+
+            Some(DataType::Struct(
+                target_fields
+                    .into_iter()
+                    .map(|(_, target_field)| target_field)
+                    .collect::<Fields>(),
+            ))
         }
         (DataType::List(from_field), DataType::List(to_field))
         | (DataType::FixedSizeList(from_field, _), DataType::List(to_field))
