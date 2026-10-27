@@ -2308,6 +2308,117 @@ mod tests {
     }
 
     #[pg_test]
+    fn test_coerce_decimal_to_integer_rounds_up_past_its_precision() {
+        // a rounding that carries does not fit the scale of the column, e.g. DECIMAL(2,1) 9.6
+        // rounds to 10, which needs both of the digits the precision allows
+        let decimals = || {
+            Decimal128Array::from(vec![96, -96, 5, 15, 25, -5])
+                .with_precision_and_scale(2, 1)
+                .unwrap()
+        };
+
+        let element_field = Arc::new(Field::new("element", DataType::Decimal128(2, 1), true));
+        let offsets = || OffsetBuffer::new(ScalarBuffer::from(vec![0, 1, 2, 3, 4, 5, 6]));
+
+        let i = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+        let x = Arc::new(decimals());
+        let y = Arc::new(ListArray::new(
+            element_field.clone(),
+            offsets(),
+            Arc::new(decimals()),
+            None,
+        ));
+        let z =
+            Arc::new(StructArray::try_from(vec![("a", Arc::new(decimals()) as ArrayRef)]).unwrap());
+        let w = Arc::new(
+            DictionaryArray::try_new(
+                Int32Array::from(vec![0, 1, 2, 3, 4, 5]),
+                Arc::new(decimals()),
+            )
+            .unwrap(),
+        );
+        let v = Arc::new(FixedSizeListArray::new(
+            element_field.clone(),
+            1,
+            Arc::new(decimals()),
+            None,
+        ));
+
+        // the other decimal widths carry the same way
+        let u = Arc::new(
+            Decimal32Array::from(vec![96, -96, 5, 15, 25, -5])
+                .with_precision_and_scale(2, 1)
+                .unwrap(),
+        );
+        let t = Arc::new(
+            Decimal64Array::from(vec![96, -96, 5, 15, 25, -5])
+                .with_precision_and_scale(2, 1)
+                .unwrap(),
+        );
+        let s = Arc::new(
+            Decimal256Array::from(
+                [96, -96, 5, 15, 25, -5]
+                    .iter()
+                    .map(|value| i256::from_i128(*value))
+                    .collect::<Vec<_>>(),
+            )
+            .with_precision_and_scale(2, 1)
+            .unwrap(),
+        );
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, false),
+            Field::new("x", DataType::Decimal128(2, 1), false),
+            Field::new("y", DataType::List(element_field.clone()), false),
+            Field::new(
+                "z",
+                DataType::Struct(vec![Field::new("a", DataType::Decimal128(2, 1), false)].into()),
+                false,
+            ),
+            Field::new(
+                "w",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Decimal128(2, 1)),
+                ),
+                false,
+            ),
+            Field::new("v", DataType::FixedSizeList(element_field, 1), false),
+            Field::new("u", DataType::Decimal32(2, 1), false),
+            Field::new("t", DataType::Decimal64(2, 1), false),
+            Field::new("s", DataType::Decimal256(2, 1), false),
+        ]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![i, x, y, z, w, v, u, t, s]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (i int, x int, y int[], z test_type, w smallint, v bigint[], u int, t bigint, s int)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let rounded = |column: &str| {
+            Spi::get_one::<String>(&format!(
+                "SELECT string_agg({column}::text, ',' ORDER BY i) FROM test_table"
+            ))
+            .unwrap()
+        };
+
+        assert_eq!(rounded("x").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("y[1]").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("(z).a").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("w").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("v[1]").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("u").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("t").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("s").as_deref(), Some("10,-10,1,2,3,-1"));
+    }
+
+    #[pg_test]
     fn test_coerce_float_to_integer_rounds() {
         // FLOAT => {int}, rounded half to even like float8::int4 does through rint
         let floats = || vec![9.99, -9.99, 0.5, 1.5, 2.5, -0.5];

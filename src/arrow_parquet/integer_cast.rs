@@ -1,28 +1,31 @@
 use std::sync::Arc;
 
 use arrow::{
-    array::{make_array, Array, ArrayRef, AsArray, Float32Array, Float64Array},
+    array::{make_array, Array, ArrayData, ArrayRef, AsArray, Float32Array, Float64Array},
     compute::kernels::arity::unary,
     datatypes::{Float32Type, Float64Type, DECIMAL256_MAX_PRECISION},
 };
 use arrow_cast::{cast_with_options, CastOptions};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, FieldRef};
 
 // round_for_integer_cast pre-rounds the values of a column that is about to be cast to an integer
 // type. arrow's decimal and float to integer casts truncate toward zero, but PostgreSQL's casts
 // round, so the cast is handed values that are already integral. A decimal is rounded by rescaling
 // it to scale 0, which rounds half away from zero like numeric::int4 does, and a float is rounded
-// half to even, like float8::int4 does through rint. A rounded value keeps the type of its column,
-// and the target type is followed into lists, maps and structs, so that the elements of an array
-// column round the same way.
+// half to even, like float8::int4 does through rint. A rounded decimal keeps the width and the
+// precision of its column at scale 0, since a carry out of the rounding does not fit its own
+// scale, and the target type is followed into lists, maps and structs, so that the elements of an
+// array column round the same way.
 pub(crate) fn round_for_integer_cast(array: &ArrayRef, target_type: &DataType) -> ArrayRef {
     match (array.data_type(), target_type) {
         (source, target) if target.is_integer() && decimal_scale(source).unwrap_or(0) > 0 => {
-            // the widest decimal type holds any value rescaled to scale 0, and the way back to
-            // the type of the column cannot overflow it, since the value only lost digits
+            // the widest decimal type holds any value rescaled to scale 0, and the way back to the
+            // decimal type of the column at scale 0 cannot overflow it: the integral part of the
+            // value has at most precision - scale digits, so a carry out of the rounding still
+            // fits in precision digits
             let integral = cast_to(array, &DataType::Decimal256(DECIMAL256_MAX_PRECISION, 0));
 
-            cast_to(&integral, source)
+            cast_to(&integral, &decimal_at_scale_0(source))
         }
         (DataType::Float16, target) if target.is_integer() => {
             // f16 has no rounding method of its own. widening it to f32 is lossless, and an
@@ -64,8 +67,8 @@ pub(crate) fn round_for_integer_cast(array: &ArrayRef, target_type: &DataType) -
 }
 
 // with_rounded_children rebuilds array with each of its children rounded for the target type at
-// the same position. A rounded child keeps its type, its length and its place, so the type, the
-// offsets and the nulls of the array stay valid.
+// the same position. A rounded child keeps its length and its place, so the offsets and the nulls
+// of the array stay valid, and the type of the array follows the types of its rounded children.
 fn with_rounded_children(array: &ArrayRef, child_targets: &[&DataType]) -> ArrayRef {
     let array_data = array.to_data();
 
@@ -85,13 +88,48 @@ fn with_rounded_children(array: &ArrayRef, child_targets: &[&DataType]) -> Array
         return array.clone();
     }
 
+    let rounded_type = with_child_types(array.data_type(), &rounded_children);
+
     let rounded_data = array_data
         .into_builder()
+        .data_type(rounded_type)
         .child_data(rounded_children)
         .build()
         .unwrap_or_else(|e| panic!("failed to round the values of a column: {e}"));
 
     make_array(rounded_data)
+}
+
+// with_child_types is the container type whose child fields carry the types of the rounded
+// children, which a rounding that rescales a decimal to scale 0 changes.
+fn with_child_types(data_type: &DataType, children: &[ArrayData]) -> DataType {
+    let retyped = |field: &FieldRef, position: usize| {
+        let child_type = match children.get(position) {
+            Some(child) => child.data_type().clone(),
+            None => return field.clone(),
+        };
+
+        Arc::new(field.as_ref().clone().with_data_type(child_type))
+    };
+
+    match data_type {
+        DataType::Struct(fields) => DataType::Struct(
+            fields
+                .iter()
+                .enumerate()
+                .map(|(position, field)| retyped(field, position))
+                .collect(),
+        ),
+        DataType::List(field) => DataType::List(retyped(field, 0)),
+        DataType::LargeList(field) => DataType::LargeList(retyped(field, 0)),
+        DataType::ListView(field) => DataType::ListView(retyped(field, 0)),
+        DataType::LargeListView(field) => DataType::LargeListView(retyped(field, 0)),
+        DataType::FixedSizeList(field, length) => {
+            DataType::FixedSizeList(retyped(field, 0), *length)
+        }
+        DataType::Map(field, sorted) => DataType::Map(retyped(field, 0), *sorted),
+        other => other.clone(),
+    }
 }
 
 // element_type is the type of the only child of a container type.
@@ -104,6 +142,17 @@ fn element_type(data_type: &DataType) -> Option<&DataType> {
         | DataType::FixedSizeList(field, _)
         | DataType::Map(field, _) => Some(field.data_type()),
         _ => None,
+    }
+}
+
+// decimal_at_scale_0 is the decimal type of the same width and precision, at scale 0.
+fn decimal_at_scale_0(data_type: &DataType) -> DataType {
+    match data_type {
+        DataType::Decimal32(precision, _) => DataType::Decimal32(*precision, 0),
+        DataType::Decimal64(precision, _) => DataType::Decimal64(*precision, 0),
+        DataType::Decimal128(precision, _) => DataType::Decimal128(*precision, 0),
+        DataType::Decimal256(precision, _) => DataType::Decimal256(*precision, 0),
+        other => other.clone(),
     }
 }
 
