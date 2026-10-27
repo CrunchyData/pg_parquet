@@ -96,6 +96,12 @@ const FIRST_BLOCK_PLACEHOLDER: &str = "@FIRST_BLOCK@";
 const LAST_BLOCK_PLACEHOLDER: &str = "@LAST_BLOCK@";
 const PART_URI_PLACEHOLDER: &str = "@PART_URI@";
 
+const PLACEHOLDERS: [&str; 3] = [
+    FIRST_BLOCK_PLACEHOLDER,
+    LAST_BLOCK_PLACEHOLDER,
+    PART_URI_PLACEHOLDER,
+];
+
 // options the per range COPY statement renders as a bare number, since defGetInt64,
 // defGetInt32 and defGetNumeric all reject a string argument
 const NUMBER_VALUED_COPY_TO_OPTIONS: [&str; 3] =
@@ -1156,6 +1162,24 @@ fn render_range_copy_to_statement(
 
         cstr_to_string(relation_name)
     };
+
+    // the placeholders are filled in by replacing their text in the rendered statement, so a
+    // column, a relation, a schema or an option value whose name holds the text of one would
+    // be replaced along with them and rewrite the statement into a command of its own. Such a
+    // copy is left to the single process path.
+    if [
+        attributes.as_str(),
+        relation_name.as_str(),
+        options.as_str(),
+    ]
+    .iter()
+    .any(|rendered| {
+        PLACEHOLDERS
+            .iter()
+            .any(|placeholder| rendered.contains(placeholder))
+    }) {
+        return None;
+    }
 
     // ONLY matches what the single process path does, which builds the SELECT without the
     // inheritance flag for a plain relation, so an inheritance child is not copied along
