@@ -288,10 +288,13 @@ mod tests {
     }
 
     // split_file_names is the names of the files a copy with file_size_bytes wrote into the
-    // folder it was given
+    // folder it was given. A copy that wrote no file left no folder behind either.
     fn split_file_names(folder: &str) -> Vec<String> {
-        let mut names = std::fs::read_dir(folder)
-            .unwrap()
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return vec![];
+        };
+
+        let mut names = entries
             .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
             .collect::<Vec<_>>();
 
@@ -909,6 +912,58 @@ mod tests {
             parallel_files.len(),
             sequential_files.len()
         );
+
+        // a file is created by the row that goes into it, so none of them holds no rows
+        for name in &parallel_files {
+            assert!(
+                file_metadata(&format!("{parallel_folder}/{name}")).0 > 0,
+                "{name} holds no rows"
+            );
+        }
+    }
+
+    // a range that finds no row of its own writes no file, so a folder destination never holds
+    // a file of no rows. The rows of the table are deleted by the transaction of the test, so
+    // the blocks that held them are still there for the ranges to claim while no range finds a
+    // row it can see.
+    #[pg_test]
+    fn test_parallel_copy_to_file_size_bytes_empty_ranges() {
+        let sequential_folder = "/tmp/pg_parquet_test_split_empty_sequential";
+        let parallel_folder = "/tmp/pg_parquet_test_split_empty_parallel";
+
+        let _sequential_folder = FileCleanup::new(sequential_folder);
+        let _parallel_folder = FileCleanup::new(parallel_folder);
+        let _file = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        create_wide_table();
+
+        Spi::run("DELETE FROM wide_table;").unwrap();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 0;").unwrap();
+        Spi::run(&format!(
+            "COPY wide_table TO '{sequential_folder}'
+             WITH (format parquet, file_size_bytes '1MB');"
+        ))
+        .unwrap();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 4;").unwrap();
+        Spi::run(&format!(
+            "COPY wide_table TO '{parallel_folder}'
+             WITH (format parquet, file_size_bytes '1MB');"
+        ))
+        .unwrap();
+
+        assert_eq!(split_file_names(sequential_folder), Vec::<String>::new());
+        assert_eq!(split_file_names(parallel_folder), Vec::<String>::new());
+
+        // a copy that writes a single file still writes it, since that file is the destination
+        // the command names rather than a file one of its ranges needed
+        Spi::run(&format!(
+            "COPY wide_table TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert_eq!(file_metadata(LOCAL_TEST_FILE_PATH).0, 0);
     }
 
     #[pg_test]

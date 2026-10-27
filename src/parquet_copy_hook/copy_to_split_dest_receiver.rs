@@ -230,7 +230,14 @@ extern "C-unwind" fn copy_split_startup(
     // update the parquet split dest receiver's missing fields
     split_parquet_dest.operation = operation;
     split_parquet_dest.tupledesc = tupledesc;
-    split_parquet_dest.create_new_child();
+
+    // a copy that writes a single file creates it up front, since that file is the
+    // destination itself and is written even when the copy finds no row. A copy that cuts its
+    // rows into the files of a folder creates a file on the first row that goes into it, so
+    // that it leaves no empty file behind.
+    if split_parquet_dest.options.file_size_bytes == INVALID_FILE_SIZE_BYTES {
+        split_parquet_dest.create_new_child();
+    }
 }
 
 #[pg_guard]
