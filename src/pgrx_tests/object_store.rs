@@ -10,7 +10,9 @@ mod tests {
         object_store::{
             client_options::load_client_options, object_store_error_message, proxy_hint,
         },
-        pgrx_tests::common::{copy_to_helper, CopyOptionValue, TestTable},
+        pgrx_tests::common::{
+            copy_to_helper, CopyOptionValue, FileCleanup, TestTable, LOCAL_TEST_FILE_PATH,
+        },
     };
 
     fn object_store_cache_clear() {
@@ -1380,5 +1382,33 @@ mod tests {
                 ("MicrosoftAzure", "testcontainer2", None)
             ]
         );
+    }
+
+    // a write that fails names the path it failed on, which the os error alone does not say
+    #[pg_test]
+    #[should_panic(
+        expected = "is a file, so \"/tmp/pg_parquet_test.parquet/data_0.parquet\" cannot be created under it"
+    )]
+    fn test_local_file_under_a_file_names_the_path() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        // the destination itself is written as a file first, so that the copy below finds a
+        // file where it needs a folder, which is what a copy with file_size_bytes runs into
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{LOCAL_TEST_FILE_PATH}/data_0.parquet'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "failed to create the file \"/tmp\"")]
+    fn test_local_file_that_is_a_folder_names_the_path() {
+        Spi::run("COPY (SELECT 1 AS a) TO '/tmp' WITH (format parquet);").unwrap();
     }
 }

@@ -20,15 +20,26 @@ pub(crate) fn create_local_file_object_store(
             .parent()
             .unwrap_or_else(|| panic!("invalid parent for path: {path}"));
 
-        std::fs::create_dir_all(parent).unwrap_or_else(|e| panic!("{}", e));
+        std::fs::create_dir_all(parent).unwrap_or_else(|e| {
+            // a folder destination, which is what file_size_bytes writes, is the parent of the
+            // files of the copy, so this is also how a path that is already a file is reported
+            if parent.is_file() {
+                panic!(
+                    "\"{}\" is a file, so \"{path}\" cannot be created under it",
+                    parent.display()
+                );
+            }
+
+            panic!("failed to create the folder \"{}\": {e}", parent.display());
+        });
 
         // create or overwrite the local file
         std::fs::OpenOptions::new()
             .write(true)
             .truncate(true)
             .create(true)
-            .open(path)
-            .unwrap_or_else(|e| panic!("{}", e));
+            .open(&path)
+            .unwrap_or_else(|e| panic!("failed to create the file \"{path}\": {e}"));
     }
 
     let object_store = LocalFileSystem::new();
