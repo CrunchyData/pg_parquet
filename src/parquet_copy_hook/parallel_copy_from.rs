@@ -323,11 +323,29 @@ impl ParallelCopyFromSource {
 
             // a worker detaches once it closed every row group it was given, so it is only
             // gone too early if one of its row groups is still expected
-            assert!(
-                self.closed_row_groups[worker]
-                    >= row_groups_of_worker(self.nrowgroups, worker, self.handles.len()),
-                "parallel COPY FROM worker exited before it read every row group it was given"
-            );
+            if self.closed_row_groups[worker]
+                < row_groups_of_worker(self.nrowgroups, worker, self.handles.len())
+            {
+                // a worker that gave up reports why through the error queue of the parallel
+                // context, which it writes to before it detaches this queue. PG re-throws
+                // what is in there, which is the error the copy has to fail with. It is
+                // asked for here rather than left to the next interrupt check, because the
+                // queue only has to be read for the leader to find the error, and the signal
+                // that the worker sent along with it does not have to have arrived yet.
+                // postgres 18 renamed HandleParallelMessages() to ProcessParallelMessages()
+                #[cfg(any(feature = "pg18", feature = "pg19"))]
+                unsafe {
+                    pg_sys::ProcessParallelMessages()
+                };
+                #[cfg(not(any(feature = "pg18", feature = "pg19")))]
+                unsafe {
+                    pg_sys::HandleParallelMessages()
+                };
+
+                panic!(
+                    "parallel COPY FROM worker exited before it read every row group it was given"
+                );
+            }
 
             return false;
         }
