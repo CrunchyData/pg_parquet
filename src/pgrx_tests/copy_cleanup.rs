@@ -19,6 +19,10 @@ mod tests {
     const FAILED_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test_cleanup_failed.parquet";
     const CANCELLED_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test_cleanup_cancelled.parquet";
     const TERMINATED_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test_cleanup_terminated.parquet";
+    const CONTROL_TEST_FOLDER_PATH: &str = "/tmp/pg_parquet_test_cleanup_control_folder";
+    const FAILED_TEST_FOLDER_PATH: &str = "/tmp/pg_parquet_test_cleanup_failed_folder";
+    const CANCELLED_TEST_FOLDER_PATH: &str = "/tmp/pg_parquet_test_cleanup_cancelled_folder";
+    const UNREMOVABLE_TEST_FOLDER_PATH: &str = "/tmp/pg_parquet_test_cleanup_unremovable_folder";
 
     // object_store writes a destination with a single put until the copy of it is larger than
     // the 10 MiB it buffers, and starts an upload the rest of the copy is staged into past
@@ -27,6 +31,19 @@ mod tests {
     // interrupted: the buffer fills over the whole copy and not over a single row group.
     const INTERRUPTED_COPY_ROW_GROUP_SIZE: i64 = 20_000;
     const OBJECT_STORE_BUFFER_SIZE: u64 = 10 * 1024 * 1024;
+
+    // a copy with file_size_bytes cuts its rows into the files of a folder, and only cuts them
+    // where a row group was written, so the split copies below write their row groups well
+    // under the smallest file size the option takes. The table they copy is large enough to
+    // fill several of those files before the copy reaches the row it fails on.
+    const SPLIT_COPY_ROW_GROUP_SIZE: i64 = 1_000;
+    const SPLIT_COPY_FILE_SIZE_BYTES: &str = "1MB";
+    const SPLIT_COPY_TABLE_ROWS: i64 = 40_000;
+
+    // how many files a split copy is let finish before it is interrupted, so that the files it
+    // finished are what the interruption leaves to give up and not only the file it is in the
+    // middle of
+    const FINISHED_FOLDER_FILES: usize = 2;
 
     // staged_upload_files are the files object_store stages the upload of a local destination
     // into, which it names after the destination, and which a copy that completed its upload
@@ -385,6 +402,267 @@ mod tests {
         assert!(
             output.contains("terminating connection due to administrator command"),
             "the copy was not terminated while it was still running: {output}"
+        );
+    }
+
+    // folder_files are the files the copy wrote into its folder destination, which is every
+    // file in it: the folder is cleaned before the copy that fills it runs
+    fn folder_files(folder: &str) -> Vec<String> {
+        // a copy that created no file at all left no folder behind either
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return Vec::new();
+        };
+
+        let mut files = entries
+            .map(|entry| {
+                entry
+                    .expect("failed to read an entry of the folder destination")
+                    .file_name()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        files.sort();
+        files
+    }
+
+    // clean_folder removes what an earlier run of the test left in the folder destination,
+    // which a stale file would be taken for one the copy of this test left behind. The folder
+    // is removed again when the test ends.
+    fn clean_folder(folder: &str) -> FileCleanup {
+        let _ = std::fs::remove_dir_all(folder);
+
+        FileCleanup::new(folder)
+    }
+
+    // create_split_copy_table creates the table the split copies below read. Its payload is
+    // random, since a payload the compression of the parquet writer shrinks away would leave
+    // the copy of it too small to be cut into several files.
+    fn create_split_copy_table(table: &str) {
+        Spi::run(&format!(
+            "CREATE TABLE {table} (id bigint, payload text, unwritable numeric);
+             INSERT INTO {table} (id, payload)
+             SELECT g, md5(random()::text) || md5(random()::text) ||
+                       md5(random()::text) || md5(random()::text) ||
+                       md5(random()::text) || md5(random()::text) ||
+                       md5(random()::text) || md5(random()::text)
+             FROM generate_series(1, {SPLIT_COPY_TABLE_ROWS}) g;"
+        ))
+        .unwrap();
+    }
+
+    // a copy with file_size_bytes writes the files of a folder, and the folder is what it was
+    // asked to write rather than any file in it, so a copy that fails in the middle has every
+    // file it created to give up, the ones it finished writing included
+    #[pg_test]
+    fn test_split_copy_to_gives_up_its_folder_when_it_fails() {
+        let _control_folder = clean_folder(CONTROL_TEST_FOLDER_PATH);
+        let _test_folder = clean_folder(FAILED_TEST_FOLDER_PATH);
+
+        let table = "failing_split_copy_table";
+        create_split_copy_table(table);
+
+        // the participants of a parallel copy fill the files of a folder without knowing of
+        // each other, and how far each of them got before the copy failed is up to the
+        // scheduler, so the copies below are pinned to a single process
+        Spi::run("SET pg_parquet.max_parallel_workers TO 0;").unwrap();
+
+        // what the assertion at the end rests on: a copy of this table fills several files of
+        // the folder, so that the failing copy has files it finished writing to give up and
+        // not only the file it was in the middle of
+        Spi::run(&format!(
+            "COPY {table} TO '{CONTROL_TEST_FOLDER_PATH}'
+             WITH (format parquet, row_group_size {SPLIT_COPY_ROW_GROUP_SIZE},
+                   file_size_bytes '{SPLIT_COPY_FILE_SIZE_BYTES}');"
+        ))
+        .unwrap();
+
+        let control_files = folder_files(CONTROL_TEST_FOLDER_PATH);
+
+        assert!(
+            control_files.len() > 1,
+            "a copy of {table} wrote {control_files:?}, which is not several files: a larger \
+             table or a smaller file_size_bytes would fix this"
+        );
+
+        // the last row of the table carries a numeric the parquet schema cannot hold, so the
+        // copy fails at the end of the table, by which point it has filled most of the folder
+        Spi::run(&format!(
+            "INSERT INTO {table} (id, unwritable) VALUES (-1, repeat('9', 40)::numeric);"
+        ))
+        .unwrap();
+
+        // the error is caught in plpgsql rather than by the test, so that the session that ran
+        // the copy is still there when what it left behind is looked at
+        Spi::run(&format!(
+            "CREATE FUNCTION failing_split_copy_to() RETURNS text
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 BEGIN
+                     EXECUTE 'COPY {table} TO ''{FAILED_TEST_FOLDER_PATH}''
+                              WITH (format parquet,
+                                    row_group_size {SPLIT_COPY_ROW_GROUP_SIZE},
+                                    file_size_bytes ''{SPLIT_COPY_FILE_SIZE_BYTES}'')';
+
+                     RETURN 'no error';
+                 EXCEPTION WHEN others THEN
+                     RETURN SQLERRM;
+                 END;
+             END;
+             $$;"
+        ))
+        .unwrap();
+
+        let error = Spi::get_one::<String>("SELECT failing_split_copy_to()")
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            error.contains("exceeds max allowed integral digits"),
+            "the copy reported \"{error}\" instead"
+        );
+
+        assert_eq!(
+            folder_files(FAILED_TEST_FOLDER_PATH),
+            Vec::<String>::new(),
+            "the copy that failed left its files in the folder it was writing"
+        );
+    }
+
+    // split_copy_in_another_session starts a COPY TO of the given table into the given folder
+    // in a session of its own, and waits until the copy has files it finished writing. It
+    // returns the session together with the pid of the backend running the copy, which is what
+    // an interruption is sent to.
+    fn split_copy_in_another_session(table: &str, folder: &str) -> (Child, i32) {
+        let port = test_pg_port();
+
+        let mut copy = Command::new("psql")
+            .args(["-h", "localhost", "-p", &port, "-d", "pgrx_tests", "-At"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to run psql");
+
+        let stdin = copy.stdin.as_mut().expect("psql took no input");
+        writeln!(stdin, "SET pg_parquet.max_parallel_workers TO 0;")
+            .and_then(|()| {
+                writeln!(
+                    stdin,
+                    "COPY {table} TO '{folder}'
+                     WITH (format parquet, row_group_size {SPLIT_COPY_ROW_GROUP_SIZE},
+                           file_size_bytes '{SPLIT_COPY_FILE_SIZE_BYTES}');"
+                )
+            })
+            .and_then(|()| stdin.flush())
+            .expect("failed to send the copy to psql");
+
+        let copy_pid = copy_pid(table);
+        wait_for_folder_files(folder, FINISHED_FOLDER_FILES);
+
+        (copy, copy_pid)
+    }
+
+    // wait_for_folder_files waits until the copy has cut the given number of files out of its
+    // rows, which is where interrupting it is worth something
+    fn wait_for_folder_files(folder: &str, wanted: usize) {
+        let deadline = Instant::now() + COPY_START_TIMEOUT;
+
+        loop {
+            let files = folder_files(folder);
+
+            if files.len() >= wanted {
+                return;
+            }
+
+            assert!(
+                Instant::now() < deadline,
+                "the copy wrote {files:?} into \"{folder}\" after {} seconds",
+                COPY_START_TIMEOUT.as_secs()
+            );
+
+            Spi::run("SELECT pg_sleep(0.01);").unwrap();
+        }
+    }
+
+    // a cancel is the interruption a running copy is most likely to meet, and the folder of a
+    // cancelled copy holds as little of what it wrote as the folder of a failed one
+    #[pg_test]
+    fn test_split_copy_to_gives_up_its_folder_after_a_cancel() {
+        let _test_folder = clean_folder(CANCELLED_TEST_FOLDER_PATH);
+
+        let table = "cancelled_split_copy_table";
+        create_interruptible_table(table);
+
+        let (copy, copy_pid) = split_copy_in_another_session(table, CANCELLED_TEST_FOLDER_PATH);
+
+        let cancelled = Spi::get_one::<bool>(&format!("SELECT pg_cancel_backend({copy_pid})"))
+            .unwrap()
+            .unwrap();
+        assert!(cancelled, "the backend running the copy took no cancel");
+
+        // the session is still there while the folder is looked at, so what emptied it is the
+        // copy's own cleanup rather than the sweep a session runs when it exits
+        wait_for_session_state(copy_pid, "idle");
+
+        assert_eq!(
+            folder_files(CANCELLED_TEST_FOLDER_PATH),
+            Vec::<String>::new(),
+            "the copy that was cancelled left its files in the folder it was writing"
+        );
+
+        let output = copy_session_output(copy);
+        drop_interruptible_table(table);
+
+        assert!(
+            output.contains("canceling statement due to user request"),
+            "the copy was not cancelled while it was still running: {output}"
+        );
+    }
+
+    // a file the cleanup cannot remove stays in the folder for good, so the session that asked
+    // for the copy is told which file that is rather than left to find it
+    #[pg_test]
+    fn test_split_copy_to_reports_a_file_it_cannot_remove() {
+        let _test_folder = clean_folder(UNREMOVABLE_TEST_FOLDER_PATH);
+
+        let table = "unremovable_split_copy_table";
+        create_interruptible_table(table);
+
+        let (copy, copy_pid) = split_copy_in_another_session(table, UNREMOVABLE_TEST_FOLDER_PATH);
+
+        // the first file is finished by now, since the copy is already past it, so a folder is
+        // put in its place: the cleanup removes a file of the copy and a folder is not one
+        let unremovable = "data_0.parquet";
+        let unremovable_path = format!("{UNREMOVABLE_TEST_FOLDER_PATH}/{unremovable}");
+        std::fs::remove_file(&unremovable_path).expect("the copy finished no first file");
+        std::fs::create_dir(&unremovable_path).expect("failed to take the place of the file");
+
+        let cancelled = Spi::get_one::<bool>(&format!("SELECT pg_cancel_backend({copy_pid})"))
+            .unwrap()
+            .unwrap();
+        assert!(cancelled, "the backend running the copy took no cancel");
+
+        wait_for_session_state(copy_pid, "idle");
+
+        // the file it could not remove is the only thing the cleanup left, so a failure on one
+        // file does not stop it from removing the rest
+        assert_eq!(
+            folder_files(UNREMOVABLE_TEST_FOLDER_PATH),
+            vec![unremovable.to_string()]
+        );
+
+        let output = copy_session_output(copy);
+        drop_interruptible_table(table);
+
+        assert!(
+            output.contains("failed to remove the files of the COPY TO"),
+            "the cleanup did not report the file it could not remove: {output}"
+        );
+        assert!(
+            output.contains(unremovable),
+            "the report of the cleanup does not name {unremovable}: {output}"
         );
     }
 }

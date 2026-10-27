@@ -9,15 +9,22 @@ use parquet::file::properties::DEFAULT_BLOOM_FILTER_FPP;
 use pg_sys::{AsPgCStr, CommandDest, DestReceiver, TupleDesc, TupleTableSlot};
 use pgrx::prelude::*;
 
-use crate::arrow_parquet::{
-    column_selection::{DEFAULT_BLOOM_FILTER, DEFAULT_DICTIONARY},
-    compression::{PgParquetCompression, INVALID_COMPRESSION_LEVEL},
-    field_ids::FieldIds,
-    parquet_version::ParquetVersion,
-    parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
+use crate::{
+    arrow_parquet::{
+        column_selection::{DEFAULT_BLOOM_FILTER, DEFAULT_DICTIONARY},
+        compression::{PgParquetCompression, INVALID_COMPRESSION_LEVEL},
+        field_ids::FieldIds,
+        parquet_version::ParquetVersion,
+        parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
+        uri_utils::ParsedUriInfo,
+    },
+    object_store::object_store_cache::get_or_create_object_store,
 };
 
 use super::{
+    copy_cleanup::{
+        finish_unfinished_write, give_up_unfinished_write, register_folder_file, CleanupId,
+    },
     copy_progress::{update_copy_to_progress, update_copy_to_tuples_progress},
     copy_to_dest_receiver::{create_copy_to_parquet_dest_receiver, CopyToParquetDestReceiver},
 };
@@ -67,6 +74,10 @@ struct CopyToParquetSplitDestReceiver {
     current_child_receiver: *mut CopyToParquetDestReceiver,
     tuples_processed: i64,
     bytes_written_by_flushed_children: i64,
+    // the files this copy wrote into a folder destination, as the cleanup of the copy holds
+    // them. None for a copy that has not created a file, or that finished and handed the
+    // files it wrote over to the folder.
+    folder_files: Option<CleanupId>,
 }
 
 #[repr(C)]
@@ -88,6 +99,7 @@ impl CopyToParquetSplitDestReceiver {
     fn create_new_child(&mut self) {
         // create a new child receiver
         let child_uri = self.create_uri_for_child();
+        self.register_folder_file(child_uri);
         self.current_child_receiver = create_copy_to_parquet_dest_receiver(
             child_uri,
             self.program,
@@ -202,16 +214,53 @@ impl CopyToParquetSplitDestReceiver {
         child_uri.to_str().expect("invalid uri").as_pg_cstr()
     }
 
-    fn cleanup(&mut self) {
-        if self.current_child_receiver.is_null() {
+    // register_folder_file adds the file the new child writes to what this copy gives up when
+    // it does not finish. Only a folder destination has files to register: the single file a
+    // copy without file_size_bytes writes is the destination itself, and giving it up would be
+    // giving the destination up.
+    fn register_folder_file(&mut self, child_uri: *const c_char) {
+        if self.options.file_size_bytes == INVALID_FILE_SIZE_BYTES {
             return;
         }
 
-        let mut child_parquet_dest = unsafe {
-            PgBox::<CopyToParquetDestReceiver>::from_pg(self.current_child_receiver as _)
-        };
+        let child_uri = unsafe { CStr::from_ptr(child_uri) }
+            .to_str()
+            .expect("invalid uri");
 
-        child_parquet_dest.cleanup();
+        let uri_info = ParsedUriInfo::try_from(child_uri).unwrap_or_else(|e| panic!("{e}"));
+
+        // the store is resolved here rather than where the file is given up, which runs while
+        // an error is unwinding and cannot afford to throw. It is resolved the way a read
+        // does, so that resolving it does not create the file the child creates itself.
+        let copy_from = true;
+        let (store, path) = get_or_create_object_store(&uri_info, copy_from);
+
+        self.folder_files = Some(register_folder_file(self.folder_files, store, path));
+    }
+
+    // keep_folder_files hands the files over to the folder the copy was asked to fill, which
+    // is what the files are once the copy is done writing them
+    fn keep_folder_files(&mut self) {
+        if let Some(folder_files) = self.folder_files.take() {
+            finish_unfinished_write(folder_files);
+        }
+    }
+
+    fn cleanup(&mut self) {
+        if !self.current_child_receiver.is_null() {
+            let mut child_parquet_dest = unsafe {
+                PgBox::<CopyToParquetDestReceiver>::from_pg(self.current_child_receiver as _)
+            };
+
+            child_parquet_dest.cleanup();
+        }
+
+        // a copy that finished handed its files over, so what is still registered here was
+        // written by a copy that did not: the files are removed after the writer of the one
+        // the copy was in the middle of has let go of it
+        if let Some(folder_files) = self.folder_files.take() {
+            give_up_unfinished_write(folder_files);
+        }
     }
 }
 
@@ -287,6 +336,9 @@ extern "C-unwind" fn copy_split_shutdown(dest: *mut DestReceiver) {
 
     // the footers are written by now, so the reported bytes are final
     split_parquet_dest.report_progress();
+
+    // the copy is through its rows, so the files it wrote are the folder it was asked to fill
+    split_parquet_dest.keep_folder_files();
 }
 
 #[pg_guard]
@@ -405,6 +457,7 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
     split_dest.current_child_id = 0;
     split_dest.tuples_processed = 0;
     split_dest.bytes_written_by_flushed_children = 0;
+    split_dest.folder_files = None;
 
     unsafe { std::mem::transmute(split_dest) }
 }
