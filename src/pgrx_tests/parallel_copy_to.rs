@@ -1020,6 +1020,70 @@ mod tests {
         assert_eq!(diff, 0);
     }
 
+    // the per range statement leaves placeholders for the range bounds and the part uri,
+    // which the participant that claims the range fills in by replacing their text. A name
+    // or an option value of the command that holds the text of a placeholder is replaced
+    // along with them unless the copy keeps the single process path.
+    #[pg_test]
+    fn test_parallel_copy_to_names_holding_a_placeholder() {
+        create_wide_table();
+
+        Spi::run("ALTER TABLE wide_table RENAME COLUMN payload TO \"@PART_URI@\";").unwrap();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 4;").unwrap();
+
+        // the attribute list holds the text of a placeholder
+        {
+            let _file = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+            Spi::run(&format!(
+                "COPY wide_table (\"@PART_URI@\") TO '{LOCAL_TEST_FILE_PATH}'
+                 WITH (format parquet);"
+            ))
+            .unwrap();
+
+            assert_eq!(file_metadata(LOCAL_TEST_FILE_PATH).0, WIDE_TABLE_ROWS);
+            assert_eq!(part_files(LOCAL_TEST_FILE_PATH), Vec::<String>::new());
+        }
+
+        // an option value holds the text of a placeholder, while the command names no column
+        {
+            let _file = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+            Spi::run(&format!(
+                "COPY wide_table TO '{LOCAL_TEST_FILE_PATH}'
+                 WITH (format parquet,
+                       field_ids '{{\"id\": 1, \"name\": 2, \"amount\": 3, \"created_at\": 4,
+                                    \"flag\": 5, \"@PART_URI@\": 6}}');"
+            ))
+            .unwrap();
+
+            assert_eq!(file_metadata(LOCAL_TEST_FILE_PATH).0, WIDE_TABLE_ROWS);
+            assert_eq!(part_files(LOCAL_TEST_FILE_PATH), Vec::<String>::new());
+        }
+
+        // the schema and the relation hold the text of a placeholder
+        {
+            let _file = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+            Spi::run(
+                "CREATE SCHEMA \"s@LAST_BLOCK@\";
+                 ALTER TABLE wide_table SET SCHEMA \"s@LAST_BLOCK@\";
+                 ALTER TABLE \"s@LAST_BLOCK@\".wide_table RENAME TO \"t@FIRST_BLOCK@\";",
+            )
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY \"s@LAST_BLOCK@\".\"t@FIRST_BLOCK@\" TO '{LOCAL_TEST_FILE_PATH}'
+                 WITH (format parquet);"
+            ))
+            .unwrap();
+
+            assert_eq!(file_metadata(LOCAL_TEST_FILE_PATH).0, WIDE_TABLE_ROWS);
+            assert_eq!(part_files(LOCAL_TEST_FILE_PATH), Vec::<String>::new());
+        }
+    }
+
     // a COPY TO that the parallel path cannot handle still has to write every row, through
     // the single process path
     #[pg_test]
