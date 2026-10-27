@@ -191,7 +191,8 @@ pub(crate) fn execute_copy_from(
 
         // the row groups of the file can be decoded by parallel workers, which hand the rows
         // to this backend, the only one of them that may write into the relation
-        let is_parallel = try_parallel_copy_from(p_stmt, &uri_info, &relation, match_by);
+        let is_parallel =
+            try_parallel_copy_from(p_stmt, &uri_info, &relation, match_by, where_clause);
 
         if !is_parallel {
             // parquet reader context is used throughout the COPY FROM operation.
