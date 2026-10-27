@@ -423,6 +423,42 @@ mod tests {
             assert_eq!(count("domain_table"), WIDE_TABLE_ROWS);
         }
 
+        // an attribute whose type holds that domain inside an array or inside a composite,
+        // which the receive function of the array and of the composite reach for every value
+        // they hold, the same way the domain's own receive function does
+        {
+            let nested_domain_file = "/tmp/pg_parquet_test_parallel_from_nested_domain.parquet";
+            let _file = FileCleanup::new(nested_domain_file);
+
+            Spi::run("CREATE TYPE domain_pair AS (first positive_id, second text);").unwrap();
+
+            Spi::run("CREATE TABLE nested_domain_table (ids positive_id[], pair domain_pair);")
+                .unwrap();
+
+            // the rows are written by a copy of its own, so that the file holds a value for
+            // every attribute and the receive functions are reached for all of them
+            Spi::run(
+                "INSERT INTO nested_domain_table
+                 SELECT ARRAY[g], ROW(g, 'second')::domain_pair FROM generate_series(1, 1000) g;",
+            )
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY nested_domain_table TO '{nested_domain_file}'
+                 WITH (format parquet, row_group_size 100);"
+            ))
+            .unwrap();
+
+            Spi::run("TRUNCATE nested_domain_table;").unwrap();
+
+            Spi::run(&format!(
+                "COPY nested_domain_table FROM '{nested_domain_file}' WITH (format parquet);"
+            ))
+            .unwrap();
+
+            assert_eq!(count("nested_domain_table"), 1000);
+        }
+
         // a WHERE clause calling such a function, which the process that holds the command
         // evaluates for every row the workers hand it
         {

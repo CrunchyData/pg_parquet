@@ -8,7 +8,8 @@ use pgrx::{
     pg_sys::{
         self, dsm_segment, pg_atomic_init_u32, pg_atomic_read_u32, pg_atomic_uint32,
         pg_atomic_write_u32, shm_mq, shm_mq_handle, shm_mq_iovec, shm_mq_result, shm_toc, Node,
-        PlannedStmt, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP, TYPTYPE_DOMAIN,
+        Oid, PlannedStmt, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP,
+        TYPTYPE_COMPOSITE, TYPTYPE_DOMAIN, TYPTYPE_MULTIRANGE, TYPTYPE_RANGE,
     },
     PgBox, PgMemoryContexts, PgRelation, PgTupleDesc,
 };
@@ -28,6 +29,7 @@ use crate::{
         },
     },
     parquet_udfs::list::list_uri,
+    pgrx_utils::tuple_desc,
 };
 
 use super::parallel_copy_to::requested_parallel_workers;
@@ -738,17 +740,51 @@ fn parallel_copy_from_is_eligible(
     let tupledesc = relation.tuple_desc();
 
     tupledesc.iter().all(|attribute| {
-        // the constraints of a domain are evaluated by the leader too, but they are reached
-        // through the type cache rather than through the relation, so a domain typed column
-        // is left to the single process path whether it carries a volatile constraint or not
-        let is_domain =
-            unsafe { pg_sys::get_typtype(attribute.atttypid) } == TYPTYPE_DOMAIN as c_char;
-
         !attribute.atthasdef
             && attribute.attidentity == 0
             && attribute.attgenerated == 0
-            && !is_domain
+            && !type_contains_domain(attribute.atttypid)
     })
+}
+
+// type_contains_domain is whether a value of the type can carry the constraints of a domain.
+// Those constraints are evaluated by the leader too, but they are reached through the type
+// cache rather than through the relation, so a type that holds a domain is left to the single
+// process path whether that domain carries a volatile constraint or not. The domain can be the
+// type itself, or it can sit inside an array, a composite or a range, each of which reaches
+// the receive function of the type it holds, which is the domain's own.
+fn type_contains_domain(typoid: Oid) -> bool {
+    let typtype = unsafe { pg_sys::get_typtype(typoid) };
+
+    if typtype == TYPTYPE_DOMAIN as c_char {
+        return true;
+    }
+
+    // an array type is a base type, so its element type is asked for before the kind of the
+    // type is looked at any further
+    let element_typoid = unsafe { pg_sys::get_element_type(typoid) };
+
+    if element_typoid != Oid::INVALID {
+        return type_contains_domain(element_typoid);
+    }
+
+    if typtype == TYPTYPE_COMPOSITE as c_char {
+        let tupledesc = tuple_desc(typoid, -1);
+
+        return tupledesc
+            .iter()
+            .any(|attribute| !attribute.is_dropped() && type_contains_domain(attribute.atttypid));
+    }
+
+    if typtype == TYPTYPE_RANGE as c_char {
+        return type_contains_domain(unsafe { pg_sys::get_range_subtype(typoid) });
+    }
+
+    if typtype == TYPTYPE_MULTIRANGE as c_char {
+        return type_contains_domain(unsafe { pg_sys::get_multirange_range(typoid) });
+    }
+
+    false
 }
 
 // relation_has_volatile_check_constraint is whether any CHECK constraint of the relation calls
