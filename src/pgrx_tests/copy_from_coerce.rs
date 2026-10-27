@@ -1326,6 +1326,86 @@ mod tests {
         assert_eq!(result, (Some("hello"), Some(1)));
     }
 
+    // PostgreSQL truncates an identifier to 63 bytes, so a column of the table can only hold the
+    // first 63 bytes of a longer parquet column name, which is what match_by 'name' has to match
+    // it with. The same truncation is what CREATE TABLE ... definition_from names the column of
+    // such a file with, and what the nested fields of a struct are already matched by.
+    #[pg_test]
+    fn test_table_with_long_column_name_match_by_name() {
+        // the names of the file are longer than the limit, and tell each other apart within the
+        // first 63 bytes, so they are still two names once they are truncated. The multibyte one
+        // must be truncated at a character boundary, the way the parser truncates it.
+        let ascii_name = format!("{}1_in_the_file", "a".repeat(62));
+        let truncated_ascii_name = format!("{}1", "a".repeat(62));
+        let multibyte_name = "ü".repeat(40);
+        let truncated_multibyte_name = "ü".repeat(31);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(&ascii_name, DataType::Int32, true),
+            Field::new("short", DataType::Utf8, true),
+            Field::new(&multibyte_name, DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["hello"])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![2])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        // the table holds the columns in another order than the file does, so a column that was
+        // matched by position rather than by name would be read from the wrong one
+        let create_table = format!(
+            "CREATE TABLE test_table (\"{truncated_multibyte_name}\" int, short text, \
+             \"{truncated_ascii_name}\" int)"
+        );
+        Spi::run(&create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_three::<i32, i32, &str>(&format!(
+            "SELECT \"{truncated_ascii_name}\", \"{truncated_multibyte_name}\", short
+             FROM test_table LIMIT 1"
+        ))
+        .unwrap();
+        assert_eq!(result, (Some(1), Some(2), Some("hello")));
+    }
+
+    // two long names that are only told apart past the 63rd byte are one name once they are
+    // truncated, and which of them a column is read from would be a matter of the order the file
+    // happens to hold them in
+    #[pg_test]
+    #[should_panic(expected = "parquet file has more than one field named")]
+    fn test_table_with_ambiguous_long_column_name_match_by_name() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(format!("{}_one", "a".repeat(63)), DataType::Int32, true),
+            Field::new(format!("{}_two", "a".repeat(63)), DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![2])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = format!("CREATE TABLE test_table (\"{}\" int)", "a".repeat(63));
+        Spi::run(&create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+    }
+
     #[pg_test]
     fn test_table_with_different_name_match_by_position() {
         let copy_to = "COPY (SELECT 1 as a, 'hello' as b) TO '/tmp/test.parquet'";
