@@ -337,6 +337,42 @@ mod tests {
         .unwrap();
     }
 
+    // a size that does not fit the i64 the copy holds it in is out of range, rather than a
+    // negative size every file is larger than
+    #[pg_test]
+    #[should_panic(expected = "'18446744073709551615' is out of range")]
+    fn test_file_size_bytes_above_i64_max() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "file_size_bytes".to_string(),
+            CopyOptionValue::StringOption("18446744073709551615".into()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // the unit a size is given in is a multiplier, which is out of range when the size it
+    // scales up to does not fit an i64, rather than the size it wraps around to
+    #[pg_test]
+    #[should_panic(expected = "'17179869185GB' is out of range")]
+    fn test_file_size_bytes_unit_above_i64_max() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "file_size_bytes".to_string(),
+            CopyOptionValue::StringOption("17179869185GB".into()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
     #[pg_test]
     #[should_panic(expected = "unrecognized parquet version: vv2. v1 or v2 is supported.")]
     fn test_invalid_parquet_version() {

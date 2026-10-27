@@ -329,7 +329,7 @@ pub(crate) fn copy_to_stmt_file_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
         };
 
         parse_file_size(file_size_bytes)
-            .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {e}")) as i64
+            .unwrap_or_else(|e| panic!("file_size_bytes option is not valid: {e}"))
     }
 }
 
@@ -814,8 +814,9 @@ pub(crate) fn create_filtered_tupledesc_for_attribute_names<'a>(
 }
 
 /// Parses a size string like "1MB", "512KB", or just "1000000" into a byte count.
-/// Enforces a minimum of 1MB.
-fn parse_file_size(size_str: &str) -> Result<u64, String> {
+/// Enforces a minimum of 1MB and a maximum of i64::MAX, which is what the copy holds the
+/// size in.
+fn parse_file_size(size_str: &str) -> Result<i64, String> {
     // Normalize casing and trim whitespace
     let size_str = size_str.trim().to_uppercase();
 
@@ -837,24 +838,29 @@ fn parse_file_size(size_str: &str) -> Result<u64, String> {
     let num_part = &size_str[..idx];
     let unit_part = size_str[idx..].trim();
 
-    // Convert the numeric portion
-    let mut bytes = match num_part.parse::<u64>() {
-        Ok(n) => n,
-        Err(_) => return Err(format!("Invalid numeric portion in '{size_str}'")),
-    };
+    // Convert the numeric portion. The size is a count of bytes the copy compares the size of
+    // the file it is writing against, which it holds in an i64, so a count that does not fit
+    // one is out of range rather than something to hand on.
+    let bytes = num_part
+        .parse::<i64>()
+        .map_err(|_| error_file_size_out_of_range(&size_str))?;
 
     // Interpret the suffix, if present
-    match unit_part {
-        "" => { /* no suffix: treat as bytes */ }
-        "KB" => bytes *= 1_024,
-        "MB" => bytes *= 1_024 * 1_024,
-        "GB" => bytes *= 1_024 * 1_024 * 1_024,
+    let multiplier: i64 = match unit_part {
+        "" => 1, // no suffix: treat as bytes
+        "KB" => 1_024,
+        "MB" => 1_024 * 1_024,
+        "GB" => 1_024 * 1_024 * 1_024,
         _ => {
             return Err(format!(
                 "Unrecognized unit '{unit_part}'. Allowed units are KB, MB or GB."
             ))
         }
-    }
+    };
+
+    let bytes = bytes
+        .checked_mul(multiplier)
+        .ok_or_else(|| error_file_size_out_of_range(&size_str))?;
 
     // Enforce a minimum of 1MB
     if bytes < 1_024 * 1_024 {
@@ -862,4 +868,11 @@ fn parse_file_size(size_str: &str) -> Result<u64, String> {
     }
 
     Ok(bytes)
+}
+
+fn error_file_size_out_of_range(size_str: &str) -> String {
+    format!(
+        "'{size_str}' is out of range. Maximum allowed size is {} bytes.",
+        i64::MAX
+    )
 }
