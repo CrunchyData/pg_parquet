@@ -16,7 +16,7 @@ use pgrx::{
 };
 
 use crate::{
-    arrow_parquet::match_by::MatchBy,
+    arrow_parquet::match_by::{column_index_by_name, MatchBy},
     pgrx_utils::{
         array_element_typoid, collect_attributes_for, domain_array_base_elem_type,
         is_generated_attribute, truncate_identifier_like_postgres, tuple_desc,
@@ -89,15 +89,14 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
             MatchBy::Position => file_schema.field(field_idx),
 
             MatchBy::Name => {
-                let file_schema_field = file_schema.column_with_name(field_name);
+                let file_schema_field = column_index_by_name(file_schema.fields(), field_name)
+                    .map(|file_field_idx| file_schema.field(file_field_idx));
 
                 if file_schema_field.is_none() {
                     panic!("column \"{field_name}\" is not found in parquet file");
                 }
 
-                let (_, file_schema_field) = file_schema_field.unwrap();
-
-                file_schema_field
+                file_schema_field.unwrap()
             }
         };
 
@@ -159,9 +158,10 @@ pub(crate) fn overlay_file_geospatial_crs(
                     .fields()
                     .get(field_idx)
                     .map(|file_schema_field| file_schema_field.as_ref()),
-                MatchBy::Name => file_schema
-                    .column_with_name(tupledesc_schema_field.name())
-                    .map(|(_, file_schema_field)| file_schema_field),
+                MatchBy::Name => {
+                    column_index_by_name(file_schema.fields(), tupledesc_schema_field.name())
+                        .map(|file_field_idx| file_schema.field(file_field_idx))
+                }
             };
 
             match file_schema_field {

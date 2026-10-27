@@ -53,7 +53,7 @@ use crate::{
 
 use super::{
     arrow_to_pg::context::ArrowToPgAttributeContext,
-    match_by::MatchBy,
+    match_by::{column_index_by_name, MatchBy},
     uri_utils::{
         parquet_reader_from_uri, uri_as_string, ParquetObjectStoreReader, ParquetRowGroupOpener,
         ParsedUriInfo,
@@ -443,8 +443,8 @@ impl SingleParquetReader {
                     .unwrap_or_else(|| panic!("column {name} not found"))
                     .clone(),
 
-                MatchBy::Name => record_batch
-                    .column_by_name(name)
+                MatchBy::Name => column_index_by_name(record_batch.schema_ref().fields(), name)
+                    .map(|column_idx| record_batch.column(column_idx))
                     .unwrap_or_else(|| panic!("column {name} not found"))
                     .clone(),
             };
