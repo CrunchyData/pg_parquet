@@ -365,6 +365,93 @@ mod tests {
             assert_eq!(count("default_table WHERE extra = 7"), WIDE_TABLE_ROWS);
         }
 
+        // a CHECK constraint whose function runs statements of its own, which the process that
+        // holds the command evaluates for every row it writes and cannot run in parallel mode
+        {
+            Spi::run(
+                "CREATE FUNCTION volatile_positive(n bigint) RETURNS bool
+                 LANGUAGE plpgsql VOLATILE AS $$
+                 BEGIN
+                     PERFORM 1;
+                     RETURN n > 0;
+                 END
+                 $$;",
+            )
+            .unwrap();
+
+            create_wide_table("check_table");
+            Spi::run("ALTER TABLE check_table ADD CHECK (volatile_positive(id));").unwrap();
+
+            Spi::run(&format!(
+                "COPY check_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+            ))
+            .unwrap();
+
+            assert_eq!(count("check_table"), WIDE_TABLE_ROWS);
+        }
+
+        // the same constraint added NOT VALID, which the rows already in the relation were not
+        // checked against but the rows of the copy still are
+        {
+            create_wide_table("not_valid_check_table");
+            Spi::run(
+                "ALTER TABLE not_valid_check_table ADD CHECK (volatile_positive(id)) NOT VALID;",
+            )
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY not_valid_check_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+            ))
+            .unwrap();
+
+            assert_eq!(count("not_valid_check_table"), WIDE_TABLE_ROWS);
+        }
+
+        // an attribute whose type is a domain carrying such a constraint, which is evaluated
+        // the same way but is reached through the type rather than through the relation
+        {
+            Spi::run("CREATE DOMAIN positive_id AS bigint CHECK (volatile_positive(VALUE));")
+                .unwrap();
+            Spi::run("CREATE TABLE domain_table (id positive_id, name text);").unwrap();
+
+            Spi::run(&format!(
+                "COPY domain_table (id, name) FROM '{LOCAL_TEST_FILE_PATH}'
+                 WITH (format parquet, match_by 'name');"
+            ))
+            .unwrap();
+
+            assert_eq!(count("domain_table"), WIDE_TABLE_ROWS);
+        }
+
+        // a WHERE clause calling such a function, which the process that holds the command
+        // evaluates for every row the workers hand it
+        {
+            create_wide_table("volatile_where_table");
+
+            Spi::run(&format!(
+                "COPY volatile_where_table FROM '{LOCAL_TEST_FILE_PATH}'
+                 WITH (format parquet) WHERE volatile_positive(id);"
+            ))
+            .unwrap();
+
+            assert_eq!(count("volatile_where_table"), WIDE_TABLE_ROWS);
+        }
+
+        // a WHERE clause taking a value from a sequence, which parallel mode refuses outright
+        // rather than through the command counter
+        {
+            create_wide_table("nextval_where_table");
+            Spi::run("CREATE SEQUENCE where_sequence;").unwrap();
+
+            Spi::run(&format!(
+                "COPY nextval_where_table FROM '{LOCAL_TEST_FILE_PATH}'
+                 WITH (format parquet) WHERE nextval('where_sequence') > 0;"
+            ))
+            .unwrap();
+
+            assert_eq!(count("nextval_where_table"), WIDE_TABLE_ROWS);
+        }
+
         // a uri with a wildcard that matches no file at all, which is an error of the single
         // process path to report
         {
@@ -394,6 +481,70 @@ mod tests {
                 "the copy reported \"{error}\" instead"
             );
         }
+    }
+
+    // a constraint and a filter that the process holding the command can evaluate in parallel
+    // mode keep the copy on the parallel path, rather than cost it the parallel path for
+    // carrying a constraint or a filter at all. The copy runs in a session of its own, because
+    // the workers of a copy are only there while it is still running and a session cannot look
+    // at a copy it is itself waiting for.
+    #[pg_test]
+    fn test_parallel_copy_from_with_ordinary_constraint_and_filter() {
+        let _file = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        write_wide_file();
+
+        let port = test_pg_port();
+        let table = "ordinary_constraint_table";
+
+        // the table is created in a session of its own, so that the session that copies into it
+        // can see it, and is dropped the same way at the end. Its constraint calls a stable
+        // function, which plpgsql runs the statements of read only, so it asks for none of the
+        // command counter increments parallel mode forbids.
+        psql(
+            &port,
+            &[&format!(
+                "DROP TABLE IF EXISTS {table};
+                 CREATE TABLE {table} {WIDE_TABLE_COLUMNS};
+                 CREATE OR REPLACE FUNCTION stable_positive(n bigint) RETURNS bool
+                     LANGUAGE plpgsql STABLE AS 'BEGIN PERFORM 1; RETURN n > 0; END';
+                 ALTER TABLE {table} ADD CHECK (stable_positive(id));"
+            )],
+        );
+
+        let filter = "id % 2 = 0";
+
+        let copy = copy_from_in_another_session(table, LOCAL_TEST_FILE_PATH, 4, filter);
+        let (_, nworkers) = backend_with_workers(&format!("COPY {table} FROM"));
+
+        let copy = copy.wait_with_output().expect("failed to wait for psql");
+
+        assert!(
+            copy.status.success(),
+            "the copy did not succeed: {}",
+            String::from_utf8_lossy(&copy.stderr)
+        );
+
+        assert!(
+            nworkers > 0,
+            "the copy ran with no parallel worker of its own, so the constraint or the filter \
+             took it off the parallel path"
+        );
+
+        // the rows are read in the session that drops the table, rather than in this one, because
+        // a transaction that read it would still be holding it when the drop asked for it
+        let copied = psql(
+            &port,
+            &[
+                &format!("SELECT count(*) FROM {table};"),
+                &format!("DROP TABLE {table}; DROP FUNCTION stable_positive(bigint);"),
+            ],
+        );
+
+        assert_eq!(
+            copied.lines().next(),
+            Some((WIDE_TABLE_ROWS / 2).to_string().as_str())
+        );
     }
 
     // the leader decodes every row group itself when no parallel worker can be launched
@@ -554,7 +705,7 @@ mod tests {
         // short of workers whatever else the server is up to
         let (holder, holder_pid) = hold_a_worker_slot();
 
-        let copy = copy_from_in_another_session(table, LOCAL_TEST_FILE_PATH, pool);
+        let copy = copy_from_in_another_session(table, LOCAL_TEST_FILE_PATH, pool, "");
         let (_, nworkers) = backend_with_workers(&format!("COPY {table} FROM"));
 
         let copy = copy.wait_with_output().expect("failed to wait for psql");
@@ -608,9 +759,16 @@ mod tests {
     }
 
     // copy_from_in_another_session starts a parallel COPY FROM into the given table in a
-    // session of its own, asking for as many workers as the pool holds altogether
-    fn copy_from_in_another_session(table: &str, uri: &str, nworkers: i32) -> Child {
+    // session of its own, asking for the given number of workers and filtering the rows it
+    // reads by the given clause, which is left out when it is empty
+    fn copy_from_in_another_session(table: &str, uri: &str, nworkers: i32, filter: &str) -> Child {
         let port = test_pg_port();
+
+        let filter = if filter.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {filter}")
+        };
 
         Command::new("psql")
             .args(["-h", "localhost", "-p", &port, "-d", "pgrx_tests", "-At"])
@@ -623,7 +781,7 @@ mod tests {
             ])
             .args([
                 "-c",
-                &format!("COPY {table} FROM '{uri}' WITH (format parquet);"),
+                &format!("COPY {table} FROM '{uri}' WITH (format parquet){filter};"),
             ])
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

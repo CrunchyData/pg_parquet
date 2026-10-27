@@ -7,8 +7,8 @@ use pgrx::{
     pg_guard,
     pg_sys::{
         self, dsm_segment, pg_atomic_init_u32, pg_atomic_read_u32, pg_atomic_uint32,
-        pg_atomic_write_u32, shm_mq, shm_mq_handle, shm_mq_iovec, shm_mq_result, shm_toc,
-        PlannedStmt, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP,
+        pg_atomic_write_u32, shm_mq, shm_mq_handle, shm_mq_iovec, shm_mq_result, shm_toc, Node,
+        PlannedStmt, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP, TYPTYPE_DOMAIN,
     },
     PgBox, PgMemoryContexts, PgRelation, PgTupleDesc,
 };
@@ -475,10 +475,11 @@ pub(crate) fn try_parallel_copy_from(
     uri_info: &ParsedUriInfo,
     relation: &PgRelation,
     match_by: MatchBy,
+    where_clause: *mut Node,
 ) -> bool {
     let nworkers = requested_parallel_workers();
 
-    if nworkers <= 0 || !parallel_copy_from_is_eligible(p_stmt, uri_info, relation) {
+    if nworkers <= 0 || !parallel_copy_from_is_eligible(p_stmt, uri_info, relation, where_clause) {
         return false;
     }
 
@@ -674,6 +675,7 @@ fn parallel_copy_from_is_eligible(
     p_stmt: &PgBox<PlannedStmt>,
     uri_info: &ParsedUriInfo,
     relation: &PgRelation,
+    where_clause: *mut Node,
 ) -> bool {
     // a worker reads the file itself, so there has to be a file rather than a pipe
     if copy_stmt_program(p_stmt).is_some() || copy_stmt_is_std_inout(p_stmt) {
@@ -719,10 +721,60 @@ fn parallel_copy_from_is_eligible(
         return false;
     }
 
+    // the leader evaluates the WHERE clause of the command and the CHECK constraints of the
+    // relation for every row it writes, which a volatile function in either of them may not
+    // do in parallel mode: nextval() refuses outright, and a plpgsql function runs its own
+    // statements read write, which needs a command counter increment parallel mode forbids.
+    // A stable or an immutable function is safe, since plpgsql runs the statements of one
+    // read only, so an ordinary constraint keeps the command parallel
+    if !where_clause.is_null() && unsafe { pg_sys::contain_volatile_functions(where_clause) } {
+        return false;
+    }
+
+    if relation_has_volatile_check_constraint(relation) {
+        return false;
+    }
+
     let tupledesc = relation.tuple_desc();
 
     tupledesc.iter().all(|attribute| {
-        !attribute.atthasdef && attribute.attidentity == 0 && attribute.attgenerated == 0
+        // the constraints of a domain are evaluated by the leader too, but they are reached
+        // through the type cache rather than through the relation, so a domain typed column
+        // is left to the single process path whether it carries a volatile constraint or not
+        let is_domain =
+            unsafe { pg_sys::get_typtype(attribute.atttypid) } == TYPTYPE_DOMAIN as c_char;
+
+        !attribute.atthasdef
+            && attribute.attidentity == 0
+            && attribute.attgenerated == 0
+            && !is_domain
+    })
+}
+
+// relation_has_volatile_check_constraint is whether any CHECK constraint of the relation calls
+// a volatile function. A constraint that is NOT VALID counts, since it is still evaluated for
+// the rows the command writes.
+fn relation_has_volatile_check_constraint(relation: &PgRelation) -> bool {
+    let constr = unsafe { (*relation.rd_att).constr };
+
+    if constr.is_null() {
+        return false;
+    }
+
+    let num_check = unsafe { (*constr).num_check } as usize;
+    let check = unsafe { (*constr).check };
+
+    (0..num_check).any(|i| {
+        let expression_string = unsafe { (*check.add(i)).ccbin };
+
+        if expression_string.is_null() {
+            return false;
+        }
+
+        // the expression of a constraint is stored as the text of its node tree
+        let expression = unsafe { pg_sys::stringToNode(expression_string) as *mut Node };
+
+        unsafe { pg_sys::contain_volatile_functions(expression) }
     })
 }
 
