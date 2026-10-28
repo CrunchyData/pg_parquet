@@ -5,7 +5,7 @@ use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::AmazonS3Builder;
 use url::Url;
 
-use crate::PG_BACKEND_TOKIO_RUNTIME;
+use crate::block_on;
 
 use super::{client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration};
 
@@ -129,8 +129,8 @@ impl AwsS3Config {
         };
 
         // first tries environment variables and then the config files
-        let sdk_config = PG_BACKEND_TOKIO_RUNTIME
-            .block_on(async { aws_config::defaults(BehaviorVersion::latest()).load().await });
+        let sdk_config =
+            block_on(async { aws_config::defaults(BehaviorVersion::latest()).load().await });
 
         let mut access_key_id = None;
         let mut secret_access_key = None;
@@ -138,8 +138,7 @@ impl AwsS3Config {
         let mut expire_at = None;
 
         if let Some(credential_provider) = sdk_config.credentials_provider() {
-            let cred_res = PG_BACKEND_TOKIO_RUNTIME
-                .block_on(async { credential_provider.provide_credentials().await });
+            let cred_res = block_on(async { credential_provider.provide_credentials().await });
 
             if let Ok(credentials) = cred_res {
                 access_key_id = Some(credentials.access_key_id().to_string());

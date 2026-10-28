@@ -33,12 +33,12 @@ use crate::{
         parquet_single_upload::single_upload_writer,
         schema::parse_schema::{schema_with_int96_as_micros, schema_without_dictionaries},
     },
+    block_on,
     object_store::{
         aws::parse_s3_bucket, azure::parse_azure_blob_container, gcs::parse_gcs_bucket,
         http::parse_http_base_uri, object_store_cache::get_or_create_object_store,
         object_store_error_message,
     },
-    PG_BACKEND_TOKIO_RUNTIME,
 };
 
 const PARQUET_OBJECT_STORE_READ_ROLE: &str = "parquet_object_store_read";
@@ -277,7 +277,7 @@ fn open_parquet_file(
     // the runtime itself, e.g. to resolve the credentials an object store uri is reached with
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
-    PG_BACKEND_TOKIO_RUNTIME.block_on(async move {
+    block_on(async move {
         let object_store_meta = match parquet_object_store.head(&location).await {
             Ok(object_store_meta) => object_store_meta,
             Err(e) => {

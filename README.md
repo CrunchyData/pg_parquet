@@ -462,6 +462,8 @@ Each object storage client has its own http client, which can be configured via 
 
 Durations are given with a unit, e.g. `30s`, `5m` or `1m30s`. Booleans are given as `true` or `false`.
 
+A request that an object store is slow to answer is retried, which takes minutes by default before it gives up. A statement that is waiting on one is still cancellable while that happens: `Ctrl-C`, `statement_timeout`, `pg_cancel_backend` and `pg_terminate_backend` end it without waiting for the retries to run out.
+
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<compression>]` extension,
