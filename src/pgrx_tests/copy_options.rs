@@ -563,7 +563,7 @@ mod tests {
                 .to_string(),
         ];
 
-        let expected_file_counts = [5_usize, 3, 5];
+        let expected_file_counts = [6_usize, 4, 6];
 
         for (uri, expected_file_count) in uris.into_iter().zip(expected_file_counts) {
             // make sure remove files
@@ -637,6 +637,43 @@ mod tests {
             });
 
             assert_eq!(result_rows, expected_rows);
+        }
+    }
+
+    // a row group of a copy with file_size_bytes is capped at the target file size, so a row
+    // group size that holds the whole table does not end up writing it as one file
+    #[pg_test]
+    fn test_file_size_bytes_with_a_large_row_group_size() {
+        let uri = LOCAL_TEST_FILE_PATH.to_string();
+
+        let _file_cleanup = FileCleanup::new(&uri);
+
+        let file_size_bytes = 1024 * 1024;
+
+        Spi::run("drop table if exists test_expected;").unwrap();
+
+        let setup_commands = format!(
+            "create table test_expected(a text);\n\
+             insert into test_expected select 'hellooooo' || i from generate_series(1, 1000000) i;\n\
+             copy test_expected to '{uri}' \
+             with (format parquet, file_size_bytes '1MB', row_group_size 1000000)"
+        );
+        Spi::run(&setup_commands).unwrap();
+
+        let file_sizes = Path::new(&uri)
+            .read_dir()
+            .unwrap()
+            .map(|entry_res| entry_res.unwrap().metadata().unwrap().len())
+            .collect::<Vec<_>>();
+
+        assert!(file_sizes.len() > 1, "the copy wrote a single file");
+
+        // a file ends at a row group boundary, so it can exceed the target by one row group
+        for file_size in file_sizes {
+            assert!(
+                file_size <= 2 * file_size_bytes,
+                "a file of {file_size} bytes is too large for a target of {file_size_bytes}"
+            );
         }
     }
 

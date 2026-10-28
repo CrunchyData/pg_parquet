@@ -337,6 +337,15 @@ pub extern "C-unwind" fn create_copy_to_parquet_split_dest_receiver(
         unsafe { *row_group_size_bytes }
     };
 
+    // a file ends at a row group boundary, so a row group larger than the target file size is
+    // what makes every file larger than it. The default row group of row_group_size * 1024
+    // bytes is larger than any target below ~126MB.
+    let row_group_size_bytes = if file_size_bytes == INVALID_FILE_SIZE_BYTES {
+        row_group_size_bytes
+    } else {
+        row_group_size_bytes.min(file_size_bytes)
+    };
+
     let compression = if compression.is_null() {
         PgParquetCompression::default()
     } else {
