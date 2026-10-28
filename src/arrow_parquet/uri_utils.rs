@@ -2,7 +2,7 @@ use std::{ffi::CStr, fs::File, ops::Range, os::fd::FromRawFd, panic, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
-use futures::{future::BoxFuture, FutureExt, TryFutureExt};
+use futures::{future::BoxFuture, FutureExt, StreamExt, TryFutureExt};
 use object_store::{path::Path, ObjectStore, ObjectStoreExt, ObjectStoreScheme};
 use parquet::{
     arrow::{
@@ -273,13 +273,23 @@ fn open_parquet_file(
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
     PG_BACKEND_TOKIO_RUNTIME.block_on(async move {
-        let object_store_meta = parquet_object_store.head(&location).await.map_err(|e| {
-            format!(
-                "failed to get object store metadata for uri {}: {}",
-                uri_info.uri,
-                object_store_error_message(e)
-            )
-        })?;
+        let object_store_meta = match parquet_object_store.head(&location).await {
+            Ok(object_store_meta) => object_store_meta,
+            Err(e) => {
+                let mut message = format!(
+                    "failed to get object store metadata for uri {}: {}",
+                    uri_info.uri,
+                    object_store_error_message(e)
+                );
+
+                if let Some(hint) = folder_hint(&parquet_object_store, &location, uri_info).await {
+                    message.push_str(". ");
+                    message.push_str(&hint);
+                }
+
+                return Err(message);
+            }
+        };
 
         let mut object_reader =
             ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
@@ -292,6 +302,31 @@ fn open_parquet_file(
 
         Ok((object_reader, reader_metadata, batch_size))
     })
+}
+
+// folder_hint describes a uri that holds no object of its own while objects are stored under
+// it, which is what a folder that a COPY TO with file_size_bytes wrote looks like. Such a
+// uri is read with a pattern that names the files in it rather than by itself, which an
+// object store reports as nothing but a missing object.
+async fn folder_hint(
+    parquet_object_store: &Arc<dyn ObjectStore>,
+    location: &Path,
+    uri_info: &ParsedUriInfo,
+) -> Option<String> {
+    // a store that cannot list, e.g. an http one, tells nothing about what is under the uri
+    parquet_object_store
+        .list(Some(location))
+        .next()
+        .await?
+        .ok()?;
+
+    let uri = uri_as_string(&uri_info.uri);
+    let uri = uri.trim_end_matches('/');
+
+    Some(format!(
+        "\"{uri}\" holds files rather than being one, so it is read with a pattern \
+         that names them, e.g. \"{uri}/*.parquet\"."
+    ))
 }
 
 // parquet_reader_metadata reads the file's footer and settles which schema to read the file
