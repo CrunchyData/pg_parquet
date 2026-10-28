@@ -36,6 +36,7 @@ use crate::{
         },
         uri_utils::{uri_as_string, ParsedUriInfo},
     },
+    block_on,
     object_store::{object_store_cache::get_or_create_multipart_store, object_store_error_message},
     parquet_copy_hook::{
         copy_cleanup::{
@@ -53,7 +54,6 @@ use crate::{
         hook::process_copy_to_parquet,
         pg_compat::strVal,
     },
-    PG_BACKEND_TOKIO_RUNTIME,
 };
 
 // MAX_PARALLEL_WORKERS is the number of parallel workers a single COPY TO parquet command
@@ -395,15 +395,13 @@ fn start_shared_upload(uri_info: &ParsedUriInfo) -> Option<ParallelCopyToDestina
     // process other than the one that completes it, which the parallel path is built on
     let (store, path) = get_or_create_multipart_store(uri_info)?;
 
-    let upload_id = PG_BACKEND_TOKIO_RUNTIME
-        .block_on(store.create_multipart(&path))
-        .unwrap_or_else(|e| {
-            panic!(
-                "failed to start the upload of \"{}\": {}",
-                uri_info.uri,
-                object_store_error_message(e)
-            )
-        });
+    let upload_id = block_on(store.create_multipart(&path)).unwrap_or_else(|e| {
+        panic!(
+            "failed to start the upload of \"{}\": {}",
+            uri_info.uri,
+            object_store_error_message(e)
+        )
+    });
 
     Some(ParallelCopyToDestination::SharedUpload(
         SharedUploadDestination {
@@ -747,16 +745,15 @@ fn run_parallel_copy_to(
         // nothing is spliced: the participants uploaded the rows they wrote into the
         // destination itself, so only the footer that covers them is left to write
         ParallelCopyToDestination::SharedUpload(upload) => {
-            let nprocessed = PG_BACKEND_TOKIO_RUNTIME
-                .block_on(complete_shared_upload(
-                    upload.store.clone(),
-                    upload.path.clone(),
-                    upload.upload_id.clone(),
-                    last_claim,
-                    participants,
-                    nranges,
-                ))
-                .unwrap_or_else(|e| panic!("failed to write \"{}\": {e}", upload.uri_info.uri));
+            let nprocessed = block_on(complete_shared_upload(
+                upload.store.clone(),
+                upload.path.clone(),
+                upload.upload_id.clone(),
+                last_claim,
+                participants,
+                nranges,
+            ))
+            .unwrap_or_else(|e| panic!("failed to write \"{}\": {e}", upload.uri_info.uri));
 
             // the upload is the destination now, so the cleanup of the copy must not abort it
             finish_unfinished_write(
@@ -903,8 +900,7 @@ fn claim_and_copy_ranges(
     let upload = upload?;
 
     Some(
-        PG_BACKEND_TOKIO_RUNTIME
-            .block_on(upload.finish())
+        block_on(upload.finish())
             .unwrap_or_else(|e| panic!("failed to upload the rows of the parallel COPY TO: {e}")),
     )
 }

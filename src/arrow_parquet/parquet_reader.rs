@@ -39,6 +39,7 @@ use crate::{
             },
         },
     },
+    block_on,
     object_store::object_store_error_message,
     parquet_copy_hook::copy_progress::update_copy_from_bytes_total,
     parquet_udfs::list::list_uri,
@@ -48,7 +49,6 @@ use crate::{
         map::reset_map_context,
         pg_arrow_type_conversions::{NEG_INFINITY_DATE, NEG_INFINITY_TIMESTAMP},
     },
-    PG_BACKEND_TOKIO_RUNTIME,
 };
 
 use super::{
@@ -689,8 +689,7 @@ impl ParquetReaderContext {
 
         // read a record batch from the parquet file. Record batch will contain
         // DEFAULT_BATCH_SIZE rows as we configured in the parquet reader.
-        let record_batch = PG_BACKEND_TOKIO_RUNTIME
-            .block_on(self.current_reader_mut().expect("no reader found").next());
+        let record_batch = block_on(self.current_reader_mut().expect("no reader found").next());
 
         if let Some(batch_result) = record_batch {
             let record_batch = batch_result.unwrap_or_else(|e| {

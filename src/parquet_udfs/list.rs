@@ -5,9 +5,9 @@ use pgrx::{ereport, iter::TableIterator, name, pg_extern, pg_schema, PgLogLevel,
 use crate::arrow_parquet::uri_utils::{
     ensure_access_privilege_to_uri, object_store_base_uri, ParsedUriInfo,
 };
+use crate::block_on;
 use crate::object_store::object_store_cache::get_or_create_object_store;
 use crate::parquet_copy_hook::copy_cleanup::PART_URI_INFIX;
-use crate::PG_BACKEND_TOKIO_RUNTIME;
 
 #[pg_schema]
 mod parquet {
@@ -47,7 +47,7 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
 
     let mut paths = vec![];
 
-    PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+    block_on(async {
         while let Some(meta) = list_stream.next().await.transpose().unwrap_or_else(|e| {
             panic!("{}", e);
         }) {

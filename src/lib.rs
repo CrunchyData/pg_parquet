@@ -1,5 +1,7 @@
 use std::ffi::CStr;
+use std::future::Future;
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
@@ -37,6 +39,53 @@ pub(crate) static PG_BACKEND_TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(||
         .build()
         .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"))
 });
+
+// how long the backend waits on a future before it looks at the signals it was sent
+const INTERRUPT_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+
+// block_on waits for a future on the backend's runtime, which is how every request
+// pg_parquet makes to an object store is waited for. The wait is interruptible: a cancel or
+// a termination the backend was sent ends it, rather than the request's own timeout and
+// retries, which an object store spends minutes of its own on by default and which a
+// Ctrl-C cannot shorten at all.
+pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
+    let output = PG_BACKEND_TOKIO_RUNTIME.block_on(async move {
+        let mut future = std::pin::pin!(future);
+
+        loop {
+            match tokio::time::timeout(INTERRUPT_CHECK_INTERVAL, &mut future).await {
+                Ok(output) => return Some(output),
+                // the future is dropped as this block returns, which is what gives up the
+                // request it is in the middle of
+                Err(_) if backend_was_interrupted() => return None,
+                Err(_) => {}
+            }
+        }
+    });
+
+    match output {
+        Some(output) => output,
+        // reported outside the runtime: Postgres reports an error by jumping out of the
+        // frames above it, and the frames of the runtime must not be among them
+        None => {
+            unsafe { pg_sys::ProcessInterrupts() };
+
+            unreachable!("the backend was interrupted without reporting it");
+        }
+    }
+}
+
+// backend_was_interrupted tells whether the backend was sent a cancel or a termination that
+// ProcessInterrupts is in a position to report. A signal that is held off is left to the
+// interrupt check that comes after the wait, which is what the hold off is there for.
+fn backend_was_interrupted() -> bool {
+    unsafe {
+        (pg_sys::QueryCancelPending != 0 || pg_sys::ProcDiePending != 0)
+            && pg_sys::InterruptHoldoffCount == 0
+            && pg_sys::QueryCancelHoldoffCount == 0
+            && pg_sys::CritSectionCount == 0
+    }
+}
 
 #[pg_guard]
 pub extern "C-unwind" fn _PG_init() {
