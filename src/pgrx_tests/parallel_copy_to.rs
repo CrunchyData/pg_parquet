@@ -27,7 +27,7 @@ mod tests {
         object_store::object_store_cache::{
             get_or_create_multipart_store, get_or_create_object_store,
         },
-        parquet_copy_hook::copy_cleanup::abort_upload,
+        parquet_copy_hook::copy_cleanup::{abort_upload, PART_URI_INFIX},
         pgrx_tests::common::{
             copy_session_output, create_interruptible_table, drop_interruptible_table,
             extension_exists, extension_version, geospatial_crs_by_column_of, test_pg_port,
@@ -846,6 +846,66 @@ mod tests {
 
         // the part files are temporary and must not outlive the command
         assert_eq!(part_files(LOCAL_TEST_FILE_PATH), Vec::<String>::new());
+    }
+
+    // the parts of a parallel COPY TO are named next to its destination, and a copy whose
+    // backend did not survive it leaves them there. They hold the rows that copy wrote, so a
+    // pattern that covers them must not read those rows a second time.
+    #[pg_test]
+    fn test_parts_left_behind_are_not_read_as_data() {
+        let folder = "/tmp/pg_parquet_test_parts_left_behind";
+        let _folder = FileCleanup::new(folder);
+
+        std::fs::create_dir_all(folder).unwrap();
+
+        let destination = format!("{folder}/out.parquet");
+
+        Spi::run("CREATE TABLE parts_table(a int); CREATE TABLE parts_result(a int);").unwrap();
+        Spi::run("INSERT INTO parts_table SELECT i FROM generate_series(1, 1000) i;").unwrap();
+        Spi::run(&format!(
+            "COPY parts_table TO '{destination}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        // the part of a copy that is over, which only the backend that led it would have
+        // removed. The pid it is named after is of no process of this test.
+        let part = format!("{destination}.1{PART_URI_INFIX}0.parquet");
+        std::fs::copy(&destination, &part).unwrap();
+
+        // the files the pattern covers are the data of the destination alone
+        let listed = Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM parquet.list('{folder}/*.parquet')"
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(listed, 1);
+
+        Spi::run(&format!(
+            "COPY parts_result FROM '{folder}/*.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Spi::get_one::<i64>("SELECT count(*) FROM parts_result")
+                .unwrap()
+                .unwrap(),
+            1000
+        );
+
+        // a part named outright is still a parquet file, so the rows of a copy that was
+        // interrupted are there to be read by whoever wants them
+        Spi::run("TRUNCATE parts_result;").unwrap();
+        Spi::run(&format!(
+            "COPY parts_result FROM '{part}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Spi::get_one::<i64>("SELECT count(*) FROM parts_result")
+                .unwrap()
+                .unwrap(),
+            1000
+        );
     }
 
     #[pg_test]
