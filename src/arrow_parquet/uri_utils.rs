@@ -135,8 +135,13 @@ impl ParsedUriInfo {
 
     fn try_parse_uri(uri: &str) -> Result<Url, String> {
         if !uri.contains("://") {
-            // local file
-            Url::from_file_path(uri).map_err(|_| format!("not a valid file path: {uri}"))
+            // local file. The built uri is parsed again so that the ".." segments of the path
+            // are collapsed the way parsing collapses them for any other scheme, since the
+            // object store rejects a path that still holds one.
+            let file_uri =
+                Url::from_file_path(uri).map_err(|_| format!("not a valid file path: {uri}"))?;
+
+            Url::parse(file_uri.as_str()).map_err(|e| e.to_string())
         } else {
             Url::parse(uri).map_err(|e| e.to_string())
         }
