@@ -60,14 +60,19 @@ impl ParquetWriterContext {
 
         let attributes = collect_attributes_for(CollectAttributesFor::CopyTo, tupledesc);
 
+        // the field ids are validated against the schema parsed without them, since parsing with
+        // them is what cannot explain a mapping that does not fit the schema
+        let schema_without_field_ids =
+            parse_arrow_schema_from_attributes(&attributes, FieldIds::None);
+
+        validate_field_ids(&field_ids, &schema_without_field_ids).unwrap_or_else(|e| panic!("{e}"));
+
         pgrx::debug2!(
             "schema for tuples: {}",
             parquet_schema_string_from_attributes(&attributes, field_ids.clone())
         );
 
-        let schema = parse_arrow_schema_from_attributes(&attributes, field_ids.clone());
-
-        validate_field_ids(field_ids, &schema).unwrap_or_else(|e| panic!("{e}"));
+        let schema = parse_arrow_schema_from_attributes(&attributes, field_ids);
 
         bloom_filter
             .validate_against_schema(&schema, "bloom_filter")

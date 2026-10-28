@@ -1274,6 +1274,54 @@ mod tests {
         Spi::run(&copy_to_parquet).unwrap();
     }
 
+    #[pg_test]
+    #[should_panic(expected = "Field 'c' in the mapping is a nested field")]
+    fn test_explicit_field_ids_plain_id_for_a_nested_field() {
+        let setup_commands = "create type dog as (id int, name text);
+                              create type person as (id int, dog dog, dogs dog[]);
+                              create table test_table(a int, b text, c person, d person[]);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": 10, \"c\": 20}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "Field 'd' in the mapping is a nested field")]
+    fn test_explicit_field_ids_plain_id_for_an_array_field() {
+        let setup_commands = "create type dog as (id int, name text);
+                              create type person as (id int, dog dog, dogs dog[]);
+                              create table test_table(a int, b text, c person, d person[]);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"d\": 20}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "Field 'a' in the mapping is of type 'Int32'")]
+    fn test_explicit_field_ids_mapping_for_a_leaf_field() {
+        let setup_commands = "create type dog as (id int, name text);
+                              create type person as (id int, dog dog, dogs dog[]);
+                              create table test_table(a int, b text, c person, d person[]);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": {\"__root_field_id\": 10}}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
     // PostgreSQL 19 added the "set_null" value for the COPY FROM "on_error" option. The option
     // itself is not supported by "copy from parquet", so it must keep being rejected by name
     // before its value is ever parsed.
