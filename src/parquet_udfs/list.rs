@@ -1,11 +1,12 @@
 use futures::StreamExt;
 use glob::{MatchOptions, Pattern};
-use pgrx::{iter::TableIterator, name, pg_extern, pg_schema};
+use pgrx::{ereport, iter::TableIterator, name, pg_extern, pg_schema, PgLogLevel, PgSqlErrorCode};
 
 use crate::arrow_parquet::uri_utils::{
     ensure_access_privilege_to_uri, object_store_base_uri, ParsedUriInfo,
 };
 use crate::object_store::object_store_cache::get_or_create_object_store;
+use crate::parquet_copy_hook::copy_cleanup::PART_URI_INFIX;
 use crate::PG_BACKEND_TOKIO_RUNTIME;
 
 #[pg_schema]
@@ -58,7 +59,7 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
     });
 
     // Filter out uris that don't match the pattern
-    paths
+    let matched_uris = paths
         .into_iter()
         .filter(|(path, _)| {
             pattern.matches_path_with(
@@ -80,7 +81,41 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
                 size,
             )
         })
-        .collect::<Vec<_>>()
+        .collect::<Vec<_>>();
+
+    // a parallel COPY TO writes a part file per range next to its local destination, and the
+    // parts of a copy whose backend did not survive it are left there. They hold the rows the
+    // copy wrote, so a pattern that covers them reads those rows a second time.
+    let (parts, matched_uris): (Vec<_>, Vec<_>) = matched_uris
+        .into_iter()
+        .partition(|(uri, _)| uri.contains(PART_URI_INFIX));
+
+    report_parts_not_listed(&parts);
+
+    matched_uris
+}
+
+// report_parts_not_listed describes the part files of a parallel COPY TO that a pattern
+// covered. They are not listed, since they are not data, and a copy that is over left them
+// behind for the user to remove, which is what the report is for.
+fn report_parts_not_listed(parts: &[(String, i64)]) {
+    let Some((part, _)) = parts.first() else {
+        return;
+    };
+
+    ereport!(
+        PgLogLevel::WARNING,
+        PgSqlErrorCode::ERRCODE_WARNING,
+        format!(
+            "{} file(s) of a parallel COPY TO are not part of the data the pattern matches",
+            parts.len()
+        ),
+        format!(
+            "\"{part}\" and the files named like it hold the ranges of a copy rather than \
+             data of their own. A copy that is still running takes its parts with it, and the \
+             parts of a copy whose backend did not survive it can be removed."
+        )
+    );
 }
 
 impl TryFrom<&ParsedUriInfo> for Pattern {
