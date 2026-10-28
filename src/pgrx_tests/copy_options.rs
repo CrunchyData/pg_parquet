@@ -1,14 +1,14 @@
 #[pgrx::pg_schema]
 mod tests {
-    use std::{cmp::Ordering, collections::HashMap, path::Path};
+    use std::{cmp::Ordering, collections::HashMap, path::Path, process::Command};
 
     use parquet::file::metadata::ColumnChunkMetaData;
     use pgrx::{pg_test, Spi};
 
     use crate::{
         pgrx_tests::common::{
-            create_crunchy_map_type, extension_exists, CopyOptionValue, FileCleanup, TestTable,
-            LOCAL_TEST_FILE_PATH,
+            create_crunchy_map_type, extension_exists, test_pg_port, CopyOptionValue, FileCleanup,
+            TestTable, LOCAL_TEST_FILE_PATH,
         },
         store::parquet_metadata_from_uri,
     };
@@ -291,6 +291,81 @@ mod tests {
         copy_options.insert(
             "file_size_bytes".to_string(),
             CopyOptionValue::StringOption("100KB".into()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // a size turns the destination into a folder the copy creates files under, which stdout
+    // is not, so it is rejected rather than failing on the temp file that backs stdout.
+    // The copy runs via psql, since SPI does not accept a COPY TO STDOUT.
+    #[pg_test]
+    fn test_file_size_bytes_with_stdout() {
+        let output = Command::new("psql")
+            .args(["-h", "localhost", "-p", &test_pg_port()])
+            .args(["-d", "pgrx_tests", "-At"])
+            .args([
+                "-c",
+                "COPY (SELECT i FROM generate_series(1, 10) i)
+                 TO STDOUT WITH (format parquet, file_size_bytes '1MB');",
+            ])
+            .output()
+            .expect("failed to run psql");
+
+        assert!(!output.status.success(), "the copy was expected to fail");
+        assert!(output.stdout.is_empty(), "the copy wrote to stdout");
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("file_size_bytes needs a uri to write the files under"),
+            "unexpected error: {stderr}"
+        );
+    }
+
+    // same for a program, which reads what the copy streams to it rather than owning a folder
+    #[pg_test]
+    #[should_panic(expected = "file_size_bytes needs a uri to write the files under")]
+    fn test_file_size_bytes_with_program() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        Spi::run(&format!(
+            "COPY (SELECT i FROM generate_series(1, 10) i)
+             TO PROGRAM 'cat > {LOCAL_TEST_FILE_PATH}' WITH (format parquet, file_size_bytes '1MB');",
+        ))
+        .unwrap();
+    }
+
+    // a size that does not fit the i64 the copy holds it in is out of range, rather than a
+    // negative size every file is larger than
+    #[pg_test]
+    #[should_panic(expected = "file_size_bytes is too large: \"18446744073709551615\"")]
+    fn test_file_size_bytes_above_i64_max() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "file_size_bytes".to_string(),
+            CopyOptionValue::StringOption("18446744073709551615".into()),
+        );
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // the unit a size is given in is a multiplier, which is out of range when the size it
+    // scales up to does not fit an i64, rather than the size it wraps around to
+    #[pg_test]
+    #[should_panic(expected = "file_size_bytes is too large: \"17179869185GB\"")]
+    fn test_file_size_bytes_unit_above_i64_max() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        let mut copy_options = HashMap::new();
+        copy_options.insert(
+            "file_size_bytes".to_string(),
+            CopyOptionValue::StringOption("17179869185GB".into()),
         );
 
         let test_table = TestTable::<i32>::new("int4".into()).with_copy_to_options(copy_options);
@@ -1207,6 +1282,54 @@ mod tests {
                                                          }
                                           }
                                   }";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "Field 'c' in the mapping is a nested field")]
+    fn test_explicit_field_ids_plain_id_for_a_nested_field() {
+        let setup_commands = "create type dog as (id int, name text);
+                              create type person as (id int, dog dog, dogs dog[]);
+                              create table test_table(a int, b text, c person, d person[]);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": 10, \"c\": 20}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "Field 'd' in the mapping is a nested field")]
+    fn test_explicit_field_ids_plain_id_for_an_array_field() {
+        let setup_commands = "create type dog as (id int, name text);
+                              create type person as (id int, dog dog, dogs dog[]);
+                              create table test_table(a int, b text, c person, d person[]);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"d\": 20}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "Field 'a' in the mapping is of type 'Int32'")]
+    fn test_explicit_field_ids_mapping_for_a_leaf_field() {
+        let setup_commands = "create type dog as (id int, name text);
+                              create type person as (id int, dog dog, dogs dog[]);
+                              create table test_table(a int, b text, c person, d person[]);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": {\"__root_field_id\": 10}}";
 
         let copy_to_parquet = format!(
             "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"

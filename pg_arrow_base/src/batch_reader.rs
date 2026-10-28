@@ -39,7 +39,7 @@ use pg_arrow_convert::coerce::{
     error_if_copy_from_match_by_position_with_generated_columns, overlay_file_geospatial_crs,
 };
 use pg_arrow_convert::integer_cast::round_for_integer_cast;
-use pg_arrow_convert::match_by::MatchBy;
+use pg_arrow_convert::match_by::{column_index_by_name, MatchBy};
 use pg_arrow_convert::pgrx_utils::{collect_attributes_for, CollectAttributesFor};
 use pg_arrow_convert::schema::arrow_schema_from_attributes;
 use pg_arrow_convert::type_compat::geometry::reset_postgis_context;
@@ -104,7 +104,10 @@ impl FileReader {
         splits: Option<Range<i64>>,
     ) -> Result<FileReader, String> {
         let (reader, num_rows) = if provider.can_read_ranges() {
-            let source = Arc::new(FileSource::open(place)?);
+            let source = Arc::new(
+                FileSource::open(place)
+                    .map_err(|failure| with_folder_hint(failure, place, provider))?,
+            );
 
             // the footer, before the reader is opened: the row count is what the progress view
             // extrapolates its byte total from, and on this path nothing else ever sees it
@@ -118,8 +121,13 @@ impl FileReader {
                 num_rows,
             )
         } else {
-            let data = io::read_all(place)
-                .ok_or_else(|| format!("there is no file at {}", place.path()))?;
+            let data = io::read_all(place).ok_or_else(|| {
+                with_folder_hint(
+                    format!("there is no file at {}", place.path()),
+                    place,
+                    provider,
+                )
+            })?;
 
             // only worth asking on this path: it is the one where the whole file is already
             // here, so the answer costs a footer parse rather than a download
@@ -179,8 +187,10 @@ impl FileReader {
                     .columns()
                     .get(attribute_idx)
                     .unwrap_or_else(|| error!("column {name} not found")),
-                MatchBy::Name => record_batch
-                    .column_by_name(name)
+                // the attribute names of the relation are truncated to the identifier length
+                // limit, so a longer column name of the file is matched by its truncation
+                MatchBy::Name => column_index_by_name(record_batch.schema_ref().fields(), name)
+                    .map(|column_idx| record_batch.column(column_idx))
                     .unwrap_or_else(|| error!("column {name} not found")),
             };
 
@@ -716,6 +726,38 @@ fn schema_of(
     provider
         .schema(&data)
         .map_err(|e| format!("failed to read the schema of {file_uri}: {e}"))
+}
+
+/// Adds to a "no file" failure what a uri that holds files rather than being one is read with.
+///
+/// A folder, which is what a `COPY TO` with `file_size_bytes` writes, holds no object of its own
+/// name, so reading it back by that name is a missing object to an object store and nothing
+/// else. A store that cannot list, e.g. an http one, says nothing about what is under the uri,
+/// and neither does a staging file, which is this backend's own.
+fn with_folder_hint(failure: String, place: &Place, provider: &Arc<dyn FormatProvider>) -> String {
+    let Place::Object(uri) = place else {
+        return failure;
+    };
+
+    let listed = object_store::try_list_shallow(uri).unwrap_or_default();
+
+    if listed.is_empty() {
+        return failure;
+    }
+
+    let uri = uri.trim_end_matches('/');
+
+    // the pattern names the files the folder holds, which carry the format's own extension
+    let extension = provider
+        .file_extensions()
+        .first()
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+
+    format!(
+        "{failure}. \"{uri}\" holds files rather than being one, so it is read with a pattern \
+         that names them, e.g. \"{uri}/*{extension}\"."
+    )
 }
 
 /// The uris a pattern names, in listing order.

@@ -835,6 +835,108 @@ mod tests {
         assert_eq!(inner_value, (Some(3), Some(4)));
     }
 
+    // the values of a struct's field are rounded for the type of the field at the same position
+    // in the target type, so a composite type that holds its attributes in another order than
+    // the file holds its fields must not round a field's values for another field's type
+    #[pg_test]
+    fn test_coerce_struct_fields_by_name_rounds_the_matched_field() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new("a", DataType::Float64, false),
+                    Field::new("b", DataType::Utf8, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let a: ArrayRef = Arc::new(Float64Array::from(vec![2.7]));
+        let b: ArrayRef = Arc::new(StringArray::from(vec!["hello"]));
+
+        let x = Arc::new(StructArray::try_from(vec![("a", a), ("b", b)]).unwrap());
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        // the attributes are in the other order than the file's fields, and only "a" is read
+        // into an integer
+        let create_type = "CREATE TYPE test_type AS (b text, a int)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+
+        // 2.7 rounds to 3, the way float8::int4 does
+        let value =
+            Spi::get_two::<i32, &str>("SELECT (x).a, (x).b FROM test_table LIMIT 1").unwrap();
+        assert_eq!(value, (Some(3), Some("hello")));
+    }
+
+    // a struct field whose name is longer than the identifier length limit matches an attribute
+    // only once it is truncated, which is not a name arrow-cast can match, so it casts the
+    // fields of the struct by position. The target type then has to hold its fields in the order
+    // the file holds them, or the values land in the wrong attributes.
+    #[pg_test]
+    fn test_coerce_struct_fields_with_long_names_by_name() {
+        let first_name = format!("{}1_in_the_file", "a".repeat(62));
+        let truncated_first_name = format!("{}1", "a".repeat(62));
+        let second_name = format!("{}2_in_the_file", "a".repeat(62));
+        let truncated_second_name = format!("{}2", "a".repeat(62));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(
+                vec![
+                    Field::new(&first_name, DataType::Int32, false),
+                    Field::new(&second_name, DataType::Int32, false),
+                ]
+                .into(),
+            ),
+            false,
+        )]));
+
+        let first: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let second: ArrayRef = Arc::new(Int32Array::from(vec![2]));
+
+        let x = Arc::new(
+            StructArray::try_from(vec![
+                (first_name.as_str(), first),
+                (second_name.as_str(), second),
+            ])
+            .unwrap(),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        // the attributes are in the other order than the file's fields
+        let create_type = format!(
+            "CREATE TYPE test_type AS (\"{truncated_second_name}\" bigint, \
+             \"{truncated_first_name}\" bigint)"
+        );
+        Spi::run(&create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (x test_type)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+
+        let value = Spi::get_two::<i64, i64>(&format!(
+            "SELECT (x).\"{truncated_first_name}\", (x).\"{truncated_second_name}\"
+             FROM test_table LIMIT 1"
+        ))
+        .unwrap();
+        assert_eq!(value, (Some(1), Some(2)));
+    }
+
     #[pg_test]
     fn test_coerce_list_of_struct() {
         // [STRUCT {a: UINT16, b: UINT16}] => test_type {a: int, b: bigint}[]
@@ -1324,6 +1426,86 @@ mod tests {
         assert_eq!(result, (Some("hello"), Some(1)));
     }
 
+    // PostgreSQL truncates an identifier to 63 bytes, so a column of the table can only hold the
+    // first 63 bytes of a longer parquet column name, which is what match_by 'name' has to match
+    // it with. The same truncation is what CREATE TABLE ... definition_from names the column of
+    // such a file with, and what the nested fields of a struct are already matched by.
+    #[pg_test]
+    fn test_table_with_long_column_name_match_by_name() {
+        // the names of the file are longer than the limit, and tell each other apart within the
+        // first 63 bytes, so they are still two names once they are truncated. The multibyte one
+        // must be truncated at a character boundary, the way the parser truncates it.
+        let ascii_name = format!("{}1_in_the_file", "a".repeat(62));
+        let truncated_ascii_name = format!("{}1", "a".repeat(62));
+        let multibyte_name = "ü".repeat(40);
+        let truncated_multibyte_name = "ü".repeat(31);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(&ascii_name, DataType::Int32, true),
+            Field::new("short", DataType::Utf8, true),
+            Field::new(&multibyte_name, DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(StringArray::from(vec!["hello"])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![2])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        // the table holds the columns in another order than the file does, so a column that was
+        // matched by position rather than by name would be read from the wrong one
+        let create_table = format!(
+            "CREATE TABLE test_table (\"{truncated_multibyte_name}\" int, short text, \
+             \"{truncated_ascii_name}\" int)"
+        );
+        Spi::run(&create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_three::<i32, i32, &str>(&format!(
+            "SELECT \"{truncated_ascii_name}\", \"{truncated_multibyte_name}\", short
+             FROM test_table LIMIT 1"
+        ))
+        .unwrap();
+        assert_eq!(result, (Some(1), Some(2), Some("hello")));
+    }
+
+    // two long names that are only told apart past the 63rd byte are one name once they are
+    // truncated, and which of them a column is read from would be a matter of the order the file
+    // happens to hold them in
+    #[pg_test]
+    #[should_panic(expected = "parquet file has more than one field named")]
+    fn test_table_with_ambiguous_long_column_name_match_by_name() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(format!("{}_one", "a".repeat(63)), DataType::Int32, true),
+            Field::new(format!("{}_two", "a".repeat(63)), DataType::Int32, true),
+        ]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![2])) as ArrayRef,
+            ],
+        )
+        .unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = format!("CREATE TABLE test_table (\"{}\" int)", "a".repeat(63));
+        Spi::run(&create_table).unwrap();
+
+        let copy_from =
+            format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (match_by 'name')");
+        Spi::run(&copy_from).unwrap();
+    }
+
     #[pg_test]
     fn test_table_with_different_name_match_by_position() {
         let copy_to = "COPY (SELECT 1 as a, 'hello' as b) TO '/tmp/test.parquet'";
@@ -1754,6 +1936,44 @@ mod tests {
             "SELECT a::text = '1.234567890'
                 AND b::text = '{0.123456789,9.876543210}'
                 AND e::text = '1.230000000' FROM test_table_bounded",
+        )
+        .unwrap();
+        assert_eq!(result, Some(true));
+    }
+
+    #[pg_test]
+    fn test_coerce_narrow_decimal_into_unbounded_numeric() {
+        // the narrow decimal types are adopted by an unbounded "numeric" too. A "Decimal32"
+        // always fits the default "numeric(38,9)", a "Decimal64" has the scale to lose digits
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Decimal64(18, 12), true),
+            Field::new("y", DataType::Decimal32(9, 9), true),
+        ]));
+
+        let x = Arc::new(
+            Decimal64Array::from(vec![1_000_000_000_001_i64])
+                .with_precision_and_scale(18, 12)
+                .unwrap(),
+        );
+
+        let y = Arc::new(
+            Decimal32Array::from(vec![123_456_789_i32])
+                .with_precision_and_scale(9, 9)
+                .unwrap(),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x, y]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x numeric, y numeric)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<bool>(
+            "SELECT x::text = '1.000000000001'
+                AND y::text = '0.123456789' FROM test_table",
         )
         .unwrap();
         assert_eq!(result, Some(true));
@@ -2303,6 +2523,117 @@ mod tests {
         assert_eq!(rounded("v[1]").as_deref(), Some("10,-10,1,2,3,-1"));
         assert_eq!(rounded("u").as_deref(), Some("10,-10,1,2,3,-1"));
         assert_eq!(rounded("t").as_deref(), Some("10,-10,1,2,3,-1"));
+    }
+
+    #[pg_test]
+    fn test_coerce_decimal_to_integer_rounds_up_past_its_precision() {
+        // a rounding that carries does not fit the scale of the column, e.g. DECIMAL(2,1) 9.6
+        // rounds to 10, which needs both of the digits the precision allows
+        let decimals = || {
+            Decimal128Array::from(vec![96, -96, 5, 15, 25, -5])
+                .with_precision_and_scale(2, 1)
+                .unwrap()
+        };
+
+        let element_field = Arc::new(Field::new("element", DataType::Decimal128(2, 1), true));
+        let offsets = || OffsetBuffer::new(ScalarBuffer::from(vec![0, 1, 2, 3, 4, 5, 6]));
+
+        let i = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6]));
+        let x = Arc::new(decimals());
+        let y = Arc::new(ListArray::new(
+            element_field.clone(),
+            offsets(),
+            Arc::new(decimals()),
+            None,
+        ));
+        let z =
+            Arc::new(StructArray::try_from(vec![("a", Arc::new(decimals()) as ArrayRef)]).unwrap());
+        let w = Arc::new(
+            DictionaryArray::try_new(
+                Int32Array::from(vec![0, 1, 2, 3, 4, 5]),
+                Arc::new(decimals()),
+            )
+            .unwrap(),
+        );
+        let v = Arc::new(FixedSizeListArray::new(
+            element_field.clone(),
+            1,
+            Arc::new(decimals()),
+            None,
+        ));
+
+        // the other decimal widths carry the same way
+        let u = Arc::new(
+            Decimal32Array::from(vec![96, -96, 5, 15, 25, -5])
+                .with_precision_and_scale(2, 1)
+                .unwrap(),
+        );
+        let t = Arc::new(
+            Decimal64Array::from(vec![96, -96, 5, 15, 25, -5])
+                .with_precision_and_scale(2, 1)
+                .unwrap(),
+        );
+        let s = Arc::new(
+            Decimal256Array::from(
+                [96, -96, 5, 15, 25, -5]
+                    .iter()
+                    .map(|value| i256::from_i128(*value))
+                    .collect::<Vec<_>>(),
+            )
+            .with_precision_and_scale(2, 1)
+            .unwrap(),
+        );
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, false),
+            Field::new("x", DataType::Decimal128(2, 1), false),
+            Field::new("y", DataType::List(element_field.clone()), false),
+            Field::new(
+                "z",
+                DataType::Struct(vec![Field::new("a", DataType::Decimal128(2, 1), false)].into()),
+                false,
+            ),
+            Field::new(
+                "w",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Decimal128(2, 1)),
+                ),
+                false,
+            ),
+            Field::new("v", DataType::FixedSizeList(element_field, 1), false),
+            Field::new("u", DataType::Decimal32(2, 1), false),
+            Field::new("t", DataType::Decimal64(2, 1), false),
+            Field::new("s", DataType::Decimal256(2, 1), false),
+        ]));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![i, x, y, z, w, v, u, t, s]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_type = "CREATE TYPE test_type AS (a int)";
+        Spi::run(create_type).unwrap();
+
+        let create_table = "CREATE TABLE test_table (i int, x int, y int[], z test_type, w smallint, v bigint[], u int, t bigint, s int)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let rounded = |column: &str| {
+            Spi::get_one::<String>(&format!(
+                "SELECT string_agg({column}::text, ',' ORDER BY i) FROM test_table"
+            ))
+            .unwrap()
+        };
+
+        assert_eq!(rounded("x").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("y[1]").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("(z).a").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("w").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("v[1]").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("u").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("t").as_deref(), Some("10,-10,1,2,3,-1"));
+        assert_eq!(rounded("s").as_deref(), Some("10,-10,1,2,3,-1"));
     }
 
     #[pg_test]

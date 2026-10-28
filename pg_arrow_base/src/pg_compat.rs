@@ -88,6 +88,23 @@ pub(crate) fn pg_plan_query(
     }
 }
 
+/// Postgres 18 renamed `HandleParallelMessages` to `ProcessParallelMessages`. Reading the error
+/// queues of the parallel context is what turns a worker that gave up into the statement's own
+/// error, and it is asked for directly rather than left to the next interrupt check, because the
+/// queue only has to be readable for the leader to find the error -- the signal the worker sent
+/// along with it does not have to have arrived yet.
+pub(crate) fn process_parallel_messages() {
+    #[cfg(pre_pg18)]
+    unsafe {
+        pgrx::pg_sys::HandleParallelMessages()
+    }
+
+    #[cfg(not(pre_pg18))]
+    unsafe {
+        pgrx::pg_sys::ProcessParallelMessages()
+    }
+}
+
 /// Postgres 15 gave `shm_mq_sendv` a `force_flush` argument. Flushing every message is what a
 /// parallel `COPY FROM` worker wants on every version: the leader inserts the rows in file
 /// order, so a message held back is a leader waiting for it.

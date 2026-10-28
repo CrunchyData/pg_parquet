@@ -1970,8 +1970,13 @@ mod tests {
 
     /// The files a split statement left under its uri, in name order.
     fn files_under(uri: &str) -> Vec<std::path::PathBuf> {
-        let mut files = std::fs::read_dir(uri)
-            .expect("the uri of a split statement is a folder")
+        // a statement that wrote no file left no folder behind either, since a folder is made
+        // by the first file that goes into it
+        let Ok(entries) = std::fs::read_dir(uri) else {
+            return vec![];
+        };
+
+        let mut files = entries
             .map(|entry| entry.expect("the folder is readable").path())
             .collect::<Vec<_>>();
 
@@ -2178,10 +2183,28 @@ mod tests {
 
     // -- arrow.max_parallel_workers, where several processes fill one folder
 
+    /// How many workers the parallel tests below ask for.
+    const PARALLEL_WORKERS: i32 = 4;
+
+    /// Takes the lock the parallel tests share, so that one of them at a time is asking the
+    /// cluster for workers.
+    ///
+    /// The suite runs its tests at once while the workers come out of one
+    /// `max_worker_processes` pool, so tests that ask for workers together are handed fewer
+    /// than they asked for or none at all -- and a statement handed no worker is carried out
+    /// by the leader alone, which is what several of these tests prove did not happen. The
+    /// lock is held by the transaction of the test, which the harness rolls back.
+    fn hold_the_parallel_workers() {
+        Spi::run("SELECT pg_advisory_xact_lock(hashtext('pg_arrow_base parallel workers'))")
+            .expect("failed to take the lock the parallel tests share");
+    }
+
     /// Lays down a table large enough for the parallel path to take it, and asserts that it is:
     /// a statement under the page threshold falls back to the single process path, and a test
     /// that silently exercised the fallback would prove nothing.
     fn create_parallel_source(table: &str, rows: i64) {
+        hold_the_parallel_workers();
+
         Spi::run(&format!(
             "CREATE TABLE {table} (id int, payload text);
              INSERT INTO {table}
@@ -2210,11 +2233,11 @@ mod tests {
 
         create_parallel_source("parallel_source", 100_000);
 
-        Spi::run(
+        Spi::run(&format!(
             "CREATE TABLE parallel_back (LIKE parallel_source);
-             SET max_parallel_workers TO 4;
-             SET arrow.max_parallel_workers TO 4;",
-        )
+             SET max_parallel_workers TO {PARALLEL_WORKERS};
+             SET arrow.max_parallel_workers TO {PARALLEL_WORKERS};"
+        ))
         .expect("failed to set up the statement");
 
         Spi::run(&format!(
@@ -2286,6 +2309,260 @@ mod tests {
         std::fs::remove_dir_all(uri).ok();
     }
 
+    /// How many rows the files a split statement wrote hold altogether: the fake writes a
+    /// header, a line a row and an `-- end` footer, so the rows of a file are the lines that
+    /// are neither.
+    fn rows_under(uri: &str) -> usize {
+        files_under(uri)
+            .iter()
+            .map(|file| {
+                let text = std::fs::read_to_string(file).expect("the file is readable");
+
+                text.lines().count() - 2
+            })
+            .sum()
+    }
+
+    /// How many of the files a split statement wrote are under the threshold it was given. A
+    /// single process statement leaves exactly one -- its tail -- and a statement written as
+    /// ranges leaves one per range, so this is what tells the two apart.
+    fn short_files_under(uri: &str, threshold: u64) -> usize {
+        files_under(uri)
+            .iter()
+            .filter(|file| std::fs::metadata(file).expect("the file is there").len() < threshold)
+            .count()
+    }
+
+    #[pg_test]
+    fn test_a_parallel_copy_to_leaves_no_file_of_no_rows() {
+        lines::register();
+
+        let sequential = "/tmp/pg_arrow_base_parallel_empty_sequential";
+        let parallel = "/tmp/pg_arrow_base_parallel_empty_parallel";
+        let single = "/tmp/pg_arrow_base_parallel_empty_single.testlines";
+
+        for uri in [sequential, parallel] {
+            std::fs::remove_dir_all(uri).ok();
+        }
+        std::fs::remove_file(single).ok();
+
+        create_parallel_source("parallel_empty", 100_000);
+
+        // the rows are deleted by the transaction of the test, so the blocks that held them
+        // are still there for the ranges to claim while no range finds a row it can see
+        Spi::run("DELETE FROM parallel_empty").expect("failed to empty the table");
+
+        Spi::run("SET max_parallel_workers TO 0; SET arrow.max_parallel_workers TO 0;")
+            .expect("failed to set up the statement");
+
+        Spi::run(&format!(
+            "COPY parallel_empty TO '{sequential}'
+             WITH (format 'testlines', file_size_bytes '1MB')"
+        ))
+        .expect("the single process COPY is carried out");
+
+        Spi::run(&format!(
+            "SET max_parallel_workers TO {PARALLEL_WORKERS};
+             SET arrow.max_parallel_workers TO {PARALLEL_WORKERS};"
+        ))
+        .expect("failed to set up the statement");
+
+        Spi::run(&format!(
+            "COPY parallel_empty TO '{parallel}'
+             WITH (format 'testlines', file_size_bytes '1MB')"
+        ))
+        .expect("the parallel COPY is carried out");
+
+        assert!(
+            files_under(sequential).is_empty(),
+            "the single process statement wrote a file of no rows"
+        );
+        assert!(
+            files_under(parallel).is_empty(),
+            "a range wrote a file of no rows"
+        );
+
+        // a statement that writes a single file still writes it, since that file is the
+        // destination the command names rather than a file a range needed
+        Spi::run(&format!(
+            "COPY parallel_empty TO '{single}' WITH (format 'testlines')"
+        ))
+        .expect("the COPY of no rows is carried out");
+
+        assert!(
+            std::fs::metadata(single)
+                .expect("the destination is there")
+                .is_file(),
+            "a statement with no file_size_bytes writes its destination whatever it holds"
+        );
+
+        for uri in [sequential, parallel] {
+            std::fs::remove_dir_all(uri).ok();
+        }
+        std::fs::remove_file(single).ok();
+    }
+
+    #[pg_test]
+    fn test_a_parallel_copy_to_whose_names_hold_a_range_placeholder() {
+        lines::register();
+
+        // the statement of a range has the bounds of the range filled in by replacing the text
+        // of a placeholder in it, so a column, a relation, a schema, an option value or a
+        // destination whose name holds that text would be replaced along with them and rewrite
+        // the statement into a command of its own. Each of those keeps the single process
+        // path, which writes every row of the table into the folder it was given.
+        create_parallel_source("parallel_placeholder", 100_000);
+
+        Spi::run(&format!(
+            "CREATE TABLE parallel_placeholder_back (LIKE parallel_placeholder);
+             ALTER TABLE parallel_placeholder RENAME COLUMN payload TO \"@LAST_BLOCK@\";
+             SET max_parallel_workers TO {PARALLEL_WORKERS};
+             SET arrow.max_parallel_workers TO {PARALLEL_WORKERS};"
+        ))
+        .expect("failed to set up the statement");
+
+        // the attribute list holds the text of a placeholder
+        {
+            let uri = "/tmp/pg_arrow_base_parallel_placeholder_column";
+            std::fs::remove_dir_all(uri).ok();
+
+            Spi::run(&format!(
+                "COPY parallel_placeholder (id, \"@LAST_BLOCK@\") TO '{uri}'
+                 WITH (format 'testlines', file_size_bytes '1MB')"
+            ))
+            .expect("the COPY is carried out");
+
+            assert_eq!(
+                short_files_under(uri, 1024 * 1024),
+                1,
+                "the statement was written as ranges after all"
+            );
+
+            assert_eq!(rows_under(uri), 100_000);
+
+            std::fs::remove_dir_all(uri).ok();
+        }
+
+        // an option value holds the text of a placeholder, while the command names no column
+        {
+            let uri = "/tmp/pg_arrow_base_parallel_placeholder_option";
+            std::fs::remove_dir_all(uri).ok();
+
+            Spi::run(&format!(
+                "COPY parallel_placeholder TO '{uri}'
+                 WITH (format 'testlines', prefix '@FIRST_BLOCK@', file_size_bytes '1MB')"
+            ))
+            .expect("the COPY is carried out");
+
+            assert_eq!(
+                short_files_under(uri, 1024 * 1024),
+                1,
+                "the statement was written as ranges after all"
+            );
+
+            std::fs::remove_dir_all(uri).ok();
+        }
+
+        // the destination holds the text of a placeholder, which the single process path
+        // writes as it stands rather than filling the bounds of a range into
+        {
+            let uri = "/tmp/pg_arrow_base_parallel_placeholder_@FIRST_BLOCK@";
+            std::fs::remove_dir_all(uri).ok();
+
+            Spi::run(&format!(
+                "COPY parallel_placeholder TO '{uri}'
+                 WITH (format 'testlines', file_size_bytes '1MB')"
+            ))
+            .expect("the COPY is carried out");
+
+            assert_eq!(
+                short_files_under(uri, 1024 * 1024),
+                1,
+                "the statement was written as ranges after all"
+            );
+
+            assert_eq!(rows_under(uri), 100_000);
+
+            std::fs::remove_dir_all(uri).ok();
+        }
+
+        // the schema and the relation hold the text of a placeholder
+        {
+            let uri = "/tmp/pg_arrow_base_parallel_placeholder_relation";
+            std::fs::remove_dir_all(uri).ok();
+
+            Spi::run(
+                "CREATE SCHEMA \"s@LAST_BLOCK@\";
+                 ALTER TABLE parallel_placeholder SET SCHEMA \"s@LAST_BLOCK@\";
+                 ALTER TABLE \"s@LAST_BLOCK@\".parallel_placeholder
+                 RENAME TO \"t@FIRST_BLOCK@\";",
+            )
+            .expect("failed to rename the table");
+
+            Spi::run(&format!(
+                "COPY \"s@LAST_BLOCK@\".\"t@FIRST_BLOCK@\" TO '{uri}'
+                 WITH (format 'testlines', file_size_bytes '1MB')"
+            ))
+            .expect("the COPY is carried out");
+
+            assert_eq!(
+                short_files_under(uri, 1024 * 1024),
+                1,
+                "the statement was written as ranges after all"
+            );
+
+            assert_eq!(rows_under(uri), 100_000);
+
+            std::fs::remove_dir_all(uri).ok();
+        }
+    }
+
+    #[pg_test]
+    fn test_a_parallel_copy_to_the_role_may_only_read_columns_of() {
+        lines::register();
+
+        let uri = "/tmp/pg_arrow_base_parallel_column_select";
+        std::fs::remove_dir_all(uri).ok();
+
+        create_parallel_source("parallel_column_select", 100_000);
+
+        Spi::run(&format!(
+            "SET max_parallel_workers TO {PARALLEL_WORKERS};
+             SET arrow.max_parallel_workers TO {PARALLEL_WORKERS};"
+        ))
+        .expect("failed to set up the statement");
+
+        // the statement of a range reads ctid, which needs select on the relation itself, while
+        // the command it comes from only needs it on the columns it names. A role that holds
+        // the column privileges alone keeps the single process path, rather than being refused
+        // the copy it is allowed to run
+        Spi::run(
+            "CREATE ROLE column_select_only;
+             GRANT pg_write_server_files TO column_select_only;
+             GRANT SELECT (id) ON parallel_column_select TO column_select_only;
+             SET ROLE column_select_only;",
+        )
+        .expect("failed to set up the role");
+
+        Spi::run(&format!(
+            "COPY parallel_column_select (id) TO '{uri}'
+             WITH (format 'testlines', file_size_bytes '1MB')"
+        ))
+        .expect("the COPY is carried out");
+
+        Spi::run("RESET ROLE").expect("failed to reset the role");
+
+        assert_eq!(
+            short_files_under(uri, 1024 * 1024),
+            1,
+            "the statement was written as ranges after all"
+        );
+
+        assert_eq!(rows_under(uri), 100_000);
+
+        std::fs::remove_dir_all(uri).ok();
+    }
+
     #[pg_test]
     fn test_a_statement_the_parallel_path_cannot_split_still_writes_one_file() {
         lines::register();
@@ -2296,8 +2573,11 @@ mod tests {
 
         create_parallel_source("parallel_whole", 100_000);
 
-        Spi::run("SET max_parallel_workers TO 4; SET arrow.max_parallel_workers TO 4;")
-            .expect("failed to set up the statement");
+        Spi::run(&format!(
+            "SET max_parallel_workers TO {PARALLEL_WORKERS};
+             SET arrow.max_parallel_workers TO {PARALLEL_WORKERS};"
+        ))
+        .expect("failed to set up the statement");
 
         // no file_size_bytes, so the destination is one file written from its header to its
         // footer: there is nothing to hand a second process, and the statement is carried out
@@ -2339,6 +2619,8 @@ mod tests {
         // inside this backend reads one. It is also the one thing of a parallel statement the
         // leader cannot count for itself: the files are finished by the participants, so the
         // count is summed in shared memory.
+        hold_the_parallel_workers();
+
         let port = Spi::get_one::<String>("SELECT current_setting('port')")
             .expect("failed to read the port")
             .expect("the port is set");
@@ -2356,8 +2638,8 @@ mod tests {
         let tag = psql(
             &port,
             &format!(
-                "SET max_parallel_workers TO 4;
-                 SET arrow.max_parallel_workers TO 4;
+                "SET max_parallel_workers TO {PARALLEL_WORKERS};
+                 SET arrow.max_parallel_workers TO {PARALLEL_WORKERS};
                  COPY parallel_tag TO '{uri}'
                  WITH (format 'testlines', file_size_bytes '1MB')"
             ),
@@ -2380,6 +2662,8 @@ mod tests {
     /// A source file of `rows` rows, which is `rows / lines::SPLIT_ROWS` splits for the
     /// workers to divide, and an empty folder to leave the markers in.
     fn create_parallel_from_source(uri: &str, trace: &str, rows: i64) {
+        hold_the_parallel_workers();
+
         std::fs::remove_file(uri).ok();
         std::fs::remove_dir_all(trace).ok();
         std::fs::create_dir_all(trace).expect("failed to make the trace folder");
@@ -2390,8 +2674,11 @@ mod tests {
         ))
         .expect("failed to write the source file");
 
-        Spi::run("SET max_parallel_workers TO 4; SET arrow.max_parallel_workers TO 4;")
-            .expect("failed to set up the statement");
+        Spi::run(&format!(
+            "SET max_parallel_workers TO {PARALLEL_WORKERS};
+             SET arrow.max_parallel_workers TO {PARALLEL_WORKERS};"
+        ))
+        .expect("failed to set up the statement");
     }
 
     /// Which process read which split, out of the markers the fake left: a pair per read.
@@ -2529,27 +2816,222 @@ mod tests {
 
         create_parallel_from_source(uri, trace, 5000);
 
+        // every statement below is read in this process, so the markers of all of them are
+        // this process's and the trace is counted once at the end
+
         // a column with a default: filling one is an insert the leader may not make in parallel
         // mode, so the statement is read in this process as it always was
-        Spi::run("CREATE TABLE parallel_from_default (i int, extra int DEFAULT 7)")
+        {
+            Spi::run("CREATE TABLE parallel_from_default (i int, extra int DEFAULT 7)")
+                .expect("failed to set up the table");
+
+            Spi::run(&format!(
+                "COPY parallel_from_default (i) FROM '{uri}'
+                 WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')"
+            ))
+            .expect("the COPY FROM is carried out");
+
+            assert_eq!(
+                Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_default WHERE extra = 7"),
+                Ok(Some(5000))
+            );
+        }
+
+        // a CHECK constraint whose function runs statements of its own, which the leader
+        // evaluates for every row it writes and cannot run in parallel mode
+        {
+            Spi::run(
+                "CREATE FUNCTION volatile_positive(n int) RETURNS bool
+                 LANGUAGE plpgsql VOLATILE AS $$
+                 BEGIN
+                     PERFORM 1;
+                     RETURN n > 0;
+                 END
+                 $$",
+            )
+            .expect("failed to set up the function");
+
+            Spi::run(
+                "CREATE TABLE parallel_from_check (i int);
+                 ALTER TABLE parallel_from_check ADD CHECK (volatile_positive(i))",
+            )
             .expect("failed to set up the table");
 
-        Spi::run(&format!(
-            "COPY parallel_from_default (i) FROM '{uri}'
-             WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')"
-        ))
-        .expect("the COPY FROM is carried out");
+            Spi::run(&format!(
+                "COPY parallel_from_check FROM '{uri}'
+                 WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')"
+            ))
+            .expect("the COPY FROM is carried out");
 
-        assert_eq!(
-            Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_default WHERE extra = 7"),
-            Ok(Some(5000))
-        );
+            assert_eq!(
+                Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_check"),
+                Ok(Some(5000))
+            );
+        }
+
+        // the same constraint added NOT VALID, which the rows already in the relation were not
+        // checked against but the rows of the copy still are
+        {
+            Spi::run(
+                "CREATE TABLE parallel_from_not_valid (i int);
+                 ALTER TABLE parallel_from_not_valid
+                 ADD CHECK (volatile_positive(i)) NOT VALID",
+            )
+            .expect("failed to set up the table");
+
+            Spi::run(&format!(
+                "COPY parallel_from_not_valid FROM '{uri}'
+                 WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')"
+            ))
+            .expect("the COPY FROM is carried out");
+
+            assert_eq!(
+                Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_not_valid"),
+                Ok(Some(5000))
+            );
+        }
+
+        // an attribute whose type is a domain carrying such a constraint, which is evaluated
+        // the same way but is reached through the type rather than through the relation
+        {
+            Spi::run(
+                "CREATE DOMAIN positive_i AS int CHECK (volatile_positive(VALUE));
+                 CREATE TABLE parallel_from_domain (i positive_i)",
+            )
+            .expect("failed to set up the domain");
+
+            Spi::run(&format!(
+                "COPY parallel_from_domain FROM '{uri}'
+                 WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')"
+            ))
+            .expect("the COPY FROM is carried out");
+
+            assert_eq!(
+                Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_domain"),
+                Ok(Some(5000))
+            );
+        }
+
+        // an attribute whose type holds that domain inside an array or inside a composite,
+        // which the receive function of the array and of the composite reach for every value
+        // they hold, the same way the domain's own receive function does. The statement names
+        // neither column, since what a worker may write is a property of the relation
+        {
+            Spi::run(
+                "CREATE TYPE domain_pair AS (first positive_i, second text);
+                 CREATE TABLE parallel_from_nested_domain
+                 (i int, ids positive_i[], pair domain_pair)",
+            )
+            .expect("failed to set up the table");
+
+            Spi::run(&format!(
+                "COPY parallel_from_nested_domain (i) FROM '{uri}'
+                 WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')"
+            ))
+            .expect("the COPY FROM is carried out");
+
+            assert_eq!(
+                Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_nested_domain"),
+                Ok(Some(5000))
+            );
+        }
+
+        // a WHERE clause calling such a function, which the leader evaluates for every row the
+        // workers hand it
+        {
+            Spi::run("CREATE TABLE parallel_from_volatile_where (i int)")
+                .expect("failed to set up the table");
+
+            Spi::run(&format!(
+                "COPY parallel_from_volatile_where FROM '{uri}'
+                 WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')
+                 WHERE volatile_positive(i)"
+            ))
+            .expect("the COPY FROM is carried out");
+
+            assert_eq!(
+                Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_volatile_where"),
+                Ok(Some(5000))
+            );
+        }
+
+        // a WHERE clause taking a value from a sequence, which parallel mode refuses outright
+        // rather than through the command counter
+        {
+            Spi::run(
+                "CREATE SEQUENCE where_sequence;
+                 CREATE TABLE parallel_from_nextval_where (i int)",
+            )
+            .expect("failed to set up the sequence");
+
+            Spi::run(&format!(
+                "COPY parallel_from_nextval_where FROM '{uri}'
+                 WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')
+                 WHERE nextval('where_sequence') > 0"
+            ))
+            .expect("the COPY FROM is carried out");
+
+            assert_eq!(
+                Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_nextval_where"),
+                Ok(Some(5000))
+            );
+        }
 
         let read = traced_splits(trace);
 
         assert!(
             read.iter().all(|(pid, _)| *pid == std::process::id()),
-            "the statement was handed to a worker after all: {read:?}"
+            "a statement was handed to a worker after all: {read:?}"
+        );
+
+        std::fs::remove_file(uri).ok();
+        std::fs::remove_dir_all(trace).ok();
+    }
+
+    #[pg_test]
+    fn test_a_constraint_and_a_filter_the_leader_may_run_keep_the_parallel_path() {
+        lines::register();
+
+        let uri = "/tmp/pg_arrow_base_parallel_from_ordinary.testlines";
+        let trace = "/tmp/pg_arrow_base_parallel_from_ordinary_trace";
+
+        create_parallel_from_source(uri, trace, 5000);
+
+        // a constraint and a filter the leader can evaluate in parallel mode keep the copy on
+        // the parallel path, rather than cost it the parallel path for carrying a constraint or
+        // a filter at all. The function is stable, and plpgsql runs the statements of a stable
+        // one read only, so it asks for none of the command counter increments parallel mode
+        // forbids
+        Spi::run(
+            "CREATE FUNCTION stable_positive(n int) RETURNS bool
+             LANGUAGE plpgsql STABLE AS $$
+             BEGIN
+                 PERFORM 1;
+                 RETURN n > 0;
+             END
+             $$;
+             CREATE TABLE parallel_from_ordinary (i int);
+             ALTER TABLE parallel_from_ordinary ADD CHECK (stable_positive(i))",
+        )
+        .expect("failed to set up the table");
+
+        Spi::run(&format!(
+            "COPY parallel_from_ordinary FROM '{uri}'
+             WITH (format 'testlines', {TRACE_SPLITS_OPTION} '{trace}')
+             WHERE i % 2 = 0"
+        ))
+        .expect("the COPY FROM is carried out");
+
+        assert_eq!(
+            Spi::get_one::<i64>("SELECT count(*) FROM parallel_from_ordinary"),
+            Ok(Some(2500))
+        );
+
+        let read = traced_splits(trace);
+
+        assert!(
+            !read.is_empty() && read.iter().all(|(pid, _)| *pid != std::process::id()),
+            "the constraint or the filter took the statement off the parallel path: {read:?}"
         );
 
         std::fs::remove_file(uri).ok();

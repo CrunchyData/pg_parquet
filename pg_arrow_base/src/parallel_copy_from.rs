@@ -25,10 +25,12 @@ use std::sync::Arc;
 
 use format_registry::options::FormatOptions;
 use format_registry::provider::FormatProvider;
+use pg_arrow_convert::pgrx_utils::tuple_desc;
 use pgrx::pg_sys::{
     self, dsm_segment, pg_atomic_init_u32, pg_atomic_read_u32, pg_atomic_uint32,
-    pg_atomic_write_u32, shm_mq, shm_mq_handle, shm_mq_iovec, shm_mq_result, shm_toc, Oid,
-    PlannedStmt, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP,
+    pg_atomic_write_u32, shm_mq, shm_mq_handle, shm_mq_iovec, shm_mq_result, shm_toc, Node, Oid,
+    PlannedStmt, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP, TYPTYPE_COMPOSITE,
+    TYPTYPE_DOMAIN, TYPTYPE_MULTIRANGE, TYPTYPE_RANGE,
 };
 use pgrx::{check_for_interrupts, pg_guard, PgBox, PgMemoryContexts, PgRelation, PgTupleDesc};
 
@@ -365,16 +367,17 @@ impl ParallelCopyFromSource {
         if result == shm_mq_result::SHM_MQ_DETACHED {
             self.detached[worker] = true;
 
-            // a worker that failed has already put its error on its error queue, and this is
-            // what re-raises it here, where it is the statement's error rather than a worker
-            // having gone missing
-            check_for_interrupts!();
-
             // a worker detaches once it closed every split it was given, so a detach with a
-            // split still expected and no error behind it is one that is unaccounted for
+            // split still expected is a worker that gave up
             if self.closed_splits[worker]
                 < splits_of_worker(self.nsplits, worker, self.handles.len())
             {
+                // a worker that gave up reports why through the error queue of the parallel
+                // context, which it writes to before it detaches this queue. Reading those
+                // queues re-raises what is in there, which is the error the statement has to
+                // fail with rather than a worker having gone missing
+                pg_compat::process_parallel_messages();
+
                 pgrx::error!(
                     "a parallel COPY FROM worker exited before it read every split it was given"
                 );
@@ -566,10 +569,11 @@ pub(crate) fn try_parallel_copy_from(
     p_stmt: &PgBox<PlannedStmt>,
     plan: &CopyFromPlan,
     relation: &PgRelation,
+    where_clause: *mut Node,
 ) -> bool {
     let nworkers = requested_parallel_workers();
 
-    if nworkers <= 0 || !is_eligible(plan, relation) {
+    if nworkers <= 0 || !is_eligible(plan, relation, where_clause) {
         return false;
     }
 
@@ -771,7 +775,7 @@ fn parallel_copy_from_file(plan: &CopyFromPlan, uri: &str) -> Option<ParallelCop
 /// Only the decoding is handed around, so anything that would make the leader's own writes
 /// illegal in parallel mode, or that would make a worker read a different file than the leader,
 /// falls back to the single process path.
-fn is_eligible(plan: &CopyFromPlan, relation: &PgRelation) -> bool {
+fn is_eligible(plan: &CopyFromPlan, relation: &PgRelation, where_clause: *mut Node) -> bool {
     // a worker reads the file itself, so there has to be a file rather than a byte stream. A
     // `STDIN` or a `PROGRAM` is staged into a temporary file of this backend, which is a file
     // only this backend knows the name of.
@@ -801,8 +805,90 @@ fn is_eligible(plan: &CopyFromPlan, relation: &PgRelation) -> bool {
         return false;
     }
 
+    // the leader evaluates the WHERE clause of the command and the CHECK constraints of the
+    // relation for every row it writes, which a volatile function in either of them may not do
+    // in parallel mode: nextval() refuses outright, and a plpgsql function runs its own
+    // statements read write, which needs a command counter increment parallel mode forbids. A
+    // stable or an immutable function is safe, since plpgsql runs the statements of one read
+    // only, so an ordinary constraint keeps the command parallel
+    if !where_clause.is_null() && unsafe { pg_sys::contain_volatile_functions(where_clause) } {
+        return false;
+    }
+
+    if relation_has_volatile_check_constraint(relation) {
+        return false;
+    }
+
     relation.tuple_desc().iter().all(|attribute| {
-        !attribute.atthasdef && attribute.attidentity == 0 && attribute.attgenerated == 0
+        !attribute.atthasdef
+            && attribute.attidentity == 0
+            && attribute.attgenerated == 0
+            && !type_contains_domain(attribute.atttypid)
+    })
+}
+
+/// Whether a value of the type can carry the constraints of a domain.
+///
+/// Those constraints are evaluated by the leader too, but they are reached through the type cache
+/// rather than through the relation, so a type that holds a domain is left to the single process
+/// path whether that domain carries a volatile constraint or not. The domain can be the type
+/// itself, or it can sit inside an array, a composite or a range, each of which reaches the
+/// receive function of the type it holds, which is the domain's own.
+fn type_contains_domain(typoid: Oid) -> bool {
+    let typtype = unsafe { pg_sys::get_typtype(typoid) };
+
+    if typtype == TYPTYPE_DOMAIN as c_char {
+        return true;
+    }
+
+    // an array type is a base type, so its element type is asked for before the kind of the type
+    // is looked at any further
+    let element_typoid = unsafe { pg_sys::get_element_type(typoid) };
+
+    if element_typoid != Oid::INVALID {
+        return type_contains_domain(element_typoid);
+    }
+
+    if typtype == TYPTYPE_COMPOSITE as c_char {
+        return tuple_desc(typoid, -1)
+            .iter()
+            .any(|attribute| !attribute.is_dropped() && type_contains_domain(attribute.atttypid));
+    }
+
+    if typtype == TYPTYPE_RANGE as c_char {
+        return type_contains_domain(unsafe { pg_sys::get_range_subtype(typoid) });
+    }
+
+    if typtype == TYPTYPE_MULTIRANGE as c_char {
+        return type_contains_domain(unsafe { pg_sys::get_multirange_range(typoid) });
+    }
+
+    false
+}
+
+/// Whether any CHECK constraint of the relation calls a volatile function. A constraint that is
+/// NOT VALID counts, since it is still evaluated for the rows the command writes.
+fn relation_has_volatile_check_constraint(relation: &PgRelation) -> bool {
+    let constr = unsafe { (*relation.rd_att).constr };
+
+    if constr.is_null() {
+        return false;
+    }
+
+    let num_check = unsafe { (*constr).num_check } as usize;
+    let check = unsafe { (*constr).check };
+
+    (0..num_check).any(|i| {
+        let expression_string = unsafe { (*check.add(i)).ccbin };
+
+        if expression_string.is_null() {
+            return false;
+        }
+
+        // the expression of a constraint is stored as the text of its node tree
+        let expression = unsafe { pg_sys::stringToNode(expression_string) as *mut Node };
+
+        unsafe { pg_sys::contain_volatile_functions(expression) }
     })
 }
 

@@ -392,9 +392,14 @@ extern "C-unwind" fn copy_startup(dest: *mut DestReceiver, _operation: i32, tupl
         ) as *mut i64
     };
 
-    // opened here rather than at the first row, so that a `COPY TO` of no rows still writes a
-    // file: an empty one is what tells a reader the statement ran
-    arrow_dest.open_writer();
+    // a statement that writes a single file opens it here rather than at the first row, so that
+    // a `COPY TO` of no rows still writes a file: that file is the destination itself, and an
+    // empty one is what tells a reader the statement ran. A statement that cuts its rows into
+    // the files of a folder opens a file on the first row that goes into it instead, so that it
+    // leaves no empty file behind
+    if arrow_dest.plan().file_size_bytes.is_none() {
+        arrow_dest.open_writer();
+    }
 }
 
 #[pg_guard]

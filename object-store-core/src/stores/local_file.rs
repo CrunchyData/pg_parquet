@@ -21,8 +21,18 @@ pub fn create_local_file_object_store(
             .parent()
             .ok_or(format!("invalid parent for path: {path}"))?;
 
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("could not make the directories of {path}: {e}"))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            // a folder destination, which is what `file_size_bytes` writes, is the parent of the
+            // files of the copy, so this is also how a path that is already a file is reported
+            if parent.is_file() {
+                return format!(
+                    "\"{}\" is a file, so \"{path}\" cannot be created under it",
+                    parent.display()
+                );
+            }
+
+            format!("could not make the directories of {path}: {e}")
+        })?;
 
         // the destination is opened for writing and closed again, without `truncate` and
         // without `create`: one that cannot be written is still reported here rather than part

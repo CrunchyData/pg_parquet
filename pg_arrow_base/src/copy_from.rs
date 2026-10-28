@@ -128,7 +128,8 @@ pub(crate) fn execute_copy_from(
     // is a decision about this one statement: anything the workers cannot be given — a stream, a
     // format that reads no ranges, a table whose writes are not legal in parallel mode — is read
     // in this process as it always was
-    let parallel = parallel_copy_from::try_parallel_copy_from(p_stmt, &plan, &relation);
+    let parallel =
+        parallel_copy_from::try_parallel_copy_from(p_stmt, &plan, &relation, where_clause);
 
     // opened before anything is inserted, so that an unreadable file or a schema that does not
     // match the table fails the statement rather than half-filling it

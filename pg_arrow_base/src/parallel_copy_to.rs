@@ -24,9 +24,10 @@ use std::rc::Rc;
 
 use pgrx::pg_sys::{
     self, dsm_segment, pg_atomic_fetch_add_u32, pg_atomic_fetch_add_u64, pg_atomic_init_u32,
-    pg_atomic_init_u64, pg_atomic_read_u64, pg_atomic_uint32, pg_atomic_uint64, quote_identifier,
-    quote_literal_cstr, quote_qualified_identifier, shm_toc, AsPgCStr, CmdType, Node, NodeTag,
-    PlannedStmt, RawStmt, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP,
+    pg_atomic_init_u64, pg_atomic_read_u64, pg_atomic_uint32, pg_atomic_uint64, pg_class_aclcheck,
+    quote_identifier, quote_literal_cstr, quote_qualified_identifier, shm_toc, AclResult, AsPgCStr,
+    CmdType, GetUserId, Node, NodeTag, PlannedStmt, RawStmt, ACL_SELECT, HEAP_TABLE_AM_OID,
+    RELKIND_RELATION, RELPERSISTENCE_TEMP,
 };
 use pgrx::{pg_guard, GucSetting, PgBox, PgList, PgMemoryContexts, PgRelation, PgTryBuilder};
 
@@ -72,6 +73,8 @@ const PARALLEL_COPY_TO_LIBRARY: &CStr = c"pg_arrow_base";
 // filled in by whichever participant claims the range
 const FIRST_BLOCK_PLACEHOLDER: &str = "@FIRST_BLOCK@";
 const LAST_BLOCK_PLACEHOLDER: &str = "@LAST_BLOCK@";
+
+const PLACEHOLDERS: [&str; 2] = [FIRST_BLOCK_PLACEHOLDER, LAST_BLOCK_PLACEHOLDER];
 
 /// The DSM payload. The statement every range runs is stored right after it in the same chunk,
 /// so a participant needs no second key to find it.
@@ -157,7 +160,7 @@ pub(crate) fn try_parallel_copy_to(p_stmt: &PgBox<PlannedStmt>, plan: &CopyToPla
         return None;
     }
 
-    let statement = render_range_copy_to_statement(p_stmt, &relation, plan);
+    let statement = render_range_copy_to_statement(p_stmt, &relation, plan)?;
 
     let nparticipants = nworkers as u32 + 1;
     let pages_per_range = (nblocks / (nparticipants * RANGES_PER_PARTICIPANT)).max(1);
@@ -207,6 +210,18 @@ fn parallel_copy_to_relation(p_stmt: &PgBox<PlannedStmt>) -> Option<PgRelation> 
     // row level security rewrites the scan into a subquery holding the policy quals, which a
     // ctid qual can no longer be pushed into as a tid range scan
     if relation_form.relrowsecurity || relation_form.relforcerowsecurity {
+        return None;
+    }
+
+    // the statement of a range reads ctid, which needs select on the relation itself, while the
+    // command it comes from only needs it on the columns it names. A role that holds the column
+    // privileges alone keeps the single process path, rather than being refused the copy it is
+    // allowed to run
+    let may_read_the_relation = unsafe {
+        pg_class_aclcheck(relation.oid(), GetUserId(), ACL_SELECT as _) == AclResult::ACLCHECK_OK
+    };
+
+    if !may_read_the_relation {
         return None;
     }
 
@@ -388,7 +403,7 @@ fn render_range_copy_to_statement(
     p_stmt: &PgBox<PlannedStmt>,
     relation: &PgRelation,
     plan: &CopyToPlan,
-) -> String {
+) -> Option<String> {
     let attributes = render_attribute_list(p_stmt);
     let options = render_copy_to_options(plan);
 
@@ -403,14 +418,33 @@ fn render_range_copy_to_statement(
 
     let folder = quote_literal(&plan.uri);
 
+    // the bounds of a range are filled in by replacing the text of a placeholder in the
+    // rendered statement, so a column, a relation, a schema or an option value whose name holds
+    // that text would be replaced along with them and rewrite the statement into a command of
+    // its own. Such a copy is left to the single process path
+    let rendered = [
+        attributes.as_str(),
+        relation_name.as_str(),
+        options.as_str(),
+        folder.as_str(),
+    ];
+
+    if rendered.iter().any(|rendered| {
+        PLACEHOLDERS
+            .iter()
+            .any(|placeholder| rendered.contains(placeholder))
+    }) {
+        return None;
+    }
+
     // ONLY, because the single process path builds the `SELECT` without the inheritance flag
     // for a plain relation, and an inheritance child is not copied along there either
-    format!(
+    Some(format!(
         "COPY (SELECT {attributes} FROM ONLY {relation_name} WHERE \
          ctid >= '({FIRST_BLOCK_PLACEHOLDER},0)'::tid AND \
          ctid < '({LAST_BLOCK_PLACEHOLDER},0)'::tid) \
          TO {folder} ({options})"
-    )
+    ))
 }
 
 /// The column list the statement wrote, or `*` when it named no columns.

@@ -65,6 +65,59 @@ mod tests {
         Spi::run(copy_from_parquet.as_str()).unwrap();
     }
 
+    // a folder is what a COPY TO with file_size_bytes writes, and reading it back by its own
+    // name finds no object of that name, which an object store reports as a missing object
+    // and nothing else. The error says that such a uri is read with a pattern over the files
+    // the folder holds.
+    #[pg_test]
+    fn test_folder_source_names_the_pattern_it_is_read_with() {
+        let folder = "/tmp/pg_parquet_test_folder_source";
+        let _folder = FileCleanup::new(folder);
+
+        Spi::run("create table test_table(a text);").unwrap();
+        Spi::run(&format!(
+            "insert into test_table select 'hellooooo' || i from generate_series(1, 100) i;
+             copy test_table to '{folder}' with (format parquet, file_size_bytes '1MB');"
+        ))
+        .unwrap();
+
+        let folder_error = copy_from_error(folder);
+        assert!(
+            folder_error.contains(&format!("\"{folder}\" holds files rather than being one"))
+                && folder_error.contains(&format!("\"{folder}/*.parquet\"")),
+            "reading the folder reported: {folder_error}"
+        );
+
+        // a uri that names no object and holds none under it is missing, and nothing more
+        let missing_error = copy_from_error("/tmp/pg_parquet_test_no_such_file.parquet");
+        assert!(
+            !missing_error.contains("holds files"),
+            "reading a missing file reported: {missing_error}"
+        );
+    }
+
+    // copy_from_error is what a COPY FROM the given uri reported, caught in plpgsql so that
+    // the test can look at the message rather than failing on it
+    fn copy_from_error(uri: &str) -> String {
+        Spi::run(&format!(
+            "CREATE OR REPLACE FUNCTION failing_copy_from() RETURNS text
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 EXECUTE 'COPY test_table FROM ''{uri}'' WITH (format parquet)';
+
+                 RETURN 'no error';
+             EXCEPTION WHEN others THEN
+                 RETURN SQLERRM;
+             END;
+             $$;"
+        ))
+        .unwrap();
+
+        Spi::get_one::<String>("SELECT failing_copy_from()")
+            .unwrap()
+            .unwrap()
+    }
+
     #[pg_test]
     #[should_panic(expected = "no files found that match the pattern /tmp/pg_parquet_test/**")]
     fn test_with_nonexistent_pattern_path() {

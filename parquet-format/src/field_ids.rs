@@ -76,11 +76,15 @@ pub struct FieldIdMapping {
 impl FieldIdMapping {
     /// The id this mapping gives a field path, if it gives it one.
     fn field_id(&self, field_path: &[String]) -> Option<i32> {
-        let field_name = field_path.first()?;
+        let (field_name, nested_path) = field_path.split_first()?;
 
         match self.fields.get(field_name) {
-            Some(FieldIdMappingItem::FieldId(field_id)) => Some(*field_id),
-            Some(FieldIdMappingItem::FieldIdMapping(mapping)) => mapping.field_id(&field_path[1..]),
+            // an id is the id of the field it names, and of no field nested in it, which would
+            // hand the same id to the whole subtree of a struct, a list or a map
+            Some(FieldIdMappingItem::FieldId(field_id)) => {
+                nested_path.is_empty().then_some(*field_id)
+            }
+            Some(FieldIdMappingItem::FieldIdMapping(mapping)) => mapping.field_id(nested_path),
             None => None,
         }
     }
@@ -107,6 +111,21 @@ impl FieldIdMapping {
             };
 
             let FieldIdMappingItem::FieldIdMapping(mapping) = item else {
+                // a bare id names one field, so a nested one, whose own id is the
+                // `__root_field_id` key of a mapping, would leave its children without ids
+                if matches!(
+                    arrow_field.data_type(),
+                    DataType::Struct(_)
+                        | DataType::List(_)
+                        | DataType::LargeList(_)
+                        | DataType::Map(_, _)
+                ) {
+                    return Err(format!(
+                        "Field '{field_name}' in the mapping is a nested field, so it needs a \
+                         mapping with a \"{ROOT_FIELD_ID}\" key rather than a field id."
+                    ));
+                }
+
                 continue;
             };
 
@@ -131,7 +150,8 @@ impl FieldIdMapping {
                 },
                 other => {
                     return Err(format!(
-                        "Field '{field_name}' in the mapping is nested, but '{other:?}' is not a nested type"
+                        "Field '{field_name}' in the mapping is of type '{other:?}', which has \
+                         no nested fields to map. It needs a field id."
                     ));
                 }
             }

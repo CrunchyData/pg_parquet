@@ -206,3 +206,14 @@ pub(crate) fn list_shallow(uri: &str) -> Vec<(String, i64)> {
         None => list(uri),
     }
 }
+
+/// The objects one level under a uri, or `None` when they cannot be listed at all -- a store
+/// with no listing, e.g. an http one, or a listing that failed. For the questions where not
+/// knowing is an answer rather than a failure of its own, which is what a hint on an error path
+/// needs.
+pub(crate) fn try_list_shallow(uri: &str) -> Option<Vec<(String, i64)>> {
+    match client().list_shallow(uri) {
+        Some(listed) => listed.ok(),
+        None => client().list(uri).ok(),
+    }
+}
