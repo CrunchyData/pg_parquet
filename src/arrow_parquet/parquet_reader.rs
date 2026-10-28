@@ -458,7 +458,7 @@ impl SingleParquetReader {
 
                 // arrow truncates toward zero when it casts to an integer, PostgreSQL rounds
                 let column_array =
-                    round_for_integer_cast(&column_array, attribute_context.data_type());
+                    round_for_integer_cast(&column_array, attribute_context.data_type(), name);
 
                 cast_with_options(&column_array, attribute_context.data_type(), &cast_options)
                     .unwrap_or_else(|e| panic!("failed to cast column {name}: {e}"))

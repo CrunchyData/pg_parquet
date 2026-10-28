@@ -878,6 +878,69 @@ mod tests {
         assert_eq!(value, (Some(3), Some("hello")));
     }
 
+    // nothing validates the values of a decimal column against the precision it is declared
+    // with, so a file can carry values that do not fit it. The rounding that precedes an
+    // integer cast is where that shows up, and its error has to name the column the values
+    // are in: the file is otherwise the only place to look for them.
+    #[pg_test]
+    #[should_panic(expected = "failed to round column x")]
+    fn test_coerce_out_of_precision_decimal_into_integer_names_the_column() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Decimal128(4, 2),
+            true,
+        )]));
+
+        // with_data_type carries the declared type without checking the value against it,
+        // which is how a file with values past its own precision is written
+        let x = Arc::new(
+            Decimal128Array::from(vec![92233720368547758_i128])
+                .with_data_type(DataType::Decimal128(4, 2)),
+        );
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bigint)";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+    }
+
+    // the name of the column is carried into its children, so the values of an array column
+    // are named by the column they are in rather than by nothing at all
+    #[pg_test]
+    #[should_panic(expected = "failed to round column x")]
+    fn test_coerce_out_of_precision_decimal_array_into_integer_names_the_column() {
+        let element = Arc::new(Field::new("element", DataType::Decimal128(4, 2), true));
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::List(element.clone()),
+            true,
+        )]));
+
+        let values = Decimal128Array::from(vec![92233720368547758_i128])
+            .with_data_type(DataType::Decimal128(4, 2));
+
+        let x = Arc::new(ListArray::new(
+            element,
+            OffsetBuffer::new(vec![0, 1].into()),
+            Arc::new(values),
+            None,
+        ));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        let create_table = "CREATE TABLE test_table (x bigint[])";
+        Spi::run(create_table).unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+    }
+
     // a struct field whose name is longer than the identifier length limit matches an attribute
     // only once it is truncated, which is not a name arrow-cast can match, so it casts the
     // fields of the struct by position. The target type then has to hold its fields in the order
