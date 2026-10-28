@@ -5,6 +5,8 @@ use std::{
     rc::Rc,
 };
 
+use futures::StreamExt;
+use object_store::ObjectStoreExt;
 use parquet::file::properties::DEFAULT_BLOOM_FILTER_FPP;
 use pg_sys::{AsPgCStr, CommandDest, DestReceiver, TupleDesc, TupleTableSlot};
 use pgrx::prelude::*;
@@ -18,7 +20,8 @@ use crate::{
         parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
         uri_utils::ParsedUriInfo,
     },
-    object_store::object_store_cache::get_or_create_object_store,
+    object_store::{object_store_cache::get_or_create_object_store, object_store_error_message},
+    PG_BACKEND_TOKIO_RUNTIME,
 };
 
 use super::{
@@ -56,6 +59,114 @@ pub(crate) fn uninstall_file_id_claim() {
 
 fn claimed_file_id() -> Option<i64> {
     INSTALLED_FILE_ID_CLAIM.with_borrow(|installed| Some(installed.as_ref()?.claim_file_id()))
+}
+
+fn file_id_claim_installed() -> bool {
+    INSTALLED_FILE_ID_CLAIM.with_borrow(|installed| installed.is_some())
+}
+
+// child_file_name is how a copy with file_size_bytes names the file of the given id in its
+// folder destination
+fn child_file_name(file_id: i64) -> String {
+    format!("data_{file_id}.parquet")
+}
+
+// child_file_id is the id of a file that a copy with file_size_bytes wrote, and None for
+// anything else that the folder holds
+fn child_file_id(file_name: &str) -> Option<i64> {
+    file_name
+        .strip_prefix("data_")?
+        .strip_suffix(".parquet")?
+        .parse()
+        .ok()
+}
+
+// remove_files_of_a_previous_copy removes what a previous copy left in the folder
+// destination, which are the files with an id that this copy did not write, so that the
+// folder holds the rows of the copy that wrote it last rather than those rows merged with
+// the tail of an older and larger copy. It runs once the copy wrote its own files, so a file
+// it cannot remove is reported as a warning rather than failing a copy that already
+// succeeded.
+pub(crate) fn remove_files_of_a_previous_copy(folder: &str, files_written: i64) {
+    let uri_info = match ParsedUriInfo::try_from(folder) {
+        Ok(uri_info) => uri_info,
+        Err(e) => {
+            pgrx::warning!("failed to parse the folder \"{folder}\": {e}");
+            return;
+        }
+    };
+
+    // the store is asked for as a reader, since asking for a writer would create the folder
+    // itself as a file
+    let copy_from = true;
+    let (store, folder_path) = get_or_create_object_store(&uri_info, copy_from);
+
+    let stale_files = PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+        let mut listing = store.list(Some(&folder_path));
+
+        let mut stale_files = vec![];
+
+        while let Some(meta) = listing.next().await.transpose()? {
+            let is_stale = {
+                let Some(mut relative_path) = meta.location.prefix_match(&folder_path) else {
+                    continue;
+                };
+
+                // a file of the copy is a direct child of the folder, so anything deeper
+                // belongs to whoever put it there
+                let (Some(file_name), None) = (relative_path.next(), relative_path.next()) else {
+                    continue;
+                };
+
+                child_file_id(file_name.as_ref()).is_some_and(|file_id| file_id >= files_written)
+            };
+
+            if is_stale {
+                stale_files.push(meta.location);
+            }
+        }
+
+        Ok::<_, object_store::Error>(stale_files)
+    });
+
+    let stale_files = match stale_files {
+        Ok(stale_files) => stale_files,
+        Err(e) => {
+            pgrx::warning!(
+                "the files of a previous copy are left in \"{folder}\": {}",
+                object_store_error_message(e)
+            );
+            return;
+        }
+    };
+
+    for stale_file in stale_files {
+        let removal = PG_BACKEND_TOKIO_RUNTIME.block_on(store.delete(&stale_file));
+
+        if let Err(e) = removal {
+            pgrx::warning!(
+                "the file \"{stale_file}\" of a previous copy is left in \"{folder}\": {}",
+                object_store_error_message(e)
+            );
+        }
+    }
+}
+
+// folder_files_written is the number of files that the copy wrote into its folder
+// destination. It is None for a copy that writes a single file, and None in a participant of
+// a parallel copy too, whose files are numbered for the whole copy rather than by itself.
+pub(crate) fn folder_files_written(dest: *mut DestReceiver) -> Option<i64> {
+    let split_dest = unsafe {
+        (dest as *mut CopyToParquetSplitDestReceiver)
+            .as_ref()
+            .expect("invalid split parquet dest receiver ptr")
+    };
+
+    if split_dest.options.file_size_bytes == INVALID_FILE_SIZE_BYTES || file_id_claim_installed() {
+        return None;
+    }
+
+    Some(split_dest.current_child_id)
 }
 
 // number of the tuples that are collected before the written bytes are reported again
@@ -209,7 +320,7 @@ impl CopyToParquetSplitDestReceiver {
 
         let file_id = claimed_file_id().unwrap_or(self.current_child_id);
 
-        let child_uri = parent_folder.join(format!("data_{file_id}.parquet"));
+        let child_uri = parent_folder.join(child_file_name(file_id));
 
         child_uri.to_str().expect("invalid uri").as_pg_cstr()
     }

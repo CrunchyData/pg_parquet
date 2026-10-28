@@ -16,11 +16,12 @@ use pgrx::{
     pg_guard,
     pg_sys::{
         self, defGetString, dsm_segment, pg_atomic_fetch_add_u32, pg_atomic_fetch_add_u64,
-        pg_atomic_init_u32, pg_atomic_init_u64, pg_atomic_read_u64, pg_atomic_uint32,
-        pg_atomic_uint64, pg_class_aclcheck, quote_identifier, quote_literal_cstr,
-        quote_qualified_identifier, shm_mq, shm_mq_handle, shm_mq_iovec, shm_mq_result, shm_toc,
-        AclResult, AsPgCStr, CmdType, CopyStmt, DefElem, GetUserId, Node, NodeTag, PlannedStmt,
-        RawStmt, ACL_SELECT, HEAP_TABLE_AM_OID, RELKIND_RELATION, RELPERSISTENCE_TEMP,
+        pg_atomic_init_u32, pg_atomic_init_u64, pg_atomic_read_u32, pg_atomic_read_u64,
+        pg_atomic_uint32, pg_atomic_uint64, pg_class_aclcheck, quote_identifier,
+        quote_literal_cstr, quote_qualified_identifier, shm_mq, shm_mq_handle, shm_mq_iovec,
+        shm_mq_result, shm_toc, AclResult, AsPgCStr, CmdType, CopyStmt, DefElem, GetUserId, Node,
+        NodeTag, PlannedStmt, RawStmt, ACL_SELECT, HEAP_TABLE_AM_OID, RELKIND_RELATION,
+        RELPERSISTENCE_TEMP,
     },
     GucSetting, PgBox, PgList, PgMemoryContexts, PgRelation, PgTryBuilder,
 };
@@ -44,7 +45,8 @@ use crate::{
             CleanupId, UnfinishedWrite, PART_URI_INFIX,
         },
         copy_to_split_dest_receiver::{
-            install_file_id_claim, uninstall_file_id_claim, FileIdClaim, INVALID_FILE_SIZE_BYTES,
+            install_file_id_claim, remove_files_of_a_previous_copy, uninstall_file_id_claim,
+            FileIdClaim, INVALID_FILE_SIZE_BYTES,
         },
         copy_utils::{
             copy_stmt_attribute_list, copy_stmt_has_relation, copy_stmt_lock_mode,
@@ -687,42 +689,53 @@ fn run_parallel_copy_to(
 
     let claimer: Arc<dyn PartClaim> = Arc::new(DsmPartClaim(shared));
 
-    let (participants, last_claim, nprocessed_by_participants) = PgTryBuilder::new(|| {
-        // the leader claims ranges too, so a command that could not launch a single
-        // worker still completes, just without the fan-out
-        let leader = claim_and_copy_ranges(shared, &claimer);
+    let (participants, last_claim, nprocessed_by_participants, files_written) =
+        PgTryBuilder::new(|| {
+            // the leader claims ranges too, so a command that could not launch a single
+            // worker still completes, just without the fan-out
+            let leader = claim_and_copy_ranges(shared, &claimer);
 
-        // a participant reports only once every range is claimed, which is also when the
-        // leader is done claiming, so nothing of the leader's own share of the copy waits on
-        // a report arriving
-        let mut participants = receive_participant_uploads(&handles);
+            // a participant reports only once every range is claimed, which is also when the
+            // leader is done claiming, so nothing of the leader's own share of the copy waits on
+            // a report arriving
+            let mut participants = receive_participant_uploads(&handles);
 
-        participants.extend(leader);
+            participants.extend(leader);
 
-        unsafe { pg_sys::WaitForParallelWorkersToFinish(pcxt) };
+            unsafe { pg_sys::WaitForParallelWorkersToFinish(pcxt) };
 
-        // the claim of the leader's own last part is taken here, while the shared memory the
-        // claims are handed out of is still mapped: the teardown below unmaps it, and
-        // completing the upload comes after the teardown
-        let last_claim = claimer.claim(0);
+            // the claim of the leader's own last part is taken here, while the shared memory the
+            // claims are handed out of is still mapped: the teardown below unmaps it, and
+            // completing the upload comes after the teardown
+            let last_claim = claimer.claim(0);
 
-        // read here for the same reason, and only once every participant has exited, which
-        // is what makes the rows every one of them copied visible to this read
-        let nprocessed_by_participants = unsafe { pg_atomic_read_u64(&mut (*shared).nprocessed) };
+            // read here for the same reason, and only once every participant has exited, which
+            // is what makes the rows every one of them copied visible to this read
+            let nprocessed_by_participants =
+                unsafe { pg_atomic_read_u64(&mut (*shared).nprocessed) };
 
-        (participants, last_claim, nprocessed_by_participants)
-    })
-    // terminates the workers and waits for them to exit, which an interrupted copy has
-    // to do before its caller removes the part files, or a worker still running writes
-    // a part file after the removal
-    .finally(|| unsafe {
-        for handle in &handles {
-            pg_sys::shm_mq_detach(*handle);
-        }
+            // the id the next file of a folder destination would have taken, which is how many
+            // files the participants wrote between them
+            let files_written = unsafe { pg_atomic_read_u32(&mut (*shared).next_file_id) } as i64;
 
-        pg_sys::DestroyParallelContext(pcxt);
-    })
-    .execute();
+            (
+                participants,
+                last_claim,
+                nprocessed_by_participants,
+                files_written,
+            )
+        })
+        // terminates the workers and waits for them to exit, which an interrupted copy has
+        // to do before its caller removes the part files, or a worker still running writes
+        // a part file after the removal
+        .finally(|| unsafe {
+            for handle in &handles {
+                pg_sys::shm_mq_detach(*handle);
+            }
+
+            pg_sys::DestroyParallelContext(pcxt);
+        })
+        .execute();
 
     unsafe { pg_sys::ExitParallelMode() };
 
@@ -741,7 +754,13 @@ fn run_parallel_copy_to(
         }
         // nothing is spliced here either: the files of the folder are complete as the ranges
         // wrote them, so the rows the participants reported copying are the whole result
-        ParallelCopyToDestination::SplitFiles(_) => nprocessed_by_participants as i64,
+        ParallelCopyToDestination::SplitFiles(folder) => {
+            // the folder is left holding the files of a previous and larger copy, which are
+            // no part of this copy's result
+            remove_files_of_a_previous_copy(folder, files_written);
+
+            nprocessed_by_participants as i64
+        }
         // nothing is spliced: the participants uploaded the rows they wrote into the
         // destination itself, so only the footer that covers them is left to write
         ParallelCopyToDestination::SharedUpload(upload) => {
