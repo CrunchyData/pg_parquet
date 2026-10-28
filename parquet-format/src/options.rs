@@ -5,7 +5,7 @@ use std::fmt::Display;
 use std::str::FromStr;
 
 use arrow_schema::Schema;
-use format_registry::options::{FormatOptions, FILE_NAME_OPTION};
+use format_registry::options::{FormatOptions, FILE_NAME_OPTION, FILE_SIZE_BYTES_OPTION};
 use format_registry::Result;
 use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use parquet::file::properties::{
@@ -239,8 +239,7 @@ impl WriteOptions {
             compression,
             compression_level: compression_level(options)?,
             row_group_size: positive(options, "row_group_size")?.unwrap_or(default.row_group_size),
-            row_group_size_bytes: positive(options, "row_group_size_bytes")?
-                .unwrap_or(default.row_group_size_bytes),
+            row_group_size_bytes: row_group_size_bytes(options, default.row_group_size_bytes)?,
             parquet_version,
             bloom_filter: selection(options, "bloom_filter")?.unwrap_or(default.bloom_filter),
             bloom_filter_fpp: fpp(options)?.unwrap_or(default.bloom_filter_fpp),
@@ -301,6 +300,32 @@ pub(crate) fn compression_level(options: &FormatOptions) -> Result<Option<i32>> 
         .parse::<i32>()
         .map(Some)
         .map_err(|_| format!("compression_level must be an integer, not \"{value}\""))
+}
+
+/// `row_group_size_bytes`, capped at the size the base is splitting the files at.
+///
+/// A parquet file ends at a row group boundary, so a row group larger than the target is what
+/// makes every file larger than it: the default row group of `row_group_size * 1024` bytes is
+/// ~126MB, which is larger than any smaller target, so a 2MB target wrote 5.7MB files and a
+/// copy that also raised `row_group_size` wrote the whole table as one file. Capped, a file
+/// exceeds the target by at most one row group.
+///
+/// The cap is silent rather than an error, because the option is not wrong: the same
+/// `row_group_size_bytes` written without `file_size_bytes` is the row group it asks for.
+fn row_group_size_bytes(options: &FormatOptions, default: usize) -> Result<usize> {
+    let asked = positive(options, "row_group_size_bytes")?.unwrap_or(default);
+
+    let Some(file_size_bytes) = options.get(FILE_SIZE_BYTES_OPTION) else {
+        return Ok(asked);
+    };
+
+    // the base wrote this one, so a value that does not parse is a bug here rather than
+    // something a statement did
+    let file_size_bytes = file_size_bytes
+        .parse::<usize>()
+        .map_err(|e| format!("{FILE_SIZE_BYTES_OPTION} is not a size: {e}"))?;
+
+    Ok(asked.min(file_size_bytes))
 }
 
 pub(crate) fn positive(options: &FormatOptions, name: &str) -> Result<Option<usize>> {

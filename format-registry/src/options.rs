@@ -21,6 +21,15 @@ use crate::Result;
 /// name.
 pub const FILE_NAME_OPTION: &str = "__file_name";
 
+/// The size the base is splitting the statement's files at, set on a writer's options when
+/// `file_size_bytes` is in force and absent otherwise.
+///
+/// Also a thing a provider has no business knowing, with the same exception: a format whose own
+/// buffering decides where a file may end needs to know how large that file is meant to be.
+/// Parquet's does — a file ends at a row group boundary — so a row group larger than the target
+/// would make every file larger than it.
+pub const FILE_SIZE_BYTES_OPTION: &str = "__file_size_bytes";
+
 /// Format-specific options, in the order Postgres saw them.
 ///
 /// Ordered, not a hash map, because the error message for an unrecognized option should name

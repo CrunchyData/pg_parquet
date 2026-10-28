@@ -204,7 +204,7 @@ impl FileReader {
 
                 // arrow truncates towards zero when casting to an integer, Postgres rounds
                 let column_array =
-                    round_for_integer_cast(column_array, attribute_context.data_type());
+                    round_for_integer_cast(column_array, attribute_context.data_type(), name);
 
                 let casted =
                     cast_with_options(&column_array, attribute_context.data_type(), &cast_options)

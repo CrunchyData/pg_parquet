@@ -240,8 +240,13 @@ impl ArrowCopyToDestReceiver {
 
         unsafe {
             copy_ctx.switch_to(|_| {
-                let writer =
-                    BatchWriter::open(plan.provider.clone(), &place, &plan.options, &tupledesc);
+                let writer = BatchWriter::open(
+                    plan.provider.clone(),
+                    &place,
+                    &plan.options,
+                    plan.file_size_bytes,
+                    &tupledesc,
+                );
 
                 self.writer = Box::into_raw(Box::new(writer));
             })

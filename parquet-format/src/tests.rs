@@ -10,12 +10,13 @@ use arrow::array::{new_null_array, Int32Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::record_batch::RecordBatchReader;
 use bytes::Bytes;
-use format_registry::options::{FormatOptions, FILE_NAME_OPTION};
+use format_registry::options::{FormatOptions, FILE_NAME_OPTION, FILE_SIZE_BYTES_OPTION};
 use format_registry::provider::{ByteSink, ByteSource, FormatProvider};
 use format_registry::Result;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::field_ids::{stamp_field_ids, FieldIds};
+use crate::options::WriteOptions;
 use crate::provider::Parquet;
 
 /// A `ByteSink` that keeps the file, so a streaming write can be read back.
@@ -426,6 +427,38 @@ fn every_option_the_format_lists_validates() {
             .validate_option(name, value)
             .unwrap_or_else(|e| panic!("{name} = {value}: {e}"));
     }
+}
+
+#[test]
+fn a_row_group_is_capped_at_the_file_the_base_is_splitting_at() {
+    let asked = 64 * 1024 * 1024;
+    let target = 1024 * 1024;
+
+    // a file ends at a row group boundary, so an uncapped row group this much larger than the
+    // target is what would write the whole copy as one file
+    let split = WriteOptions::parse(&options(&[
+        ("row_group_size_bytes", &asked.to_string()),
+        (FILE_SIZE_BYTES_OPTION, &target.to_string()),
+    ]))
+    .expect("the options are valid");
+
+    assert_eq!(split.row_group_size_bytes, target);
+
+    // and the same option without a target is the row group it asks for, since there is no
+    // file size for it to be too large for
+    let whole = WriteOptions::parse(&options(&[("row_group_size_bytes", &asked.to_string())]))
+        .expect("the options are valid");
+
+    assert_eq!(whole.row_group_size_bytes, asked);
+
+    // a row group already smaller than the target is left alone rather than raised to it
+    let small = WriteOptions::parse(&options(&[
+        ("row_group_size_bytes", "4096"),
+        (FILE_SIZE_BYTES_OPTION, &target.to_string()),
+    ]))
+    .expect("the options are valid");
+
+    assert_eq!(small.row_group_size_bytes, 4096);
 }
 
 #[test]

@@ -19,7 +19,7 @@
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use format_registry::options::{FormatOptions, FILE_NAME_OPTION};
+use format_registry::options::{FormatOptions, FILE_NAME_OPTION, FILE_SIZE_BYTES_OPTION};
 use format_registry::provider::{FormatProvider, RecordBatchSink, StreamingSink};
 use pg_arrow_convert::pg_to_arrow::context::{
     collect_pg_to_arrow_attribute_contexts, PgToArrowAttributeContext,
@@ -61,19 +61,30 @@ pub(crate) struct BatchWriter {
     arrow_bytes_given: i64,
 }
 
-/// The statement's options plus the name of the file being written.
+/// The statement's options plus the two the base sets itself: the name of the file being
+/// written, and the size it is being split at.
 ///
 /// The name, not the uri: a provider has no business with a bucket or a credential, and the
 /// only thing a format legitimately wants from a uri is what its own extensions say about it —
 /// `orders.parquet.zst` is zstd. Everything after the last `/`, and the whole of a uri that has
 /// none, with any query string left on, since that is the provider's to ignore.
-fn with_file_name(options: &FormatOptions, uri: &str) -> FormatOptions {
+fn with_base_options(
+    options: &FormatOptions,
+    uri: &str,
+    file_size_bytes: Option<i64>,
+) -> FormatOptions {
     let mut options = options.clone();
 
     options.push(
         FILE_NAME_OPTION,
         uri.rsplit_once('/').map(|(_, name)| name).unwrap_or(uri),
     );
+
+    // set only when the statement is being split, so that a provider can tell a file with a
+    // target size from one that is the whole copy
+    if let Some(file_size_bytes) = file_size_bytes {
+        options.push(FILE_SIZE_BYTES_OPTION, file_size_bytes.to_string());
+    }
 
     options
 }
@@ -85,6 +96,7 @@ impl BatchWriter {
         provider: Arc<dyn FormatProvider>,
         place: &Place,
         options: &FormatOptions,
+        file_size_bytes: Option<i64>,
         tupledesc: &PgTupleDesc,
     ) -> BatchWriter {
         // both caches are keyed on oids that a dropped and recreated extension reuses, and a
@@ -99,7 +111,7 @@ impl BatchWriter {
         let attribute_contexts =
             collect_pg_to_arrow_attribute_contexts(&attributes, &schema.fields);
 
-        let options = &with_file_name(options, place.path());
+        let options = &with_base_options(options, place.path(), file_size_bytes);
 
         let sink = if provider.can_stream_write() {
             // the object is opened before the provider's writer, so that an unwritable uri is

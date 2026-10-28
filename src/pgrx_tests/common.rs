@@ -1,7 +1,9 @@
 use std::fs::File;
 use std::marker::PhantomData;
 use std::path::Path;
+use std::process::Child;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{collections::HashMap, fmt::Debug};
 
 use crate::store::parquet_metadata_from_uri;
@@ -618,4 +620,22 @@ pub(crate) fn geospatial_crs_by_column() -> HashMap<String, Option<String>> {
     }
 
     crs_by_column
+}
+
+// COPY_START_TIMEOUT is how long a copy started in another session is given to reach the
+// point it is worth interrupting at
+pub(crate) const COPY_START_TIMEOUT: Duration = Duration::from_secs(60);
+
+// copy_session_output closes the input of the session, which is what makes psql exit, and
+// returns everything it printed
+pub(crate) fn copy_session_output(mut copy: Child) -> String {
+    drop(copy.stdin.take());
+
+    let output = copy.wait_with_output().expect("failed to wait for psql");
+
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
 }

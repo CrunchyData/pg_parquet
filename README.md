@@ -509,10 +509,12 @@ Each object storage client has its own http client, which can be configured via 
 
 Durations are given with a unit, e.g. `30s`, `5m` or `1m30s`. Booleans are given as `true` or `false`.
 
+A request that an object store is slow to answer is retried, which takes minutes by default before it gives up. A statement that is waiting on one is still cancellable while that happens: `Ctrl-C`, `statement_timeout`, `pg_cancel_backend` and `pg_terminate_backend` end it without waiting for the retries to run out.
+
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
 - `format parquet`: you need to specify this option to read or write Parquet files which does not end with `.parquet[.<compression>]` extension,
-- `file_size_bytes <string>`: the total file size per Parquet file. When set, the parquet files, with target size, are created under parent directory (named the same as file name). By default, when not specified, a single file is generated without creating a parent folder. You can specify total bytes without unit like `file_size_bytes 2000000` or with unit (KB, MB, or GB) like `file_size_bytes '1MB'`,
+- `file_size_bytes <string>`: the total file size per Parquet file. When set, the parquet files, with target size, are created under parent directory (named the same as file name). By default, when not specified, a single file is generated without creating a parent folder. You can specify total bytes without unit like `file_size_bytes 2000000` or with unit (KB, MB, or GB) like `file_size_bytes '1MB'`. A file ends at a row group boundary, so it can exceed the target by up to one row group, and `row_group_size_bytes` is capped at the target so that a row group cannot be larger than the file it is written into,
 - `field_ids <string>`: fields ids that are assigned to the fields in Parquet file schema. By default, no field ids are assigned. Pass `auto` to let pg_parquet generate field ids. You can pass a json string to explicitly pass the field ids, like `'{"id": 1}'`. A nested column takes a json object rather than an id, whose `__root_field_id` key is the id of the column itself and whose other keys are its nested fields, the fields of a composite type by name, the element of an array as `element`, and the entries of a map as `key` and `val`, e.g. `'{"friends": {"__root_field_id": 2, "element": {"__root_field_id": 3, "name": 4}}}'`. A field the mapping leaves out is written without a field id,
 - `row_group_size <int64>`: the number of rows in each row group while writing Parquet files. The default row group size is `122880`,
 - `row_group_size_bytes <int64>`: the total byte size of rows in each row group while writing Parquet files. The default row group size bytes is `row_group_size * 1024`,
