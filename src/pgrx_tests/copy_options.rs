@@ -6,13 +6,13 @@ mod tests {
     use pgrx::{pg_test, Spi};
 
     use crate::{
-        arrow_parquet::uri_utils::{parquet_metadata_from_uri, ParsedUriInfo},
         pgrx_tests::common::{
             create_crunchy_map_type, extension_exists, test_pg_port, CopyOptionValue, FileCleanup,
             TestTable, LOCAL_TEST_FILE_PATH,
         },
-        PgParquetCompression,
+        store::parquet_metadata_from_uri,
     };
+    use parquet_format::options::ParquetCompression;
 
     #[pg_test]
     fn test_copy_with_empty_options() {
@@ -26,13 +26,13 @@ mod tests {
     #[pg_test]
     fn test_compression_from_option() {
         let compression_options = vec![
-            PgParquetCompression::Uncompressed,
-            PgParquetCompression::Snappy,
-            PgParquetCompression::Gzip,
-            PgParquetCompression::Brotli,
-            PgParquetCompression::Lz4,
-            PgParquetCompression::Lz4raw,
-            PgParquetCompression::Zstd,
+            ParquetCompression::Uncompressed,
+            ParquetCompression::Snappy,
+            ParquetCompression::Gzip,
+            ParquetCompression::Brotli,
+            ParquetCompression::Lz4,
+            ParquetCompression::Lz4Raw,
+            ParquetCompression::Zstd,
         ];
 
         let expected_compression = vec![
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "invalid_format is not a valid format")]
+    #[should_panic(expected = "there is no provider for format \"invalid_format\"")]
     fn test_invalid_format_copy_from() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
@@ -123,7 +123,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "nonexisted is not a valid option for \"copy from parquet\".")]
+    #[should_panic(expected = "the parquet format has no option \"nonexisted\"")]
     fn test_nonexistent_copy_from_option() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
@@ -137,7 +137,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "nonexisted is not a valid option for \"copy to parquet\".")]
+    #[should_panic(expected = "the parquet format has no option \"nonexisted\"")]
     fn test_nonexistent_copy_to_option() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
@@ -151,7 +151,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "invalid_format is not a valid format")]
+    #[should_panic(expected = "there is no provider for format \"invalid_format\"")]
     fn test_invalid_format_copy_to() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
@@ -165,7 +165,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "invalid_compression is not a valid compression format")]
+    #[should_panic(expected = "\"invalid_compression\" is not a recognized value for compression")]
     fn test_invalid_compression() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "row_group_size must be greater than 0")]
+    #[should_panic(expected = "row_group_size requires a non-negative integer")]
     fn test_invalid_row_group_size() {
         let mut copy_options = HashMap::new();
         copy_options.insert("row_group_size".to_string(), CopyOptionValue::IntOption(-1));
@@ -269,7 +269,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "row_group_size_bytes must be greater than 0")]
+    #[should_panic(expected = "row_group_size_bytes requires a non-negative integer")]
     fn test_invalid_row_group_size_bytes() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
@@ -283,7 +283,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "Minimum allowed size is 1MB. Got 102400 bytes.")]
+    #[should_panic(expected = "file_size_bytes must be at least 1MB")]
     fn test_invalid_file_size_bytes() {
         let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
 
@@ -319,14 +319,14 @@ mod tests {
 
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            stderr.contains("file_size_bytes is not supported for COPY TO STDOUT."),
+            stderr.contains("file_size_bytes needs a uri to write the files under"),
             "unexpected error: {stderr}"
         );
     }
 
     // same for a program, which reads what the copy streams to it rather than owning a folder
     #[pg_test]
-    #[should_panic(expected = "file_size_bytes is not supported for COPY TO PROGRAM.")]
+    #[should_panic(expected = "file_size_bytes needs a uri to write the files under")]
     fn test_file_size_bytes_with_program() {
         let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
 
@@ -340,7 +340,7 @@ mod tests {
     // a size that does not fit the i64 the copy holds it in is out of range, rather than a
     // negative size every file is larger than
     #[pg_test]
-    #[should_panic(expected = "'18446744073709551615' is out of range")]
+    #[should_panic(expected = "file_size_bytes is too large: \"18446744073709551615\"")]
     fn test_file_size_bytes_above_i64_max() {
         let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
 
@@ -358,7 +358,7 @@ mod tests {
     // the unit a size is given in is a multiplier, which is out of range when the size it
     // scales up to does not fit an i64, rather than the size it wraps around to
     #[pg_test]
-    #[should_panic(expected = "'17179869185GB' is out of range")]
+    #[should_panic(expected = "file_size_bytes is too large: \"17179869185GB\"")]
     fn test_file_size_bytes_unit_above_i64_max() {
         let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
 
@@ -374,7 +374,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "unrecognized parquet version: vv2. v1 or v2 is supported.")]
+    #[should_panic(expected = "\"vv2\" is not a recognized value for parquet_version")]
     fn test_invalid_parquet_version() {
         let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
 
@@ -598,9 +598,24 @@ mod tests {
                 }
             });
 
+            // a split keeps the suffix the statement wrote, so a ".parquet.gz" uri splits into
+            // ".parquet.gz" files: the codec is part of what the name says the file is
+            let suffix = match parent_folder
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .find('.')
+            {
+                Some(dot) => {
+                    parent_folder.file_name().unwrap().to_str().unwrap()[dot..].to_string()
+                }
+                None => ".parquet".to_string(),
+            };
+
             // assert file paths
             for (file_idx, file_entry) in file_entries.iter().enumerate() {
-                let expected_path = parent_folder.join(format!("data_{file_idx}.parquet"));
+                let expected_path = parent_folder.join(format!("data_{file_idx}{suffix}"));
 
                 let expected_path = expected_path.to_str().unwrap();
 
@@ -1392,7 +1407,7 @@ mod tests {
     // "force_array" is new in PostgreSQL 19 (COPY TO with format json) and is not supported for
     // parquet.
     #[pg_test]
-    #[should_panic(expected = "force_array is not a valid option for \"copy to parquet\".")]
+    #[should_panic(expected = "the parquet format has no option \"force_array\"")]
     fn test_copy_to_force_array() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
@@ -1408,7 +1423,7 @@ mod tests {
     // PostgreSQL 19 added the "json" format to core COPY TO. It is rejected for parquet uris,
     // just like any other non-parquet format.
     #[pg_test]
-    #[should_panic(expected = "json is not a valid format. Only parquet format is supported.")]
+    #[should_panic(expected = "there is no provider for format \"json\"")]
     fn test_copy_to_json_format() {
         let mut copy_options = HashMap::new();
         copy_options.insert(
@@ -1506,7 +1521,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "bloom_filter_fpp must be greater than 0 and less than 1")]
+    #[should_panic(expected = "bloom_filter_fpp must be between 0 and 1, exclusive")]
     fn test_invalid_bloom_filter_fpp() {
         create_test_table();
 
@@ -1622,9 +1637,7 @@ mod tests {
     }
 
     fn columns_matching(predicate: fn(&ColumnChunkMetaData) -> bool) -> Vec<String> {
-        let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
-
-        let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+        let parquet_metadata = parquet_metadata_from_uri(LOCAL_TEST_FILE_PATH);
 
         let mut column_paths = parquet_metadata
             .row_group(0)

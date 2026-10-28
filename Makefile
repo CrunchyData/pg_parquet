@@ -1,5 +1,5 @@
 .PHONY: init-pgrx build clean install uninstall package \
-	check check-with-coverage check-minio check-azure check-gcs check-http check-format check-lint \
+	check check-libs check-with-coverage check-minio check-azure check-gcs check-http check-format check-lint \
 	start-containers stop-containers start-mitmdump stop-mitmdump start-minio stop-minio \
 	start-azurite stop-azurite start-fake-gcs stop-fake-gcs start-web-dav stop-web-dav
 
@@ -14,6 +14,22 @@ PG_CONFIG ?= pg_config
 
 # a beta reports e.g. "PostgreSQL 19beta4", so take the leading digits only
 PG_MAJOR ?= $(shell $(PG_CONFIG) --version | sed -E 's/^PostgreSQL ([0-9]+).*/\1/')
+
+# The extensions of this repo, in the order they install: each one's control file `requires`
+# the one before it, so `CREATE EXTENSION pg_parquet` needs all of them present. `make install`
+# installing only pg_parquet would leave a cluster that cannot create it.
+EXTENSIONS ?= pg_object_store pg_arrow_base pg_arrow pg_parquet
+
+# Tested from the top down. `cargo pgrx test` leaves a `pg_test` build of the package it tested
+# installed, and a `pg_test` build owns the `tests` schema that pgrx's test functions go in --
+# so `CREATE EXTENSION` of anything that requires it then fails with "schema tests is not a
+# member of extension", and every later test reports "Could not obtain test mutex". Descending
+# order means nothing is tested after a tier below it was replaced.
+TEST_ORDER ?= pg_parquet pg_arrow pg_arrow_base pg_object_store
+
+# The crates with no Postgres in them, linted and unit tested without a pg feature.
+# pg-arrow-convert is not among them: it speaks pg_sys and so builds per major.
+LIBS ?= object-store-client object-store-core format-registry arrow-ipc-format parquet-format
 
 # MinIO gated its community images: minio/minio and quay.io/minio/minio no longer
 # allow anonymous pulls, and dl.min.io returns 410. This is an archived MinIO build.
@@ -45,51 +61,78 @@ init-pgrx:
 	cargo pgrx init --pg${PG_MAJOR} $(PG_CONFIG) --base-testing-port ${PGRX_TEST_PG_BASE_PORT}
 
 build: init-pgrx
-	cargo build --release --features pg$(PG_MAJOR) --no-default-features
+	for ext in $(EXTENSIONS); do \
+	  cargo build --package $$ext --release --features pg$(PG_MAJOR) --no-default-features || exit 1; \
+	done
 
 clean:
 	cargo clean
 
 install: build
-	cargo pgrx install --release --features pg$(PG_MAJOR) --no-default-features
+	for ext in $(EXTENSIONS); do \
+	  cargo pgrx install --package $$ext --release --features pg$(PG_MAJOR) --no-default-features || exit 1; \
+	done
 
 uninstall:
-	rm -f $(shell $(PG_CONFIG) --pkglibdir)/pg_parquet.so
-	rm -f $(shell $(PG_CONFIG) --sharedir)/extension/pg_parquet*
+	for ext in $(EXTENSIONS); do \
+	  rm -f $(shell $(PG_CONFIG) --pkglibdir)/$$ext.so; \
+	  rm -f $(shell $(PG_CONFIG) --sharedir)/extension/$$ext*; \
+	done
 
 package:
-	cargo pgrx package --profile release --features pg$(PG_MAJOR) --no-default-features
+	for ext in $(EXTENSIONS); do \
+	  cargo pgrx package --package $$ext --profile release --features pg$(PG_MAJOR) --no-default-features || exit 1; \
+	done
 
 check-format: init-pgrx
 	cargo fmt --all -- --check
 
 check-lint: init-pgrx
-	cargo clippy --all-targets --features "pg$(PG_MAJOR), pg_test" --no-default-features -- -D warnings
+	for ext in $(EXTENSIONS); do \
+	  cargo clippy --package $$ext --all-targets --features "pg$(PG_MAJOR), pg_test" --no-default-features -- -D warnings || exit 1; \
+	done
+	cargo clippy --package pg-arrow-convert --all-targets --features pg$(PG_MAJOR) --no-default-features -- -D warnings
+	cargo clippy $(addprefix --package ,$(LIBS)) --all-targets -- -D warnings
 
-check: build stop-containers start-containers
-	cargo pgrx test pg$(PG_MAJOR) --no-default-features
+# The unit tests of the crates that need no Postgres at all: the formats themselves, uri
+# parsing, the registry. Seconds, and no cluster.
+check-libs:
+	cargo test $(addprefix --package ,$(LIBS))
 
-check-with-coverage: init-pgrx stop-containers start-containers
+# `install` rather than `build`: every tier has to be in the cluster, built *without* pg_test,
+# before the tier above it can be created. See TEST_ORDER for why the order is what it is.
+check: install check-libs stop-containers start-containers
+	for ext in $(TEST_ORDER); do \
+	  cargo pgrx test --package $$ext pg$(PG_MAJOR) --no-default-features || exit 1; \
+	done
+
+check-with-coverage: install stop-containers start-containers
 	cargo llvm-cov show-env --export-prefix > llvm-cov.env && \
 	. ./llvm-cov.env && \
 	cargo llvm-cov clean && \
-	cargo build --features "pg$(PG_MAJOR), pg_test" --no-default-features && \
-	cargo pgrx test pg$(PG_MAJOR) --no-default-features && \
+	for ext in $(TEST_ORDER); do \
+	  cargo build --package $$ext --features "pg$(PG_MAJOR), pg_test" --no-default-features || exit 1; \
+	  cargo pgrx test --package $$ext pg$(PG_MAJOR) --no-default-features || exit 1; \
+	done && \
 	cargo llvm-cov report --lcov > lcov.info
 
-check-s3: build stop-minio start-minio
-	cargo pgrx test pg$(PG_MAJOR) test_s3 --no-default-features
+# One emulator at a time, for working on that store: the filter selects the end to end tests of
+# `src/pgrx_tests/object_store.rs`, whose names start with the scheme for exactly this reason. A
+# filter that matches nothing would still exit 0, so a renamed test silently stops being tested
+# here -- `make check` runs all of them with every container up and is the gate.
+check-s3: install stop-minio start-minio
+	cargo pgrx test --package pg_parquet pg$(PG_MAJOR) test_s3 --no-default-features
 
-check-azure: build stop-azurite start-azurite
+check-azure: install stop-azurite start-azurite
 ifeq ($(IS_EL8),false)
-	cargo pgrx test pg$(PG_MAJOR) test_azure --no-default-features
+	cargo pgrx test --package pg_parquet pg$(PG_MAJOR) test_azure --no-default-features
 endif
 
-check-gcs: build stop-fake-gcs start-fake-gcs
-	cargo pgrx test pg$(PG_MAJOR) test_gcs --no-default-features
+check-gcs: install stop-fake-gcs start-fake-gcs
+	cargo pgrx test --package pg_parquet pg$(PG_MAJOR) test_gcs --no-default-features
 
-check-http: build stop-web-dav start-web-dav
-	cargo pgrx test pg$(PG_MAJOR) test_http --no-default-features
+check-http: install stop-web-dav start-web-dav
+	cargo pgrx test --package pg_parquet pg$(PG_MAJOR) test_http --no-default-features
 
 start-containers: start-minio start-azurite start-fake-gcs start-web-dav
 

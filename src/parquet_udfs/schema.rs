@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use crate::arrow_parquet::uri_utils::{
-    ensure_access_privilege_to_uri, parquet_schema_from_uri, uri_as_string, ParsedUriInfo,
-};
+use crate::store::parquet_schema_from_uri;
 
 use ::parquet::basic::{ConvertedType, LogicalType, Repetition};
 use ::parquet::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type, TypePtr};
@@ -32,12 +30,8 @@ mod parquet {
             name!(logical_type, Option<String>),
         ),
     > {
-        let uri_info = ParsedUriInfo::try_from(uri.as_str()).unwrap_or_else(|e| {
-            panic!("{}", e.to_string());
-        });
-
-        ensure_access_privilege_to_uri(&uri_info, true);
-        let parquet_schema = parquet_schema_from_uri(&uri_info);
+        // the privilege check and the footer read are both in here
+        let parquet_schema = parquet_schema_from_uri(&uri);
 
         let mut rows = vec![];
 
@@ -60,7 +54,7 @@ mod parquet {
         for column_descriptor in column_descriptors {
             let column_type = column_descriptor.self_type();
 
-            let row = get_column_info(&uri_info, Some(&column_descriptor), column_type);
+            let row = get_column_info(&uri, Some(&column_descriptor), column_type);
 
             rows.push(row);
         }
@@ -71,7 +65,7 @@ mod parquet {
 
 #[allow(clippy::type_complexity)]
 fn get_column_info(
-    uri_info: &ParsedUriInfo,
+    uri: &str,
     column_descriptor: Option<&Arc<ColumnDescriptor>>,
     column_type: &Type,
 ) -> (
@@ -162,7 +156,7 @@ fn get_column_info(
     };
 
     (
-        uri_as_string(&uri_info.uri),
+        uri.to_string(),
         name,
         type_name,
         type_length,

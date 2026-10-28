@@ -1,0 +1,15 @@
+[package]
+name = "arrow-ipc-format"
+description = "The Arrow IPC file and stream formats as a pg_arrow_base format provider"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+format-registry.workspace = true
+
+# the workspace asks arrow for `ffi` only; the IPC container is this crate's subject. Without
+# ipc_compression `compression 'zstd'` would be a runtime error rather than an unknown option,
+# which is the wrong kind of surprise.
+arrow = { workspace = true, features = ["ipc", "ipc_compression"] }
+bytes.workspace = true

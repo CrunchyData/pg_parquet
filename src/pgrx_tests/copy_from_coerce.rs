@@ -8,9 +8,6 @@ mod tests {
         extension_exists, int96_timestamp, write_int96_timestamps_to_parquet,
         write_record_batch_to_parquet, write_record_batch_to_parquet_file, LOCAL_TEST_FILE_PATH,
     };
-    use crate::type_compat::pg_arrow_type_conversions::{
-        date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
-    };
     use arrow::array::{
         ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray,
@@ -24,6 +21,9 @@ mod tests {
     use arrow::datatypes::i256;
     use arrow::datatypes::{Int32Type, UInt16Type};
     use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+    use pg_arrow_convert::type_compat::pg_arrow_type_conversions::{
+        date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
+    };
     use pgrx::pg_test;
     use pgrx::{
         datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
@@ -1062,7 +1062,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and file.")]
     fn test_not_coercable_list_of_struct() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "x",
@@ -1110,7 +1110,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and file.")]
     fn test_coerce_struct_type_with_less_field() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "x",
@@ -1176,7 +1176,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and file.")]
     fn test_coerce_struct_type_with_different_field_name() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "x",
@@ -1209,7 +1209,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and file.")]
     fn test_coerce_struct_type_with_not_castable_field_type() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "x",
@@ -1242,9 +1242,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(
-        expected = "type mismatch for column \"location\" between table and parquet file"
-    )]
+    #[should_panic(expected = "type mismatch for column \"location\" between table and file")]
     fn test_type_mismatch_between_parquet_and_table() {
         let create_types = "create type dog as (name text, age int);
                             create type person as (id bigint, name text, dogs dog[]);
@@ -1587,7 +1585,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "column count mismatch between table and parquet file")]
+    #[should_panic(expected = "column count mismatch between table and file")]
     fn test_table_with_different_name_match_by_position_fail() {
         let copy_to = "COPY (SELECT 1 as a, 'hello' as b) TO '/tmp/test.parquet'";
         Spi::run(copy_to).unwrap();
@@ -1600,7 +1598,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "column \"name\" is not found in parquet file")]
+    #[should_panic(expected = "column \"name\" is not found in the file")]
     fn test_missing_column_in_parquet() {
         let create_table = "create table test_table(id int, name text);";
         Spi::run(create_table).unwrap();
@@ -1614,7 +1612,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "type mismatch for column \"x\" between table and parquet file.")]
+    #[should_panic(expected = "type mismatch for column \"x\" between table and file.")]
     fn test_coerce_custom_cast_fail() {
         let custom_cast = "CREATE FUNCTION float_to_date(float) RETURNS date AS $$
                              BEGIN
@@ -2120,7 +2118,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(
-        expected = "string value in the parquet file contains a null byte, which PostgreSQL cannot store"
+        expected = "string value in the file contains a null byte, which PostgreSQL cannot store"
     )]
     fn test_coerce_string_with_null_byte() {
         // a string with a null byte is rejected instead of being truncated at it, which is what

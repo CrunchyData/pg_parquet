@@ -13,13 +13,11 @@ use pgrx::{
 };
 
 use crate::{
-    arrow_parquet::uri_utils::{
-        ensure_access_privilege_to_uri, parquet_metadata_from_uri, ParsedUriInfo,
-    },
-    type_compat::pg_arrow_type_conversions::{
+    parquet_udfs::stat_values::{
         i128_to_numeric, i32_to_date, i64_to_time, i64_to_timestamp, i64_to_timestamptz,
         i64_to_timetz, make_numeric_typmod,
     },
+    store::parquet_metadata_from_uri,
 };
 
 #[pg_schema]
@@ -108,12 +106,8 @@ mod parquet {
             name!(stats_distinct_count, Option<i64>),
         ),
     > {
-        let uri_info = ParsedUriInfo::try_from(uri.as_str()).unwrap_or_else(|e| {
-            panic!("{}", e.to_string());
-        });
-
-        ensure_access_privilege_to_uri(&uri_info, true);
-        let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+        // the privilege check and the footer read are both in here
+        let parquet_metadata = parquet_metadata_from_uri(&uri);
 
         let mut aggregated_column_stats = HashMap::new();
 

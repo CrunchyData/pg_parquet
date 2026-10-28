@@ -4,16 +4,16 @@ mod tests {
 
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
-        extension_exists, extension_version, geospatial_crs_by_column,
+        create_postgis, extension_exists, extension_version, geospatial_crs_by_column,
         timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult, TestTable,
         LOCAL_TEST_FILE_PATH,
     };
-    use crate::type_compat::fallback_to_text::FallbackToText;
-    use crate::type_compat::geometry::{Geography, Geometry};
-    use crate::type_compat::map::Map;
+    use pg_arrow_convert::type_compat::fallback_to_text::FallbackToText;
+    use pg_arrow_convert::type_compat::geometry::{Geography, Geometry};
+    use pg_arrow_convert::type_compat::map::Map;
     #[cfg(not(pre_pg19))]
-    use crate::type_compat::oid8::Oid8;
-    use crate::type_compat::pg_arrow_type_conversions::{
+    use pg_arrow_convert::type_compat::oid8::Oid8;
+    use pg_arrow_convert::type_compat::pg_arrow_type_conversions::{
         date_to_i32, i32_to_date, i64_to_timestamp, i64_to_timestamptz, timestamp_to_i64,
         timestamptz_to_i64, DEFAULT_UNBOUNDED_NUMERIC_PRECISION, DEFAULT_UNBOUNDED_NUMERIC_SCALE,
     };
@@ -829,7 +829,7 @@ mod tests {
     // i64::MAX is the infinity sentinel in the file, so the one finite timestamp that lands
     // on it cannot be written
     #[pg_test]
-    #[should_panic(expected = "is out of range for a parquet \"timestamp\" column")]
+    #[should_panic(expected = "is out of range for an Arrow \"timestamp\" column")]
     fn test_timestamp_at_infinity_sentinel() {
         let test_table = TestTable::<Timestamp>::new("timestamp".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES ('294247-01-10 04:00:54.775807');");
@@ -1284,7 +1284,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(
-        expected = "numeric value contains 30 digits before decimal point, which exceeds max allowed integral digits 29 during copy to parquet"
+        expected = "numeric value contains 30 digits before decimal point, which exceeds max allowed integral digits 29 during copy to a file"
     )]
     fn test_invalid_unbounded_numeric_integral_digits() {
         let invalid_integral_digits =
@@ -1299,7 +1299,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(
-        expected = "numeric value contains 10 digits after decimal point, which exceeds max allowed decimal digits 9 during copy to parquet"
+        expected = "numeric value contains 10 digits after decimal point, which exceeds max allowed decimal digits 9 during copy to a file"
     )]
     fn test_invalid_unbounded_numeric_decimal_digits() {
         let invalid_decimal_digits = DEFAULT_UNBOUNDED_NUMERIC_SCALE + 1;
@@ -1386,8 +1386,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let test_table = TestTable::<Geometry>::new("geometry".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (ST_GeomFromText('POINT(1 1)')),
@@ -1404,8 +1403,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let test_table = TestTable::<Vec<Option<Geometry>>>::new("geometry[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array[ST_GeomFromText('POINT(1 1)'), ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null), (array[]::geometry[]);");
@@ -1419,8 +1417,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let test_table = TestTable::<Geography>::new("geography".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (ST_GeogFromText('POINT(1 1)')),
@@ -1437,8 +1434,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let test_table = TestTable::<Vec<Option<Geography>>>::new("geography[]".into());
         test_table.insert("INSERT INTO test_expected (a) VALUES (array[ST_GeogFromText('POINT(1 1)'), ST_GeogFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))'), null]), (null), (array[]::geography[]);");
@@ -1452,8 +1448,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let copy_to_query = format!(
             "COPY (SELECT ST_GeomFromText('POINT(1 1)')::geometry(point) as no_srid,
@@ -1516,8 +1511,7 @@ mod tests {
             return;
         }
 
-        let query = "DROP EXTENSION IF EXISTS postgis; CREATE EXTENSION postgis;";
-        Spi::run(query).unwrap();
+        create_postgis();
 
         let copy_to_query = format!(
             "COPY (SELECT ST_GeomFromText('POINT(1 2)') as a, 1 as b

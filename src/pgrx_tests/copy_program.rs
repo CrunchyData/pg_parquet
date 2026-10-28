@@ -166,6 +166,7 @@ mod tests {
             .arg("-c")
             .arg(format!("COPY test_expected TO PROGRAM 'cat > {LOCAL_TEST_FILE_PATH}' WITH (format parquet);"))
             .stdout(pipe_out)
+            .stderr(std::process::Stdio::piped())
             .spawn()
             .expect("failed to execute process");
 
@@ -175,8 +176,19 @@ mod tests {
                 .read_to_end(&mut buffer)
                 .expect("Failed to read from input pipe");
 
+            let mut stderr = String::new();
+            copy_to
+                .stderr
+                .take()
+                .expect("stderr is piped")
+                .read_to_string(&mut stderr)
+                .expect("Failed to read psql stderr");
+
             let status = copy_to.wait().expect("Failed to wait for 'copy_to'");
-            assert!(status.success(), "psql COPY TO process did not succeed");
+            assert!(
+                status.success(),
+                "psql COPY TO process did not succeed: {stderr}"
+            );
         }
 
         // copy from program with dummy role

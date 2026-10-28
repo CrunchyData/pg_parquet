@@ -1,13 +1,15 @@
 use std::fs::File;
 use std::marker::PhantomData;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::Child;
 use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::HashMap, fmt::Debug};
 
-use crate::arrow_parquet::uri_utils::{parquet_metadata_from_uri, ParsedUriInfo};
-use crate::type_compat::map::Map;
+use crate::store::parquet_metadata_from_uri;
+use pg_arrow_convert::type_compat::fallback_to_text::reset_fallback_to_text_context;
+use pg_arrow_convert::type_compat::geometry::reset_postgis_context;
+use pg_arrow_convert::type_compat::map::Map;
 
 use arrow::array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
@@ -62,26 +64,6 @@ pub(crate) fn test_pg_port() -> String {
         .expect("port setting is unset")
 }
 
-// psql runs the given commands in a session of its own and returns what they printed, for
-// the commands a test needs outside of its own transaction
-pub(crate) fn psql(port: &str, commands: &[&str]) -> String {
-    let mut psql = Command::new("psql");
-    psql.args(["-h", "localhost", "-p", port, "-d", "pgrx_tests", "-At"]);
-
-    for command in commands {
-        psql.args(["-c", command]);
-    }
-
-    let output = psql.output().expect("failed to run psql");
-    assert!(
-        output.status.success(),
-        "psql failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    String::from_utf8(output.stdout).expect("psql printed invalid utf8")
-}
-
 pub(crate) struct FileCleanup {
     path: String,
 }
@@ -106,8 +88,42 @@ impl Drop for FileCleanup {
     }
 }
 
+/// Primes this binary's copy of the fallback-to-text context from a table's column `a`.
+///
+/// A type with no arrow mapping of its own crosses as text through the type's own input and
+/// output functions, and `pg-arrow-convert` keeps those in a static. The COPY that these suites
+/// run fills the static inside `pg_arrow_base`, while a `FallbackToText` read back here goes
+/// through the copy of the crate this test binary links, which nothing has filled. So the suite
+/// primes its own, from the column it is about to read.
+fn prime_fallback_to_text(table_name: &str) {
+    // an array of a fallback type reads its elements, so the element type is the one whose
+    // input and output functions are wanted
+    let query = format!(
+        "SELECT CASE WHEN t.typlen = -1 AND t.typelem <> 0 THEN t.typelem ELSE a.atttypid END \
+           AS typoid, a.atttypmod AS typmod \
+         FROM pg_attribute a JOIN pg_type t ON t.oid = a.atttypid \
+         WHERE a.attrelid = '{table_name}'::regclass AND a.attname = 'a'"
+    );
+
+    let (typoid, typmod) = Spi::connect(|client| {
+        let tuple_table = client.select(&query, None, &[]).unwrap();
+        let row = tuple_table.first();
+
+        (
+            row.get_by_name::<Oid, _>("typoid").unwrap(),
+            row.get_by_name::<i32, _>("typmod").unwrap(),
+        )
+    });
+
+    if let (Some(typoid), Some(typmod)) = (typoid, typmod) {
+        reset_fallback_to_text_context(typoid, typmod);
+    }
+}
+
 pub(crate) struct TestTable<T: IntoDatum + FromDatum> {
     uri: String,
+    // the COPY FROM reads this instead of uri when it is set, which is how a test writes one
+    // file and reads it back through a glob that has to match it
     uri_pattern: Option<String>,
     order_by_col: String,
     copy_to_options: HashMap<String, CopyOptionValue>,
@@ -187,6 +203,8 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
     }
 
     fn select_all(&self, table_name: &str) -> Vec<(Option<T>,)> {
+        prime_fallback_to_text(table_name);
+
         let select_command = format!(
             "SELECT a FROM {} ORDER BY {};",
             table_name, self.order_by_col
@@ -223,11 +241,7 @@ impl<T: IntoDatum + FromDatum> TestTable<T> {
     }
 
     pub(crate) fn copy_from_parquet(&self, table_name: &str) {
-        let uri = if let Some(uri_pattern) = &self.uri_pattern {
-            uri_pattern
-        } else {
-            &self.uri
-        };
+        let uri = self.uri_pattern.as_ref().unwrap_or(&self.uri);
 
         let mut copy_from_query = format!("COPY {} FROM '{}'", table_name, uri);
 
@@ -397,6 +411,35 @@ pub(crate) fn timetz_array_to_utc_time_array(
     )
 }
 
+/// Recreates postgis, and reinitializes *this* library's view of it.
+///
+/// `pg-arrow-convert` is a test-only dependency of this crate, so the test build of
+/// `pg_parquet.so` carries its own copy of that crate's postgis context: the one `pg_arrow_base`
+/// resets when a `COPY` starts lives in a different library and is a different object. A test
+/// that converts a geometry datum in Rust reads ours, which nothing else would ever initialize,
+/// and recreating the extension changes the oids it caches -- so it is reset on every create.
+pub(crate) fn create_postgis_in(schema: Option<&str>) {
+    let create = match schema {
+        Some(schema) => format!(
+            "DROP SCHEMA IF EXISTS {0} CASCADE; CREATE SCHEMA {0};
+             CREATE EXTENSION postgis SCHEMA {0};",
+            spi::quote_identifier(schema)
+        ),
+        None => "CREATE EXTENSION postgis;".to_string(),
+    };
+
+    Spi::run(&format!(
+        "DROP EXTENSION IF EXISTS postgis CASCADE; {create}"
+    ))
+    .unwrap();
+
+    reset_postgis_context();
+}
+
+pub(crate) fn create_postgis() {
+    create_postgis_in(None);
+}
+
 pub(crate) fn extension_exists(extension_name: &str) -> bool {
     let quoted_extension = spi::quote_literal(extension_name);
     let query =
@@ -562,13 +605,7 @@ pub(crate) fn copy_to_helper(uri: &str) {
 // geospatial column of the test file stores. A None crs means that the column uses the default
 // crs of the parquet geospatial types, which is lon/lat on the WGS84 ellipsoid.
 pub(crate) fn geospatial_crs_by_column() -> HashMap<String, Option<String>> {
-    geospatial_crs_by_column_of(LOCAL_TEST_FILE_PATH)
-}
-
-// geospatial_crs_by_column_of is geospatial_crs_by_column for a file other than the test file
-pub(crate) fn geospatial_crs_by_column_of(uri: &str) -> HashMap<String, Option<String>> {
-    let uri_info = ParsedUriInfo::try_from(uri).unwrap();
-    let parquet_metadata = parquet_metadata_from_uri(&uri_info);
+    let parquet_metadata = parquet_metadata_from_uri(LOCAL_TEST_FILE_PATH);
 
     let mut crs_by_column = HashMap::new();
 
@@ -585,40 +622,9 @@ pub(crate) fn geospatial_crs_by_column_of(uri: &str) -> HashMap<String, Option<S
     crs_by_column
 }
 
-// the rows of the table an interrupted copy reads. Every payload is drawn at random, which
-// leaves the writer nothing to compress away, so the table is large enough for the copy of it
-// to still be running when the test interrupts it.
-pub(crate) const INTERRUPTED_TABLE_ROWS: i64 = 200_000;
-
 // COPY_START_TIMEOUT is how long a copy started in another session is given to reach the
 // point it is worth interrupting at
 pub(crate) const COPY_START_TIMEOUT: Duration = Duration::from_secs(60);
-
-// create_interruptible_table creates the table an interrupted copy reads in a session of
-// its own, so that the session that copies it can see it
-pub(crate) fn create_interruptible_table(table: &str) {
-    let port = test_pg_port();
-
-    psql(
-        &port,
-        &[&format!(
-            "DROP TABLE IF EXISTS {table};
-             CREATE TABLE {table} (id bigint, payload text);
-             INSERT INTO {table}
-             SELECT g, md5(random()::text) || md5(random()::text) ||
-                       md5(random()::text) || md5(random()::text) ||
-                       md5(random()::text) || md5(random()::text) ||
-                       md5(random()::text) || md5(random()::text)
-             FROM generate_series(1, {INTERRUPTED_TABLE_ROWS}) g;"
-        )],
-    );
-}
-
-pub(crate) fn drop_interruptible_table(table: &str) {
-    let port = test_pg_port();
-
-    psql(&port, &[&format!("DROP TABLE IF EXISTS {table};")]);
-}
 
 // copy_session_output closes the input of the session, which is what makes psql exit, and
 // returns everything it printed

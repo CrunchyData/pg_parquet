@@ -1,0 +1,10 @@
+[package]
+name = "format-registry"
+description = "The file format provider trait that pg_arrow_base dispatches on, and the C ABI providers register over"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+
+[dependencies]
+arrow.workspace = true
+bytes.workspace = true

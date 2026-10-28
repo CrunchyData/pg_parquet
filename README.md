@@ -7,6 +7,28 @@
 
 `pg_parquet` is a PostgreSQL extension that allows you to read and write [Parquet files](https://parquet.apache.org), which are located in `S3`, `Azure Blob Storage`, `Google Cloud Storage`, `http(s) endpoints` or `file system`, from PostgreSQL via `COPY TO/FROM` commands. It depends on [Apache Arrow](https://arrow.apache.org/rust/arrow/) project to read and write Parquet files and [pgrx](https://github.com/pgcentralfoundation/pgrx) project to extend PostgreSQL's `COPY` command.
 
+`pg_parquet` is the Parquet provider of a tiered stack, and this repository holds all of it. Each extension is a crate of one workspace, and `make install` installs every one of them, because `CREATE EXTENSION pg_parquet` needs the two tiers below it:
+
+| extension | directory | what it owns |
+|---|---|---|
+| `pg_object_store` | [`pg_object_store/`](pg_object_store/README.md) | uris, credentials, object store clients and the roles that govern reaching one |
+| `pg_arrow_base` | [`pg_arrow_base/`](pg_arrow_base/README.md) | the `COPY` hook, schema inference, the Postgres ⇄ Arrow conversion and the `arrow.*` functions |
+| `pg_parquet` | `src/`, [`parquet-format/`](parquet-format/) | reading and writing the Parquet format itself |
+| `pg_arrow` | [`pg_arrow/`](pg_arrow/README.md) | the same stack's Arrow IPC provider, installed alongside this one and optional |
+
+Everything below works as it did before that split, with the exceptions called out in place: the roles are `object_store_read` and `object_store_write`, the `COPY` hook's GUC is `arrow.enable_copy_hooks`, inferred composite types land in `arrow_structs`, and listing a uri is `arrow.list()`.
+
+Upgrading an existing installation needs the other two extensions created first, because `ALTER EXTENSION ... UPDATE` does not install what
+a new version requires:
+
+```sql
+CREATE EXTENSION pg_object_store;
+CREATE EXTENSION pg_arrow_base;
+ALTER EXTENSION pg_parquet UPDATE;
+```
+
+The update moves the grants of the old roles to the new ones, drops the functions that moved, and reports anything it had to leave behind.
+
 ```sql
 -- Copy a query result into Parquet in S3
 COPY (SELECT * FROM table) TO 's3://mybucket/data.parquet' WITH (format 'parquet');
@@ -25,7 +47,7 @@ COPY table FROM 's3://mybucket/data.parquet' WITH (format 'parquet');
   - [Inspect Parquet schema](#inspect-parquet-schema)
   - [Inspect Parquet metadata](#inspect-parquet-metadata)
   - [Inspect Parquet column statistics](#inspect-parquet-column-statistics)
-  - [List and read Parquet files from uri pattern](#list-and-read-parquet-files-from-uri-pattern)
+  - [List the files under a uri](#list-the-files-under-a-uri)
   - [Monitor COPY progress](#monitor-copy-progress)
 - [Object Store Support](#object-store-support)
 - [Copy Options](#copy-options)
@@ -55,17 +77,25 @@ After installing `Postgres`, you need to set up `rustup`, `cargo-pgrx` to build 
 # configure pgrx
 > cargo pgrx init --pg"${PG_MAJOR}" $(which pg_config)
 
-# append the extension to shared_preload_libraries 
-> echo "shared_preload_libraries = 'pg_parquet'" >> ~/.pgrx/data-"${PG_MAJOR}"/postgresql.conf
+# append the extension to shared_preload_libraries
+> echo "shared_preload_libraries = 'pg_arrow_base, pg_object_store'" >> ~/.pgrx/data-"${PG_MAJOR}"/postgresql.conf
 
-# initialize a data directory, build and install the extension (to the targets specified by configured pg_config), then connects to a session
+# build and install every extension of the stack: the two tiers below this one, this one, and
+# the Arrow IPC provider beside it. A `cargo pgrx install` on its own installs only pg_parquet,
+# which leaves a cluster where CREATE EXTENSION pg_parquet cannot find what it requires.
+> make install
+
+# alternatively, initialize a data directory, build and install, then connect to a session
 > cargo pgrx run --features pg"${PG_MAJOR}"
-# alternatively you can only build and install the extension (pass --release flag for production binary)
-> cargo pgrx install --release --features pg"${PG_MAJOR}"
 
-# create the extension in the database
-psql> "CREATE EXTENSION pg_parquet;"
+# create the extension in the database, with the two it requires
+psql> "CREATE EXTENSION pg_parquet CASCADE;"
 ```
+
+> [!NOTE]
+> `pg_arrow_base` installs the `ProcessUtility` hook that `COPY ... TO/FROM '<uri>'` goes through, and it has to be loaded when the hook is
+> installed, so it belongs in `shared_preload_libraries` rather than `pg_parquet`. `pg_parquet` itself is loaded on demand, the first time a
+> session names `format 'parquet'` or a `.parquet` uri.
 
 > [!NOTE]
 > `pgrx` installs the extension into the directories of the `pg_config` that it is configured with, which are owned by `root` for a packaged `Postgres`. `cargo pgrx install` can be told to use `sudo` for that, but `cargo pgrx run` has no such flag and instead needs those directories to be writable, as shown below. Alternatively, `cargo pgrx init --pg"${PG_MAJOR}" download` has `pgrx` build its own `Postgres` under `~/.pgrx`, which belongs to you and needs no root permissions at all.
@@ -143,11 +173,12 @@ SELECT * FROM product_inferred_example;
 ```
 
 > [!NOTE]
-> If the inferred column is of composite type, a new type will be created named as `parquet_structs.struct_<hash>`. Hash is determined by
+> If the inferred column is of composite type, a new type will be created named as `arrow_structs.struct_<hash>`. Hash is determined by
 field types and names of the composite type. The type is created by the user that runs the command, so that user needs `CREATE` privilege
-on the `parquet_structs` schema, which the extension grants to `public`. The generated types are not dropped together with the table.
-The `parquet_structs` schema belongs to the extension, so `DROP EXTENSION pg_parquet` reports the dependency while any table still has such
-a column, and `DROP EXTENSION pg_parquet CASCADE` drops those columns along with the types. Drop or alter the columns first.
+on the `arrow_structs` schema, which `pg_arrow_base` grants to `public`. The generated types are not dropped together with the table.
+The `arrow_structs` schema belongs to `pg_arrow_base` -- the types are the same whichever format inferred them -- so `DROP EXTENSION
+pg_arrow_base` reports the dependency while any table still has such a column, and `DROP EXTENSION pg_arrow_base CASCADE` drops those
+columns along with the types. Drop or alter the columns first.
 
 > [!NOTE]
 > Postgres has no unsigned integers, so an unsigned column is inferred as the next wider type e.g. `uint32` as `bigint` and `uint64`
@@ -274,27 +305,32 @@ SELECT * FROM parquet.column_stats('/tmp/product_example.parquet')
 (13 rows)
 ```
 
-### List and read Parquet files from uri pattern
+### List the files under a uri
 
-You can call `SELECT * FROM parquet.list(<uri_pattern>)` to see all uris that matches with the uri pattern.
-Uri pattern can resolve `**` for directories and `*` for words in the uri.
+You can call `SELECT * FROM arrow.list(<uri>)` to see the files under a uri, with the format each
+one is recognized as. It is `pg_arrow_base`'s function rather than `pg_parquet`'s, because
+listing a prefix is not a Parquet operation; `format` is NULL for a file no loaded provider
+claims, which is how to see that half a prefix is unreadable.
 
 
 ```sql
 COPY (SELECT i FROM generate_series(1, 1000000) i) TO '/tmp/some/test.parquet' with (file_size_bytes '1MB');
 COPY 1000000
 
-SELECT * FROM parquet.list('/tmp/some/**/*.parquet');
-                  uri                  |  size
----------------------------------------+---------
- /tmp/some/test.parquet/data_4.parquet |  100162
- /tmp/some/test.parquet/data_3.parquet | 1486916
- /tmp/some/test.parquet/data_2.parquet | 1486916
- /tmp/some/test.parquet/data_0.parquet | 1486920
- /tmp/some/test.parquet/data_1.parquet | 1486916
+SELECT * FROM arrow.list('/tmp/some/test.parquet');
+               location                | size_bytes | format
+---------------------------------------+------------+---------
+ /tmp/some/test.parquet/data_0.parquet |    1486736 | parquet
+ /tmp/some/test.parquet/data_1.parquet |    1486732 | parquet
+ /tmp/some/test.parquet/data_2.parquet |    1486732 | parquet
+ /tmp/some/test.parquet/data_3.parquet |    1486732 | parquet
+ /tmp/some/test.parquet/data_4.parquet |     100160 | parquet
 (5 rows)
 
 ```
+
+A uri *pattern*, with `**` for directories and `*` for words, is still resolved by `COPY FROM`
+itself, as below.
 
 Uri pattern is also supported by `COPY FROM` for all supported object stores except `http(s)` endpoints. A folder that a `COPY TO` with `file_size_bytes` wrote is read this way too: the folder holds no object of its own name, so `COPY FROM '<folder>/*.parquet'` is what reads the files in it.
 ```sql
@@ -329,8 +365,19 @@ The byte counters mean different things for the two directions:
 `pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage`, `http(s)` and `Google Cloud Storage` object stores.
 
 > [!NOTE]
-> To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
-> Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
+> To be able to write into an object store location, you need to grant the `object_store_write` role to your current postgres user.
+> Similarly, to read from an object store location, you need to grant the `object_store_read` role to your current postgres user.
+> These roles belong to `pg_object_store` and govern every extension that reaches a uri through it. They replace
+> `parquet_object_store_write` and `parquet_object_store_read`; upgrading `pg_parquet` grants the new role to every member of the old one.
+
+Reaching an object store — parsing a uri, resolving credentials from the environment and from
+the cloud vendors' own config files, building the client and caching it per bucket until its
+credentials expire — is not specific to Parquet, so it lives in
+[`pg_object_store`](https://github.com/CrunchyData/pg_object_store), which `pg_parquet` requires.
+Nothing about the uris, the credentials or the error messages changes with that: it is the same
+code, in one extension that every Arrow-backed format extension shares instead of vendoring its
+own copy. One client cache per session serves all of them, so a credential is resolved once no
+matter how many formats a session touches.
 
 #### S3 Storage
 
@@ -486,11 +533,13 @@ A request that an object store is slow to answer is retried, which takes minutes
 - `match_by <string>`: method to match Parquet file fields to PostgreSQL table columns. The available methods are `position` and `name`. The default method is `position`. You can set it to `name` to match the columns by their name rather than by their position in the schema (default). Match by `name` is useful when field order differs between the Parquet file and the table, but their names match. It also matches the fields of the composite type columns by name.
 
 ## Configuration
-The following GUC parameters are available:
-- `pg_parquet.enable_copy_hooks`: you can set this parameter to `on` or `off` to enable or disable the `pg_parquet` extension. The default value is `on`.
-- `pg_parquet.max_parallel_workers`: the number of parallel workers a `COPY TO` or `COPY FROM` command may use. The default value is `0`, which keeps both of them single process. The workers come from the same pool as parallel query workers, so a request above `max_parallel_workers` is capped to it. A command that the pool cannot spare every worker it asked for runs with the ones it was given. A `COPY FROM` gains less from a large number of workers than a `COPY TO` does, because the workers only decode the row groups of the file while the leader inserts every row it hands out.
-  - For `COPY TO`, each worker writes a range of the table's pages, and the ranges end up in the destination without being re-encoded. For an `s3://`, `az://` or `gs://` destination, every worker uploads the ranges it wrote as parts of the destination's own multipart upload and the backend only adds the file's footer, so each byte of the file is uploaded once, nothing is downloaded, and nothing of such a copy is written to local disk. A copy whose server crashes can leave an unfinished multipart upload behind, which the bucket's own rule for incomplete uploads is what removes. A part that is left behind this way holds the rows of the copy that wrote it, so a uri pattern that covers it skips it rather than reading those rows again, and reports it as a file the pattern does not read. The parts of that upload differ in size, which a store that requires all but the last part to be the same size, e.g. Cloudflare R2, rejects. The bytes of a range are uploaded as the range wrote them, header and footer included, so the destination holds a little under 1% of bytes nothing points at. For a local file, each worker writes a part file next to the destination instead, and the backend merges the parts into it. With `file_size_bytes` the destination is a folder of complete files, so each worker writes files of its own into it rather than parts of one file, and the file a worker is in the middle of is finished before its range ends, which leaves a few more and smaller files behind than a single process copy writes. The files of such a folder are numbered in the order the workers claim them, so the rows of the table are not in the order of the file names. Parallel `COPY TO` applies to a single non-temporary heap table copied to a plain local file, to a folder of files, or to one of those object stores; anything else, e.g. `COPY (SELECT ..) TO`, a `COPY TO PROGRAM` or `TO STDOUT`, or an `http://` uri, is copied by a single process. Note that each range writes its own row groups, so a parallel `COPY TO` ends up with more and smaller row groups than a single process one.
-  - For `COPY FROM`, each worker decodes a subset of the row groups of the file and hands the rows to the backend that runs the command, which is the only one that writes them into the relation, in the order the file holds them. A uri with a wildcard stands for several files, whose row groups are one list the workers split between themselves the same way, each worker opening the file its next row group is in. Parallel `COPY FROM` applies to files, local, on an `s3://`, `az://` or `gs://` store, or at an `http(s)` endpoint that serves byte ranges, holding more than one row group together, read into a non-temporary heap table that has no row triggers and no attribute the command leaves to a default, an identity or a generation expression; anything else, e.g. a `COPY FROM PROGRAM`, is copied by a single process. Because only one process may write into the relation, the speedup is bounded by how fast that one process can insert, which the decoding of a few workers is usually enough to reach.
+`pg_parquet` has no GUC parameters of its own beyond the two deprecated aliases at the end of this section. The `COPY` hook and the object store client belong to the extensions below it, and so do their settings:
+- `arrow.enable_copy_hooks` (`pg_arrow_base`, default `on`): whether a `COPY` naming a uri and a registered format is served by this stack at all. It is read when the library is loaded, so turning it on wants `pg_arrow_base` in `shared_preload_libraries`. This replaces `pg_parquet.enable_copy_hooks`.
+- `arrow.default_format` (`pg_arrow_base`, default empty): the format to assume when the statement names none and the uri's extension implies none.
+- `arrow.max_parallel_workers` (`pg_arrow_base`, default `0`): how many workers a `COPY` may use, capped to the server's `max_parallel_workers`. A `COPY TO` with `file_size_bytes` has each worker write whole files of its own into the destination folder, and a `COPY FROM` has them decode the row groups of the file the leader inserts, in the order the file holds them. Anything the workers cannot be given — a `COPY (SELECT ..) TO`, a `TO PROGRAM`, a single file rather than a folder, a table with a row trigger or a column left to a default — is copied by a single process. This replaces `pg_parquet.max_parallel_workers`.
+- `object_store.enable_store_cache` (`pg_object_store`, default `on`): whether a resolved object store client is reused for the rest of the session.
+
+`pg_parquet.enable_copy_hooks` and `pg_parquet.max_parallel_workers` are still accepted, so a configuration file written for 0.6.0 keeps working: setting either to something other than its default is the cluster's starting value for the `arrow.*` setting above that replaced it. They are deprecated, they apply to every format rather than only to parquet, and they are read when the library loads — a `SET` of one during a session changes nothing.
 
 ## Supported Types
 `pg_parquet` has rich type support, including PostgreSQL's primitive, array, and composite types. Below is the table of the supported types in PostgreSQL and their corresponding Parquet types.

@@ -2,7 +2,7 @@
 mod tests {
     use pgrx::{pg_test, Spi};
 
-    use crate::pgrx_tests::common::{FileCleanup, LOCAL_TEST_FILE_PATH};
+    use crate::pgrx_tests::common::LOCAL_TEST_FILE_PATH;
 
     #[pg_test]
     fn test_parquet_schema() {
@@ -1009,80 +1009,5 @@ mod tests {
         assert_eq!(result_column_stats, expected_column_stats);
 
         Spi::run("DROP TABLE column_stats_test; DROP TYPE person;").unwrap();
-    }
-
-    #[pg_test]
-    fn test_parquet_list() {
-        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
-
-        let ddls = format!(
-            "
-            create table workers (id int, name text);
-            insert into workers select i, 'worker_' || i from generate_series(1, 1000000) i;
-            copy workers to '{LOCAL_TEST_FILE_PATH}' with (file_size_bytes '1MB');
-            "
-        );
-        Spi::run(&ddls).unwrap();
-
-        let fetch_result_uris = |uri_pattern| {
-            Spi::connect(|client| {
-                let parquet_list_command =
-                    format!("select * from parquet.list('{uri_pattern}') ORDER BY uri;");
-
-                let mut results = Vec::new();
-                let tup_table = client.select(&parquet_list_command, None, &[]).unwrap();
-
-                for row in tup_table {
-                    let uri = row["uri"].value::<String>().unwrap().unwrap();
-
-                    results.push((uri,));
-                }
-
-                results
-            })
-        };
-
-        // the uris are listed in the lexicographic order of the file names, which is not the
-        // order the files were written in
-        let expected_uris = {
-            let mut uris = (0..12)
-                .map(|file_idx| (format!("{LOCAL_TEST_FILE_PATH}/data_{file_idx}.parquet"),))
-                .collect::<Vec<_>>();
-            uris.sort();
-            uris
-        };
-
-        assert_eq!(
-            fetch_result_uris(format!("{LOCAL_TEST_FILE_PATH}/**")),
-            expected_uris
-        );
-
-        assert_eq!(
-            fetch_result_uris(format!("{LOCAL_TEST_FILE_PATH}/*.parquet")),
-            expected_uris
-        );
-
-        assert_eq!(
-            fetch_result_uris(format!("{LOCAL_TEST_FILE_PATH}/*_2.parquet")),
-            vec![(format!("{LOCAL_TEST_FILE_PATH}/data_2.parquet"),),]
-        );
-
-        // no match
-        assert_eq!(
-            fetch_result_uris(format!("{LOCAL_TEST_FILE_PATH}/*.csv")),
-            vec![]
-        );
-    }
-
-    #[pg_test]
-    #[should_panic(expected = "list operation on http(s) object stores is not supported")]
-    fn test_http_list_not_allowed() {
-        let http_endpoint: String =
-            std::env::var("HTTP_ENDPOINT").expect("HTTP_ENDPOINT not found");
-
-        let http_uri_pattern = format!("{http_endpoint}/**");
-
-        let parquet_list_command = format!("select * from parquet.list('{http_uri_pattern}');");
-        Spi::run(&parquet_list_command).unwrap();
     }
 }

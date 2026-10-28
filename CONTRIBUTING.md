@@ -79,6 +79,20 @@ If you want to work on a totally ready-to-work container environment, you can tr
 [vscode editor](https://code.visualstudio.com), you can start pg_parquet project
 inside the devcontainer. Please see [how you start the devcontainer](https://code.visualstudio.com/docs/devcontainers/containers).
 
+# The Workspace
+
+This repository holds four extensions, each a crate of one workspace: `pg_object_store`,
+`pg_arrow_base`, `pg_parquet` and `pg_arrow`. `pg_parquet` is the root package, so a bare
+`cargo build`, `cargo pgrx install` or `cargo pgrx test` still means this extension and
+nothing else; the others are named with `--package`. Their own READMEs, next to them,
+describe what each owns and where the line between them is.
+
+Nothing is tested with a bare `cargo pgrx test` alone, though: `pg_parquet` requires
+`pg_arrow_base`, which requires `pg_object_store`, so a cluster needs all three installed
+before this one can be created. That is what the `Makefile` targets are for -- `make install`
+installs every tier, and `make check` tests them in an order that does not leave a `pg_test`
+build underneath a tier being tested. Use those rather than a direct `cargo pgrx` invocation.
+
 # Postgres Support Matrix
 
 You can see the current supported Postgres versions from [README.md](README.md#postgres-support-matrix).
@@ -121,7 +135,8 @@ We apply semantic versioning for our releases. We do not support long term relea
 The release process is as follows:
 
 1. Open PR to start release preparation,
-2. Bump the package version at `Cargo.toml` file
+2. Bump the package version at `Cargo.toml` file. The other three extensions are versioned
+   independently, in their own `Cargo.toml`, and are not released together with this one.
 3. Upgrade dependencies via `cargo update`
 4. Use a schema diff tool, if possible (or manually), to generate
   - sql upgrade file from previous release to the current release `pg_parquet--<prev-version>-<next-version>.sql`

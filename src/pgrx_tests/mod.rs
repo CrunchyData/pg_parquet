@@ -1,5 +1,4 @@
 mod common;
-mod copy_cleanup;
 mod copy_from_coerce;
 mod copy_geospatial;
 mod copy_options;
@@ -10,9 +9,8 @@ mod copy_progress;
 mod copy_stdin_out;
 mod copy_type_roundtrip;
 mod create_table_from;
-mod gucs;
 mod interrupt;
+mod legacy_gucs;
 mod object_store;
-mod parallel_copy_from;
-mod parallel_copy_to;
+mod provider;
 mod udfs;

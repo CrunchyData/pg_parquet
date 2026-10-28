@@ -1,136 +1,117 @@
-use std::ffi::CStr;
-use std::future::Future;
-use std::sync::LazyLock;
-use std::time::Duration;
+use std::ffi::CString;
 
-use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
-use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
-use parquet_copy_hook::parallel_copy_to::{MAX_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS_LIMIT};
-use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
-use pgrx::memcxt::PgMemoryContexts;
-use pgrx::pg_sys::AsPgCStr;
-use pgrx::{prelude::*, GucContext, GucFlags, GucRegistry};
-use tokio::runtime::Runtime;
+use format_registry::abi::{
+    PgArrowRegistryApiV1, PGARROW_OK, PG_ARROW_REGISTRY_MAGIC, PG_ARROW_REGISTRY_RENDEZVOUS_KEY,
+    PG_ARROW_REGISTRY_VERSION,
+};
+use pgrx::pg_sys::{find_rendezvous_variable, load_file, AsPgCStr};
+use pgrx::prelude::*;
 
-mod arrow_parquet;
-mod object_store;
-mod parquet_copy_hook;
+mod descriptor;
+mod legacy_gucs;
 mod parquet_udfs;
+mod pg_compat;
 #[cfg(any(test, feature = "pg_test"))]
 mod pgrx_tests;
-mod pgrx_utils;
-mod type_compat;
-
-// re-export external api
-#[allow(unused_imports)]
-pub use crate::arrow_parquet::compression::PgParquetCompression;
-#[allow(unused_imports)]
-pub use crate::parquet_copy_hook::copy_to_split_dest_receiver::create_copy_to_parquet_split_dest_receiver;
+mod store;
 
 pgrx::pg_module_magic!();
 
 extension_sql_file!("../sql/bootstrap.sql", name = "role_setup", bootstrap);
 
-// PG_BACKEND_TOKIO_RUNTIME creates a tokio runtime that uses the current thread
-// to run the tokio reactor. This uses the same thread that is running the Postgres backend.
-pub(crate) static PG_BACKEND_TOKIO_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"))
-});
+/// Resolves `pg_arrow_base` and hands it the parquet descriptor.
+///
+/// Everything here reports with `ereport` rather than a return value, because it runs in
+/// `_PG_init` where there is nobody to return to: either the library finishes loading with the
+/// provider registered, or startup fails saying why.
+///
+/// The base loads a provider on demand — the first session to name `format 'parquet'` or to
+/// infer it from a `.parquet` uri `load_file`s `$libdir/pg_parquet` — so this also runs when
+/// the base pulled us in, and then the rendezvous slot is already filled.
+fn register_provider() {
+    // a mismatch would register this provider under a name the format does not answer to, and
+    // the symptom would be a statement that cannot find a format that is plainly installed
+    if !descriptor::describes_the_same_format() {
+        error!("the pg_parquet descriptor does not match the format it describes");
+    }
 
-// how long the backend waits on a future before it looks at the signals it was sent
-const INTERRUPT_CHECK_INTERVAL: Duration = Duration::from_millis(100);
+    let key = CString::new(PG_ARROW_REGISTRY_RENDEZVOUS_KEY)
+        .expect("the rendezvous key has no interior nul");
 
-// block_on waits for a future on the backend's runtime, which is how every request
-// pg_parquet makes to an object store is waited for. The wait is interruptible: a cancel or
-// a termination the backend was sent ends it, rather than the request's own timeout and
-// retries, which an object store spends minutes of its own on by default and which a
-// Ctrl-C cannot shorten at all.
-pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
-    let output = PG_BACKEND_TOKIO_RUNTIME.block_on(async move {
-        let mut future = std::pin::pin!(future);
+    let api = unsafe {
+        let slot = find_rendezvous_variable(key.as_ptr());
 
-        loop {
-            match tokio::time::timeout(INTERRUPT_CHECK_INTERVAL, &mut future).await {
-                Ok(output) => return Some(output),
-                // the future is dropped as this block returns, which is what gives up the
-                // request it is in the middle of
-                Err(_) if backend_was_interrupted() => return None,
-                Err(_) => {}
-            }
+        let mut pointer = *slot;
+
+        // null means the base is not loaded in this backend yet, which is the normal case:
+        // pg_parquet is preloaded and the base is not
+        if pointer.is_null() {
+            load_file("$libdir/pg_arrow_base".as_pg_cstr(), false);
+            pointer = *slot;
         }
-    });
 
-    match output {
-        Some(output) => output,
-        // reported outside the runtime: Postgres reports an error by jumping out of the
-        // frames above it, and the frames of the runtime must not be among them
-        None => {
-            unsafe { pg_sys::ProcessInterrupts() };
-
-            unreachable!("the backend was interrupted without reporting it");
-        }
-    }
-}
-
-// backend_was_interrupted tells whether the backend was sent a cancel or a termination that
-// ProcessInterrupts is in a position to report. A signal that is held off is left to the
-// interrupt check that comes after the wait, which is what the hold off is there for.
-fn backend_was_interrupted() -> bool {
-    unsafe {
-        (pg_sys::QueryCancelPending != 0 || pg_sys::ProcDiePending != 0)
-            && pg_sys::InterruptHoldoffCount == 0
-            && pg_sys::QueryCancelHoldoffCount == 0
-            && pg_sys::CritSectionCount == 0
-    }
-}
-
-#[pg_guard]
-pub extern "C-unwind" fn _PG_init() {
-    if !unsafe { pgrx::pg_sys::process_shared_preload_libraries_in_progress } {
-        panic!("pg_parquet must be loaded via shared_preload_libraries. Add 'pg_parquet' to shared_preload_libraries in postgresql.conf and restart Postgres.");
-    }
-
-    unsafe {
-        PgMemoryContexts::TopMemoryContext.switch_to(|_| {
-            GucRegistry::define_bool_guc(
-                CStr::from_ptr("pg_parquet.enable_copy_hooks".as_pg_cstr()),
-                CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
-                CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
-                &ENABLE_PARQUET_COPY_HOOK,
-                GucContext::Userset,
-                GucFlags::default(),
+        if pointer.is_null() {
+            ereport!(
+                PgLogLevel::ERROR,
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                "pg_arrow_base is not available",
+                "pg_parquet is a format provider for pg_arrow_base. Install it with \
+                 CREATE EXTENSION pg_arrow_base CASCADE."
             );
 
-            GucRegistry::define_int_guc(
-                CStr::from_ptr("pg_parquet.max_parallel_workers".as_pg_cstr()),
-                CStr::from_ptr(
-                    "Maximum number of parallel workers for a COPY TO or COPY FROM parquet"
-                        .as_pg_cstr(),
-                ),
-                CStr::from_ptr(
-                    "A COPY TO has the workers write the rows of the table into parts next \
-                     to the destination, which are merged into it, and a COPY FROM has them \
-                     decode the row groups of the file the leader inserts. The request is \
-                     capped to the server's max_parallel_workers. 0 disables both."
-                        .as_pg_cstr(),
-                ),
-                &MAX_PARALLEL_WORKERS,
-                0,
-                MAX_PARALLEL_WORKERS_LIMIT,
-                GucContext::Userset,
-                GucFlags::default(),
-            );
-        });
+            unreachable!("ereport at ERROR does not return");
+        }
+
+        &*(pointer as *const PgArrowRegistryApiV1)
     };
 
-    MarkGUCPrefixReserved("pg_parquet");
+    // checked on both sides: an ABI skew between two loaded libraries is a crash, not a link
+    // error
+    if api.magic != PG_ARROW_REGISTRY_MAGIC || api.version != PG_ARROW_REGISTRY_VERSION {
+        error!(
+            "pg_arrow_base published magic 0x{:08x} version {}, pg_parquet speaks 0x{:08x} \
+             version {}",
+            api.magic, api.version, PG_ARROW_REGISTRY_MAGIC, PG_ARROW_REGISTRY_VERSION
+        );
+    }
 
-    init_parquet_copy_hook();
+    let mut message = std::ptr::null_mut();
 
-    init_geospatial_stats_accumulator_factory();
+    let code = unsafe { (api.register_provider)(&descriptor::PROVIDER, &mut message) };
+
+    if code != PGARROW_OK {
+        let message = if message.is_null() {
+            "no reason given".to_string()
+        } else {
+            unsafe { std::ffi::CStr::from_ptr(message) }
+                .to_string_lossy()
+                .into_owned()
+        };
+
+        error!("could not register the parquet format provider: {message}");
+    }
+}
+
+/// Registering the format is all there is to do.
+///
+/// Everything that used to be here — the `COPY` hook, the GUC that turned it off, the trace
+/// sink for the object store — belongs to a tier that owns it now. `COPY ... WITH (format
+/// 'parquet')` is served by `pg_arrow_base`'s hook over the provider registered below, and the
+/// object store is `pg_object_store`'s, including the tracing. What is left of this extension
+/// is the format itself (`parquet-format/`), the descriptor that publishes it, and the UDFs
+/// that answer parquet-only questions about a file.
+///
+/// `shared_preload_libraries` is no longer required either: a provider is loaded on demand by
+/// the base the first time a session names its format.
+///
+/// The one thing still kept here that is not the format is the pair of 0.6.0 GUCs, which name
+/// settings the base owns now. They are defined before the base is resolved because one of
+/// them decides whether the base installs a hook at all. See `legacy_gucs`.
+#[pg_guard]
+pub extern "C-unwind" fn _PG_init() {
+    legacy_gucs::define_and_forward();
+
+    register_provider();
 }
 
 /// This module is required by `cargo pgrx test` invocations.
@@ -142,9 +123,11 @@ pub mod pg_test {
     }
 
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        // return any postgresql.conf settings that are required for your tests
+        // the COPY hook is the base's, and it has to be installed at load time, so the base is
+        // what this suite preloads. pg_parquet itself is loaded on demand, the same way it is
+        // in a cluster that never touched shared_preload_libraries.
         vec![
-            "shared_preload_libraries = 'pgaudit,pg_parquet'",
+            "shared_preload_libraries = 'pgaudit,pg_arrow_base'",
             "pgaudit.log = 'write'",
         ]
     }

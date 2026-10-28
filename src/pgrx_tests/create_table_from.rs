@@ -30,14 +30,12 @@ mod tests {
         AnyNumeric, Json, Spi,
     };
 
-    use crate::{
-        arrow_parquet::schema::infer_schema::{
-            map_typoid_from_name, STRUCT_TYPE_LOCK_CLASS, STRUCT_TYPE_LOCK_KEY,
-        },
-        pgrx_tests::common::{
-            copy_to_helper, ensure_table_attribute_type, extension_exists, test_pg_port,
-            write_record_batch_to_parquet_file,
-        },
+    use crate::pgrx_tests::common::{
+        copy_to_helper, ensure_table_attribute_type, extension_exists, test_pg_port,
+        write_record_batch_to_parquet_file,
+    };
+    use pg_arrow_convert::{
+        infer::{map_typoid_from_name, STRUCT_TYPE_LOCK_CLASS, STRUCT_TYPE_LOCK_KEY},
         pgrx_utils::array_typoid,
         type_compat::pg_arrow_type_conversions::{
             make_numeric_typmod, DEFAULT_UNBOUNDED_NUMERIC_PRECISION,
@@ -371,7 +369,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "cannot specify both 'load_from' and 'definition_from' options")]
+    #[should_panic(expected = "cannot specify both \"load_from\" and \"definition_from\"")]
     fn test_create_table_specify_both_options() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_specify_both_options");
@@ -380,7 +378,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "cannot create a partition table from a parquet file")]
+    #[should_panic(expected = "cannot create a table from a file as a partition")]
     fn test_create_partition_table() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_partition_table");
@@ -396,7 +394,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(
-        expected = "cannot create a table from a parquet file when column definitions are provided"
+        expected = "cannot create a table from a file when column definitions are provided"
     )]
     fn test_create_table_with_explicit_columns() {
         // the tests run concurrently, so each of them needs its own file
@@ -957,7 +955,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "cannot infer a Postgres type for the parquet field \"a\"")]
+    #[should_panic(expected = "cannot infer a Postgres type for the field \"a\"")]
     fn test_create_table_unsupported_arrow_type() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_unsupported_arrow_type");
@@ -980,7 +978,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "parquet file has a field with an empty name")]
+    #[should_panic(expected = "file has a field with an empty name")]
     fn test_create_table_empty_field_name() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_empty_field_name");
@@ -999,9 +997,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(
-        expected = "cannot create a table from a parquet file when the table inherits columns"
-    )]
+    #[should_panic(expected = "cannot create a table from a file when the table inherits columns")]
     fn test_create_table_inherits() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_inherits");
@@ -1015,7 +1011,7 @@ mod tests {
 
     #[pg_test]
     #[should_panic(
-        expected = "cannot create a table from a parquet file when the table is of a composite type"
+        expected = "cannot create a table from a file when the table is of a composite type"
     )]
     fn test_create_table_of_composite_type() {
         // the tests run concurrently, so each of them needs its own file
@@ -1201,7 +1197,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "parquet file has a field with an empty name in the struct \"s\"")]
+    #[should_panic(expected = "file has a field with an empty name in the struct \"s\"")]
     fn test_create_table_struct_with_an_empty_field_name() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_struct_empty_field_name");
@@ -1228,9 +1224,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(
-        expected = "parquet file has more than one field named \"a\" in the struct \"s\""
-    )]
+    #[should_panic(expected = "file has more than one field named \"a\" in the struct \"s\"")]
     fn test_create_table_struct_with_duplicate_field_names() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_struct_duplicate_field_names");
@@ -1275,7 +1269,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "parquet field name \"nul13\\0name\" contains a nul byte")]
+    #[should_panic(expected = "field name \"nul13\\0name\" contains a nul byte")]
     fn test_create_table_from_field_name_with_a_nul_byte() {
         let test_file = test_file("create_table_field_name_with_a_nul_byte");
 
@@ -1424,7 +1418,8 @@ mod tests {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         assert!(
-            stderr.contains("pg_parquet can handle this CREATE TABLE command but is not enabled"),
+            stderr
+                .contains("pg_arrow_base can handle this CREATE TABLE command but is not enabled"),
             "the extension warning is missing from the psql output: {stderr}"
         );
 
@@ -1740,9 +1735,9 @@ mod tests {
         ensure_table_attribute_type("test_table", "v", INT8OID, -1);
         ensure_table_attribute_type("test_table", "v_array", INT8ARRAYOID, -1);
 
-        // last type created under parquet_structs schema since child type is created first
+        // last type created under arrow_structs schema since child type is created first
         let parent_struct_oid =
-            Spi::get_one("select oid from pg_type where typnamespace = 'parquet_structs'::regnamespace and typname like 'struct_%' order by oid desc LIMIT 1;")
+            Spi::get_one("select oid from pg_type where typnamespace = 'arrow_structs'::regnamespace and typname like 'struct_%' order by oid desc LIMIT 1;")
                 .unwrap()
                 .unwrap();
 
@@ -1770,7 +1765,7 @@ mod tests {
         .unwrap();
 
         // the types that the first inference created are visible now
-        Spi::run("SET search_path TO public, parquet_structs").unwrap();
+        Spi::run("SET search_path TO public, arrow_structs").unwrap();
 
         Spi::run(&format!(
             "CREATE TABLE sp_table_two () WITH (load_from = '{test_file}')"
@@ -1845,7 +1840,7 @@ mod tests {
     }
 
     #[pg_test]
-    #[should_panic(expected = "parquet file has more than one field named \"a\"")]
+    #[should_panic(expected = "file has more than one field named \"a\"")]
     fn test_create_table_duplicate_field_names() {
         // the tests run concurrently, so each of them needs its own file
         let test_file = test_file("create_table_duplicate_field_names");
@@ -1960,7 +1955,10 @@ mod tests {
             "failed to create the latin1 database: {create_database_stderr}"
         );
 
-        psql(test_database, "CREATE EXTENSION IF NOT EXISTS pg_parquet");
+        psql(
+            test_database,
+            "CREATE EXTENSION IF NOT EXISTS pg_parquet CASCADE",
+        );
 
         // the field name is utf-8 in the file while the identifier has to be in the encoding of
         // the database, so the name is rejected rather than stored as its raw utf-8 bytes

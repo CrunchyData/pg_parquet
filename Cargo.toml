@@ -1,6 +1,65 @@
+# One workspace for every extension of the stack, each a member of its own. The root package
+# is `pg_parquet` itself, so `cargo build` and `cargo pgrx install` at the root still mean this
+# extension and nothing else; the tiers below it are named with `--package`.
+#
+# The format crates — parquet-format, and object-store-core below — carry no pgrx and no
+# Postgres, and are testable with plain `cargo test`.
+[workspace]
+members = [
+    "parquet-format",
+    # tier 1: uris, credentials, object store clients
+    "object-store-client",
+    "object-store-core",
+    "pg_object_store",
+    # tier 2: the COPY hook, the format registry, the pg <-> arrow mapping
+    "format-registry",
+    "pg-arrow-convert",
+    "pg_arrow_base",
+    # tier 3: the format providers. pg_parquet is the root package, below.
+    "arrow-ipc-format",
+    "pg_arrow",
+]
+resolver = "2"
+
+# Only what every member shares. Versions are per package: these extensions are not released
+# together yet, and `default_version` in each control file is `@CARGO_VERSION@`.
+[workspace.package]
+edition = "2021"
+license-file = "LICENSE"
+
+[workspace.dependencies]
+# tier 1, by path: the vtable ABI is declared once, in the crate dependents link, and published
+# from `pg_object_store`
+object-store-client = { path = "object-store-client", version = "0.1.0" }
+object-store-core = { path = "object-store-core", version = "0.1.0" }
+
+# tier 2, by path. `format-registry` is the one crate a provider links, and is deliberately
+# free of pgrx: a provider that could reach Postgres internals is a provider that would.
+format-registry = { path = "format-registry", version = "0.1.0" }
+pg-arrow-convert = { path = "pg-arrow-convert", version = "0.1.0", default-features = false }
+
+# tier 3: the Arrow IPC format, behind the pg_arrow extension
+arrow-ipc-format = { path = "arrow-ipc-format", version = "0.1.0" }
+
+# ffi: a record batch crosses between two `.so`s over the Arrow C Data Interface. A member that
+# needs more of arrow than this asks for it on top.
+arrow = { version = "60", default-features = false, features = ["ffi"] }
+aws-config = { version = "1", default-features = false, features = ["rustls", "rt-tokio"] }
+aws-credential-types = { version = "1", default-features = false }
+azure_storage = { version = "0.21", default-features = false }
+bytes = "1"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+futures = "0.3"
+home = "0.5"
+object_store = { version = "0.14", default-features = false, features = ["aws", "azure", "fs", "gcp", "http"] }
+pgrx = "=0.19.3"
+rust-ini = "0.21"
+tokio = { version = "1", default-features = false, features = ["rt", "time", "macros"] }
+url = "2"
+
 [package]
 name = "pg_parquet"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 license-file = "LICENSE"
 
@@ -9,28 +68,33 @@ crate-type = ["cdylib"]
 
 [features]
 default = ["pg19"]
-pg19 = ["pgrx/pg19", "pgrx-tests/pg19"]
-pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
-pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
-pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
-pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
-pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
-pg_test = []
+pg19 = ["pgrx/pg19", "pgrx-tests/pg19", "pg-arrow-convert?/pg19"]
+pg18 = ["pgrx/pg18", "pgrx-tests/pg18", "pg-arrow-convert?/pg18"]
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17", "pg-arrow-convert?/pg17"]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16", "pg-arrow-convert?/pg16"]
+pg15 = ["pgrx/pg15", "pgrx-tests/pg15", "pg-arrow-convert?/pg15"]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14", "pg-arrow-convert?/pg14"]
+# the suites assert against the *same* conversion rules the base applies, so they borrow
+# pg-arrow-convert rather than carry a copy of the pg<->arrow types. Test-only: the provider
+# itself never links it, which is the rule the architecture is built on.
+pg_test = ["pg-arrow-convert", "arrow-cast", "arrow-schema", "parquet-geospatial"]
 
 [dependencies]
-arrow = {version = "60", default-features = false}
-arrow-cast = {version = "60", default-features = false}
-arrow-schema = {version = "60", default-features = false, features = ["canonical_extension_types"]}
-aws-config = { version = "1", default-features = false, features = ["rustls","rt-tokio"] }
-aws-credential-types = {version = "1", default-features = false}
-azure_storage = {version = "0.21", default-features = false}
-bytes = "1"
-futures = "0.3"
-glob = "0.3"
-home = "0.5"
-libc = {version = "0.2", default-features = false }
-object_store = {version = "0.14", default-features = false, features = ["aws", "azure", "fs", "gcp", "http"]}
-once_cell = "1"
+# ffi: the descriptor hands the base record batches over the Arrow C Data Interface
+arrow.workspace = true
+arrow-cast = {version = "60", default-features = false, optional = true}
+# test-only, like arrow-cast: the suites build Arrow schemas to assert against
+arrow-schema = {version = "60", default-features = false, features = ["canonical_extension_types"], optional = true}
+bytes.workspace = true
+# tier 2, for the registration ABI only: the descriptor this extension publishes and the
+# adapters behind the base's byte source and sink.
+format-registry.workspace = true
+# tier 1, for the UDFs that read a footer from a uri: the ABI declaration and the marshalling
+# over it. The object store itself — uris, credentials, clients, the runtime — stays inside
+# pg_object_store and is reached by calling it.
+object-store-client.workspace = true
+# tier 2's conversion crate, for the test suites only: see the pg_test feature.
+pg-arrow-convert = {workspace = true, optional = true}
 parquet = {version = "60", default-features = false, features = [
     "arrow",
     "crc",
@@ -40,17 +104,14 @@ parquet = {version = "60", default-features = false, features = [
     "simdutf8",
     "lz4",
     "zstd",
-    "object_store",
     "arrow_canonical_extension_types",
     "geospatial",
 ]}
-parquet-geospatial = "60"
-pgrx = "=0.19.3"
-rust-ini = "0.21"
-serde = "1"
+parquet-geospatial = {version = "60", optional = true}
+# the format itself: no pgrx, no object store, tested with plain `cargo test`
+parquet-format = {path = "parquet-format"}
+pgrx.workspace = true
 serde_json = "1"
-tokio = {version = "1", default-features = false, features = ["rt", "time", "macros"]}
-url = "2"
 
 [dev-dependencies]
 pgrx-tests = "=0.19.3"
