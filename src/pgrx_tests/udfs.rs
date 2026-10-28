@@ -1042,34 +1042,24 @@ mod tests {
             })
         };
 
+        // the uris are listed in the lexicographic order of the file names, which is not the
+        // order the files were written in
+        let expected_uris = {
+            let mut uris = (0..12)
+                .map(|file_idx| (format!("{LOCAL_TEST_FILE_PATH}/data_{file_idx}.parquet"),))
+                .collect::<Vec<_>>();
+            uris.sort();
+            uris
+        };
+
         assert_eq!(
             fetch_result_uris(format!("{LOCAL_TEST_FILE_PATH}/**")),
-            vec![
-                (format!("{LOCAL_TEST_FILE_PATH}/data_0.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_1.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_2.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_3.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_4.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_5.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_6.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_7.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_8.parquet"),),
-            ]
+            expected_uris
         );
 
         assert_eq!(
             fetch_result_uris(format!("{LOCAL_TEST_FILE_PATH}/*.parquet")),
-            vec![
-                (format!("{LOCAL_TEST_FILE_PATH}/data_0.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_1.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_2.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_3.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_4.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_5.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_6.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_7.parquet"),),
-                (format!("{LOCAL_TEST_FILE_PATH}/data_8.parquet"),),
-            ]
+            expected_uris
         );
 
         assert_eq!(
