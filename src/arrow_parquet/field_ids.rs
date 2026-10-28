@@ -54,16 +54,16 @@ pub(crate) struct FieldIdMapping {
 impl FieldIdMapping {
     /// Returns the field ID, if any, from `FieldIdMapping` for the given field path.
     pub(crate) fn field_id(&self, field_path: &[String]) -> Option<i32> {
-        if field_path.is_empty() {
-            panic!("Field path is empty");
-        }
-
-        let field_name = &field_path[0];
+        let (field_name, nested_path) = field_path.split_first()?;
 
         match self.fields.get(field_name) {
-            Some(FieldIdMappingItem::FieldId(field_id)) => Some(*field_id),
+            // an id is the id of the field it names, and of no field nested in it, which would
+            // hand the same id to the whole subtree of a struct, a list or a map
+            Some(FieldIdMappingItem::FieldId(field_id)) => {
+                nested_path.is_empty().then_some(*field_id)
+            }
             Some(FieldIdMappingItem::FieldIdMapping(field_id_mapping)) => {
-                field_id_mapping.field_id(&field_path[1..])
+                field_id_mapping.field_id(nested_path)
             }
             None => None,
         }
@@ -101,8 +101,19 @@ impl FieldIdMapping {
             };
 
             match mapping_item {
-                // If the JSON item is an integer field ID, we're done
-                FieldIdMappingItem::FieldId(_id) => {}
+                // If the JSON item is an integer field ID, we're done, unless the field is a
+                // nested one, which is given its own id by the "__root_field_id" key of a mapping
+                FieldIdMappingItem::FieldId(_id) => {
+                    if matches!(
+                        arrow_field.data_type(),
+                        DataType::Struct(_) | DataType::List(_) | DataType::Map(_, _)
+                    ) {
+                        return Err(format!(
+                            "Field '{field_name}' in the mapping is a nested field, so it needs a \
+                             mapping with a \"__root_field_id\" key rather than a field id."
+                        ));
+                    }
+                }
 
                 // If the JSON item is a nested mapping, we need to validate it
                 FieldIdMappingItem::FieldIdMapping(mapping) => match arrow_field.data_type() {
@@ -135,16 +146,17 @@ impl FieldIdMapping {
                                 mapping.validate_against_schema(&entry_schema)?;
                             }
                             other_type => {
-                                panic!(
+                                return Err(format!(
                                 "Map entry field should be a struct, but got '{other_type:?}' for field '{field_name}'"
-                            );
+                            ));
                             }
                         };
-
-                        return Ok(());
                     }
                     other_type => {
-                        panic!("Unexpected data type '{other_type:?}' for field '{field_name}'");
+                        return Err(format!(
+                            "Field '{field_name}' in the mapping is of type '{other_type:?}', \
+                             which has no nested fields to map. It needs a field id."
+                        ));
                     }
                 },
             }
@@ -166,7 +178,10 @@ fn field_id_mapping_to_json_string(field_id_mapping: &FieldIdMapping) -> String 
 
 /// Validate that every field name in the `FieldIdMapping` exists in the provided Arrow schema
 /// when the `FieldIds` are explicitly specified.
-pub(crate) fn validate_field_ids(field_ids: FieldIds, arrow_schema: &Schema) -> Result<(), String> {
+pub(crate) fn validate_field_ids(
+    field_ids: &FieldIds,
+    arrow_schema: &Schema,
+) -> Result<(), String> {
     match field_ids {
         FieldIds::None => Ok(()),
         FieldIds::Auto => Ok(()),
