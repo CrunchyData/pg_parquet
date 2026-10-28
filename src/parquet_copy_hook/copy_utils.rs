@@ -570,17 +570,22 @@ fn is_copy_parquet_stmt(p_stmt: &PgBox<PlannedStmt>, copy_from: bool) -> bool {
     }
 
     let uri_info = copy_stmt_uri(p_stmt);
+    let has_parquet_format = has_parquet_format_option(p_stmt);
 
-    // uri can not be handled by pg_parquet
-    if uri_info.is_err() {
-        return false;
-    }
-
-    let uri_info = uri_info.unwrap();
-
-    // only parquet format is supported
-    if !has_parquet_format_option(p_stmt) && !is_parquet_uri(uri_info.uri.clone()) {
-        return false;
+    match &uri_info {
+        // only parquet format is supported
+        Ok(uri_info) => {
+            if !has_parquet_format && !is_parquet_uri(uri_info.uri.clone()) {
+                return false;
+            }
+        }
+        // a uri pg_parquet cannot handle is left to postgres, unless the copy asked for the
+        // parquet format, which is what makes the uri pg_parquet's to complain about below
+        Err(_) => {
+            if !has_parquet_format {
+                return false;
+            }
+        }
     }
 
     // extension checks are done via catalog (not yet searched via cache by postgres till pg18)
@@ -601,6 +606,17 @@ fn is_copy_parquet_stmt(p_stmt: &PgBox<PlannedStmt>, copy_from: bool) -> bool {
         );
 
         return false;
+    }
+
+    // the copy asked for the parquet format, so pg_parquet is the one that tells it what is
+    // wrong with its uri. Postgres would only report that it has no format named parquet, which
+    // says nothing about the uri the copy could not be run with.
+    if let Err(uri_error) = uri_info {
+        ereport!(
+            PgLogLevel::ERROR,
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            uri_error
+        );
     }
 
     true

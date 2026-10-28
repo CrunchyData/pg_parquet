@@ -1411,4 +1411,54 @@ mod tests {
     fn test_local_file_that_is_a_folder_names_the_path() {
         Spi::run("COPY (SELECT 1 AS a) TO '/tmp' WITH (format parquet);").unwrap();
     }
+
+    // a ".." segment of a local path is collapsed, the way it is collapsed in the path of an
+    // s3://, az://, gs:// or https:// uri
+    #[pg_test]
+    fn test_local_path_with_a_parent_segment() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        let parent_segment_uri = "/var/../tmp/pg_parquet_test.parquet";
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{parent_segment_uri}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert!(
+            std::path::Path::new(LOCAL_TEST_FILE_PATH).exists(),
+            "the copy wrote no \"{LOCAL_TEST_FILE_PATH}\""
+        );
+
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(&format!(
+            "COPY test_table FROM '{parent_segment_uri}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Spi::get_one::<i32>("SELECT a FROM test_table;").unwrap(),
+            Some(1)
+        );
+    }
+
+    // a copy that asked for the parquet format is told what is wrong with its uri. Postgres
+    // would only report that it has no format named parquet, which says nothing about the uri.
+    #[pg_test]
+    #[should_panic(expected = "unrecognized uri dummy://testbucket/dummy.parquet")]
+    fn test_copy_to_unparseable_uri_reports_the_uri() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table TO 'dummy://testbucket/dummy.parquet' WITH (format parquet);")
+            .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "unrecognized uri ftp://host/dummy.parquet")]
+    fn test_copy_from_unparseable_uri_reports_the_uri() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table FROM 'ftp://host/dummy.parquet' WITH (format parquet);").unwrap();
+    }
 }
