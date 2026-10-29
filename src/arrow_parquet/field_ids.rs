@@ -1,7 +1,11 @@
 use std::{collections::HashMap, fmt::Display, str::FromStr};
 
-use arrow_schema::{DataType, Schema};
+use arrow_schema::{DataType, Field, FieldRef, Schema};
 use serde::{Deserialize, Serialize};
+
+/// The key that gives a nested field its own id in an explicit field id mapping. It shares a
+/// namespace with the names of the fields nested in it, so a nested field cannot have that name.
+pub(crate) const ROOT_FIELD_ID_KEY: &str = "__root_field_id";
 
 #[derive(Debug, Clone, Default)]
 pub(crate) enum FieldIds {
@@ -79,7 +83,7 @@ impl FieldIdMapping {
 
         // Check every field name in the JSON mapping
         for (field_name, mapping_item) in &self.fields {
-            if field_name == "__root_field_id" {
+            if field_name == ROOT_FIELD_ID_KEY {
                 // Skip the root field, as it doesn't exist in the Arrow schema
                 continue;
             }
@@ -110,7 +114,7 @@ impl FieldIdMapping {
                     ) {
                         return Err(format!(
                             "Field '{field_name}' in the mapping is a nested field, so it needs a \
-                             mapping with a \"__root_field_id\" key rather than a field id."
+                             mapping with a \"{ROOT_FIELD_ID_KEY}\" key rather than a field id."
                         ));
                     }
                 }
@@ -169,7 +173,34 @@ impl FieldIdMapping {
 pub(crate) fn field_id_mapping_from_json_string(
     json_string: &str,
 ) -> Result<FieldIdMapping, String> {
-    serde_json::from_str(json_string).map_err(|_| "invalid JSON string for field_ids".into())
+    serde_json::from_str(json_string).map_err(|e| format!("invalid JSON string for field_ids: {e}"))
+}
+
+fn nested_fields(field: &Field) -> Vec<&FieldRef> {
+    match field.data_type() {
+        DataType::Struct(fields) => fields.iter().collect(),
+        DataType::List(nested_field) | DataType::Map(nested_field, _) => vec![nested_field],
+        _ => vec![],
+    }
+}
+
+/// Rejects a nested field named after the `ROOT_FIELD_ID_KEY` key, whose mapping would be
+/// ambiguous: it shares its path with the id of the field it is nested in.
+fn validate_nested_field_names(field: &Field) -> Result<(), String> {
+    for nested_field in nested_fields(field) {
+        if nested_field.name() == ROOT_FIELD_ID_KEY {
+            return Err(format!(
+                "Field '{}' in the Arrow schema has a nested field named \
+                 \"{ROOT_FIELD_ID_KEY}\", which cannot be given a field id since \"field_ids\" \
+                 uses that key for the id of the field it is nested in.",
+                field.name()
+            ));
+        }
+
+        validate_nested_field_names(nested_field)?;
+    }
+
+    Ok(())
 }
 
 fn field_id_mapping_to_json_string(field_id_mapping: &FieldIdMapping) -> String {
@@ -186,6 +217,10 @@ pub(crate) fn validate_field_ids(
         FieldIds::None => Ok(()),
         FieldIds::Auto => Ok(()),
         FieldIds::Explicit(field_id_mapping) => {
+            for field in arrow_schema.fields() {
+                validate_nested_field_names(field)?;
+            }
+
             field_id_mapping.validate_against_schema(arrow_schema)
         }
     }
