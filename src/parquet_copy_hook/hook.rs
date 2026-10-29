@@ -21,7 +21,7 @@ use crate::{
 };
 
 use super::{
-    copy_from::{execute_copy_from, pop_parallel_copy_from_source, pop_parquet_reader_context},
+    copy_from::{copy_from_stack_depths, execute_copy_from, truncate_copy_from_stacks},
     copy_progress::{end_copy_progress, start_copy_to_progress},
     copy_to::execute_copy_to_with_dest_receiver,
     copy_to_split_dest_receiver::free_copy_to_parquet_split_dest_receiver,
@@ -146,13 +146,13 @@ fn process_copy_from_parquet(
 
     validate_copy_from_options(p_stmt);
 
+    // the copy state this one pushes has to be dropped if it fails, but the state of the copy
+    // it is nested in, if any, has to be left alone
+    let stack_depths = copy_from_stack_depths();
+
     PgTryBuilder::new(|| execute_copy_from(p_stmt, query_string, query_env, uri_info))
         .catch_others(|cause| {
-            // make sure to pop the parquet reader context
-            // In case we did not push the context, we should not throw an error while popping
-            let throw_error = false;
-            pop_parquet_reader_context(throw_error);
-            pop_parallel_copy_from_source();
+            truncate_copy_from_stacks(stack_depths);
 
             cause.rethrow()
         })

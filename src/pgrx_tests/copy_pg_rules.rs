@@ -74,6 +74,50 @@ mod tests {
         assert_eq!(vec!["success"; 2], result3);
     }
 
+    // a nested COPY FROM that fails must not disturb the copy it runs inside, which keeps
+    // reading its own file after the nested one is done
+    #[pg_test]
+    fn test_nested_copy_from_stmt_that_fails() {
+        Spi::run(
+            "CREATE TABLE outer_table (a int);
+             CREATE TABLE inner_table (a int);
+
+             CREATE FUNCTION copy_from_a_missing_file() RETURNS trigger AS $$
+             BEGIN
+                 BEGIN
+                     COPY inner_table FROM '/tmp/pg_parquet_test_missing.parquet';
+                 EXCEPTION WHEN others THEN
+                     INSERT INTO inner_table VALUES (NEW.a);
+                 END;
+
+                 RETURN NEW;
+             END;
+             $$ LANGUAGE plpgsql;
+
+             CREATE TRIGGER copy_from_a_missing_file BEFORE INSERT ON outer_table
+             FOR EACH ROW EXECUTE FUNCTION copy_from_a_missing_file();",
+        )
+        .unwrap();
+
+        let copy_to = format!(
+            "COPY (SELECT s as a FROM generate_series(1, 100) s) TO '{LOCAL_TEST_FILE_PATH}'"
+        );
+        Spi::run(&copy_to).unwrap();
+
+        let copy_from = format!("COPY outer_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let outer_rows = Spi::get_one::<i64>("SELECT count(*) FROM outer_table")
+            .unwrap()
+            .unwrap();
+        assert_eq!(outer_rows, 100);
+
+        let inner_rows = Spi::get_one::<i64>("SELECT count(*) FROM inner_table")
+            .unwrap()
+            .unwrap();
+        assert_eq!(inner_rows, 100);
+    }
+
     #[pg_test]
     #[should_panic(expected = "violates not-null constraint")]
     fn test_copy_not_null_table() {

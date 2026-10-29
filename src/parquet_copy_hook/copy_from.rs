@@ -73,19 +73,13 @@ pub(crate) fn peek_parquet_reader_context() -> Option<&'static mut ParquetReader
     }
 }
 
-pub(crate) fn pop_parquet_reader_context(throw_error: bool) {
+pub(crate) fn pop_parquet_reader_context() {
     #[allow(static_mut_refs)]
     let mut current_parquet_reader_context = unsafe { PARQUET_READER_CONTEXT_STACK.pop() };
 
     if current_parquet_reader_context.is_none() {
-        let level = if throw_error {
-            PgLogLevel::ERROR
-        } else {
-            PgLogLevel::DEBUG2
-        };
-
         ereport!(
-            level,
+            PgLogLevel::ERROR,
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             "parquet reader context stack is already empty"
         );
@@ -99,6 +93,33 @@ pub(crate) fn push_parquet_reader_context(reader_ctx: ParquetReaderContext) {
     unsafe {
         PARQUET_READER_CONTEXT_STACK.push(reader_ctx)
     };
+}
+
+// The stacks above are shared by nested COPY FROM commands, so a copy that fails can only
+// drop the entries it pushed itself. These depths, taken before the copy starts, say where
+// its own entries begin.
+#[derive(Clone, Copy)]
+pub(crate) struct CopyFromStackDepths {
+    parquet_reader_contexts: usize,
+    parallel_copy_from_sources: usize,
+}
+
+pub(crate) fn copy_from_stack_depths() -> CopyFromStackDepths {
+    #[allow(static_mut_refs)]
+    unsafe {
+        CopyFromStackDepths {
+            parquet_reader_contexts: PARQUET_READER_CONTEXT_STACK.len(),
+            parallel_copy_from_sources: PARALLEL_COPY_FROM_SOURCE_STACK.len(),
+        }
+    }
+}
+
+pub(crate) fn truncate_copy_from_stacks(depths: CopyFromStackDepths) {
+    #[allow(static_mut_refs)]
+    unsafe {
+        PARQUET_READER_CONTEXT_STACK.truncate(depths.parquet_reader_contexts);
+        PARALLEL_COPY_FROM_SOURCE_STACK.truncate(depths.parallel_copy_from_sources);
+    }
 }
 
 // This function is called by the COPY FROM command to read data from the parquet file
@@ -231,8 +252,7 @@ pub(crate) fn execute_copy_from(
 
             pop_parallel_copy_from_source();
         } else {
-            let throw_error = true;
-            pop_parquet_reader_context(throw_error);
+            pop_parquet_reader_context();
         }
 
         nprocessed
