@@ -1799,4 +1799,104 @@ mod tests {
         test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
         test_table.assert_expected_and_result_rows();
     }
+
+    // failing_copy is what a COPY that is expected to fail reported, caught in plpgsql so
+    // that the test can look at the message rather than failing on it
+    fn failing_copy(copy: &str) -> String {
+        Spi::run(&format!(
+            "CREATE OR REPLACE FUNCTION failing_copy() RETURNS text
+             LANGUAGE plpgsql AS $body$
+             BEGIN
+                 EXECUTE $copy${copy}$copy$;
+
+                 RETURN 'no error';
+             EXCEPTION WHEN others THEN
+                 RETURN SQLERRM;
+             END;
+             $body$;"
+        ))
+        .unwrap();
+
+        Spi::get_one::<String>("SELECT failing_copy()")
+            .unwrap()
+            .unwrap()
+    }
+
+    // the credentials that a uri can carry before its host are never used: the store is built
+    // from the scheme, the host and the port, and signs with the credentials of its
+    // environment. Such a uri is refused, and the message that refuses it names the uri
+    // without them, since that message is written into the server log too.
+    #[pg_test]
+    fn test_uri_with_credentials_is_refused_without_echoing_them() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        let secret = "s3cr3tpw";
+
+        for (uri, uri_without_credentials) in [
+            (
+                format!("s3://key:{secret}@testbucket/dummy.parquet"),
+                "s3://testbucket/dummy.parquet",
+            ),
+            (
+                format!("az://key:{secret}@testcontainer/dummy.parquet"),
+                "az://testcontainer/dummy.parquet",
+            ),
+            (
+                format!("gs://key:{secret}@testbucket/dummy.parquet"),
+                "gs://testbucket/dummy.parquet",
+            ),
+            (
+                format!("https://key:{secret}@example.com/dummy.parquet"),
+                "https://example.com/dummy.parquet",
+            ),
+            // the credentials of a uri are the whole of what precedes its host, so a uri
+            // carrying only a user name is one of them as well
+            (
+                format!("s3://{secret}@testbucket/dummy.parquet"),
+                "s3://testbucket/dummy.parquet",
+            ),
+        ] {
+            for copy in [
+                format!("COPY test_table TO '{uri}' WITH (format parquet)"),
+                format!("COPY test_table FROM '{uri}' WITH (format parquet)"),
+            ] {
+                let error = failing_copy(&copy);
+
+                assert!(
+                    error.contains(&format!(
+                        "unsupported credentials in uri {uri_without_credentials}"
+                    )),
+                    "the copy reported \"{error}\" instead"
+                );
+
+                assert!(
+                    !error.contains(secret),
+                    "the copy wrote the credentials of the uri into \"{error}\""
+                );
+            }
+        }
+    }
+
+    // an "@" is part of the name of an object rather than the end of credentials, which only
+    // precede the host of a uri
+    #[pg_test]
+    fn test_s3_uri_with_an_at_sign_in_the_name() {
+        let test_bucket_name =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let uri = format!("s3://{test_bucket_name}/pg_parquet_test_at@sign.parquet");
+
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{uri}' WITH (format parquet);
+             COPY test_table FROM '{uri}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Spi::get_one::<i64>("SELECT count(*) FROM test_table;").unwrap(),
+            Some(1)
+        );
+    }
 }
