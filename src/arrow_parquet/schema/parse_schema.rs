@@ -52,6 +52,11 @@ pub(crate) fn parquet_schema_string_from_attributes(
     String::from_utf8(buf).unwrap_or_else(|e| panic!("failed to convert schema to string: {e}"))
 }
 
+// Maximum nesting depth of the arrow schema we parse from Postgres attributes.
+// Arrow's IPC format cannot encode deeper schemas (flatbuffers refuses to parse
+// past 64 levels), and the recursive parser would overflow the stack before that.
+const MAX_NESTING_DEPTH: usize = 60;
+
 // FieldIdMappingContext is used to keep track of the current field path and field id
 // while parsing the arrow schema from Postgres attributes.
 //
@@ -82,6 +87,22 @@ impl FieldIdMappingContext {
 
     fn remove_field_name_from_path(&mut self) {
         self.current_field_path.pop();
+    }
+
+    // must be called right after the field is added to the path
+    fn check_nesting_depth(&self) {
+        if self.current_field_path.len() > MAX_NESTING_DEPTH {
+            let root_field_name = self
+                .current_field_path
+                .first()
+                .map(|field_name| field_name.as_str())
+                .unwrap_or_default();
+
+            panic!(
+                "column \"{root_field_name}\" exceeds the maximum nesting depth of \
+                 {MAX_NESTING_DEPTH}. Each composite type, array and map counts as one level."
+            );
+        }
     }
 
     fn next_field_id(&mut self) -> Option<i32> {
@@ -201,6 +222,8 @@ fn parse_struct_schema(
 
     field_id_mapping_context.add_field_name_to_path(struct_name);
 
+    field_id_mapping_context.check_nesting_depth();
+
     let struct_field_id = field_id_mapping_context.next_root_field_id();
 
     let mut child_fields = vec![];
@@ -273,6 +296,8 @@ fn parse_list_schema(
     check_for_interrupts!();
 
     field_id_mapping_context.add_field_name_to_path(array_name);
+
+    field_id_mapping_context.check_nesting_depth();
 
     let list_field_id = field_id_mapping_context.next_root_field_id();
 

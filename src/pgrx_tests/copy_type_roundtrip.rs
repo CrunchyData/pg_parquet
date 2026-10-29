@@ -1742,4 +1742,78 @@ mod tests {
         Spi::run("DROP TYPE dog_owner;").unwrap();
         Spi::run("DROP TYPE dog;").unwrap();
     }
+
+    // creates nested composite types "{prefix}1" .. "{prefix}{levels}", where each one
+    // wraps the previous one in a field named "a", and returns the outermost type name.
+    // the field is an array of the previous type when "as_array" is set.
+    fn create_nested_composite_types(prefix: &str, levels: usize, as_array: bool) -> String {
+        Spi::run(&format!("CREATE TYPE {prefix}1 AS (a int);")).unwrap();
+
+        for level in 2..=levels {
+            let inner_level = level - 1;
+            let array_suffix = if as_array { "[]" } else { "" };
+
+            Spi::run(&format!(
+                "CREATE TYPE {prefix}{level} AS (a {prefix}{inner_level}{array_suffix});"
+            ))
+            .unwrap();
+        }
+
+        format!("{prefix}{levels}")
+    }
+
+    #[pg_test]
+    fn test_max_nested_composite() {
+        let outermost_type = create_nested_composite_types("max_nested", 60, false);
+
+        Spi::run(&format!(
+            "CREATE TABLE max_nested_table (a {outermost_type});"
+        ))
+        .unwrap();
+        Spi::run("INSERT INTO max_nested_table VALUES (null);").unwrap();
+
+        let copy_to = format!(
+            "COPY max_nested_table TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet, field_ids 'auto');"
+        );
+        Spi::run(&copy_to).unwrap();
+
+        let copy_from = format!("COPY max_nested_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+
+        let total_rows = Spi::get_one::<i64>("SELECT count(*) FROM max_nested_table;").unwrap();
+        assert_eq!(total_rows, Some(2));
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "exceeds the maximum nesting depth of 60")]
+    fn test_too_deeply_nested_composite() {
+        let outermost_type = create_nested_composite_types("too_nested", 61, false);
+
+        Spi::run(&format!(
+            "CREATE TABLE too_nested_table (a {outermost_type});"
+        ))
+        .unwrap();
+
+        let copy_to =
+            format!("COPY too_nested_table TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
+        Spi::run(&copy_to).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "exceeds the maximum nesting depth of 60")]
+    fn test_too_deeply_nested_array() {
+        // each level adds a list field and the struct of its element, so fewer
+        // levels are needed than with plain composites
+        let outermost_type = create_nested_composite_types("too_nested_array", 31, true);
+
+        Spi::run(&format!(
+            "CREATE TABLE too_nested_array_table (a {outermost_type});"
+        ))
+        .unwrap();
+
+        let copy_to = format!(
+            "COPY too_nested_array_table TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to).unwrap();
+    }
 }
