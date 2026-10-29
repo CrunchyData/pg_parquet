@@ -33,6 +33,47 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "is not a parquet file at all rather than a damaged one")]
+    fn test_non_parquet_file_says_it_is_not_a_parquet_file() {
+        let parquet_filename = "/tmp/pg_parquet_test/dummy_for_the_folder.parquet";
+        let filename = "/tmp/pg_parquet_test/not_parquet.csv";
+        let _parquet_file = FileCleanup::new(parquet_filename);
+        let _file = FileCleanup::new(filename);
+
+        // the parquet copy creates the folder that the csv one then writes into
+        let copy_to_parquet =
+            format!("copy (select 1 as a) to '{parquet_filename}' with (format parquet);");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let copy_to_csv = format!("copy (select 1 as a) to '{filename}' with (format csv);");
+        Spi::run(&copy_to_csv).unwrap();
+
+        Spi::run("create table test_table(a int);").unwrap();
+
+        let copy_from_command = format!("copy test_table from '{filename}' with (format parquet);");
+        Spi::run(&copy_from_command).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "is not a parquet file at all rather than a damaged one")]
+    fn test_empty_file_says_it_is_not_a_parquet_file() {
+        let filename = "/tmp/pg_parquet_test/empty_marker.parquet";
+        let _file = FileCleanup::new(filename);
+
+        // the copy creates the folder, and the file it wrote is then emptied: a job's success
+        // marker is an empty object, which is not a parquet file either
+        let copy_to_parquet =
+            format!("copy (select 1 as a) to '{filename}' with (format parquet);");
+        Spi::run(&copy_to_parquet).unwrap();
+        std::fs::File::create(filename).unwrap();
+
+        Spi::run("create table test_table(a int);").unwrap();
+
+        let copy_from_command = format!("copy test_table from '{filename}' with (format parquet);");
+        Spi::run(&copy_from_command).unwrap();
+    }
+
+    #[pg_test]
     fn test_path_with_special_parquet_file_name() {
         let filename = "/tmp/pg_parquet_test/du**mm*y1.parquet";
         let _file = FileCleanup::new(filename);

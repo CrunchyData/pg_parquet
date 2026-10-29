@@ -41,6 +41,9 @@ use crate::{
     },
 };
 
+// the four bytes that every parquet file begins and ends with
+const PARQUET_MAGIC: &[u8] = b"PAR1";
+
 const PARQUET_OBJECT_STORE_READ_ROLE: &str = "parquet_object_store_read";
 const PARQUET_OBJECT_STORE_WRITE_ROLE: &str = "parquet_object_store_write";
 
@@ -334,6 +337,24 @@ async fn folder_hint(
     ))
 }
 
+// not_parquet_hint describes an object that the footer could not be read of because the object
+// is not a parquet file at all, rather than being a parquet file that is damaged. A pattern
+// matching everything under a folder reaches the files a job writes beside its parquet ones,
+// which is what this is usually about.
+async fn not_parquet_hint(object_reader: &ParquetObjectStoreReader) -> Option<String> {
+    if object_reader.ends_with_parquet_magic().await? {
+        return None;
+    }
+
+    Some(format!(
+        "The last bytes read of the object are not the \"{}\" marker that closes every parquet \
+         file, so what was read is not a parquet file at all rather than a damaged one. A \
+         pattern that ends in \"*.parquet\" leaves out the files a job writes beside its \
+         parquet ones, e.g. the \".crc\" and \"_committed\" files of a folder written by Spark.",
+        String::from_utf8_lossy(PARQUET_MAGIC)
+    ))
+}
+
 // parquet_reader_metadata reads the file's footer and settles which schema to read the file
 // with: the file's own schema is not always the one, since the Parquet dictionary decoder
 // cannot build a dictionary of all value types, and an INT96 column needs its resolution
@@ -342,10 +363,23 @@ async fn parquet_reader_metadata(
     object_reader: &mut ParquetObjectStoreReader,
     uri: &Url,
 ) -> ArrowReaderMetadata {
-    let reader_metadata = ArrowReaderMetadata::load_async(object_reader, ArrowReaderOptions::new())
-        .await
-        // the uri is worth naming since a pattern reads many files with one command
-        .unwrap_or_else(|e| panic!("failed to read the footer of uri {uri}: {e}"));
+    let load_result =
+        ArrowReaderMetadata::load_async(object_reader, ArrowReaderOptions::new()).await;
+
+    let reader_metadata = match load_result {
+        Ok(reader_metadata) => reader_metadata,
+        Err(e) => {
+            // the uri is worth naming since a pattern reads many files with one command
+            let mut message = format!("failed to read the footer of uri {uri}: {e}");
+
+            if let Some(hint) = not_parquet_hint(object_reader).await {
+                message.push_str(". ");
+                message.push_str(&hint);
+            }
+
+            panic!("{}", message);
+        }
+    };
 
     let schema_hint = {
         let file_schema = reader_metadata.schema();
@@ -582,6 +616,25 @@ impl ParquetObjectStoreReader {
             location,
             file_size,
         }
+    }
+
+    // ends_with_parquet_magic reports whether the object closes with the marker that every
+    // parquet file closes with, which tells an object that is not a parquet file from one that
+    // is damaged. None is a tail that could not be read at all, which tells neither.
+    async fn ends_with_parquet_magic(&self) -> Option<bool> {
+        // an object shorter than the marker cannot end in it, and the range that would be
+        // asked for reaches before the start of the object
+        let Some(tail_start) = self.file_size.checked_sub(PARQUET_MAGIC.len() as u64) else {
+            return Some(false);
+        };
+
+        let tail = self
+            .object_store
+            .get_range(&self.location, tail_start..self.file_size)
+            .await
+            .ok()?;
+
+        Some(tail == PARQUET_MAGIC)
     }
 }
 
