@@ -149,9 +149,28 @@ impl ParsedUriInfo {
 
     fn try_parse_scheme(uri: &Url) -> Result<(ObjectStoreScheme, Path), String> {
         ObjectStoreScheme::parse(uri).map_err(|_| {
-            format!(
-                "unrecognized uri {uri}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes."
-            )
+            // the parse fails either for a scheme the object store does not know or for a path
+            // it refuses, e.g. one with an empty "//" segment or with a separator escaped into
+            // a segment, and the error that tells the two apart is of a type the object store
+            // does not export. The same uri with an empty path tells them apart instead, since
+            // it keeps the scheme and the host and so fails only for the scheme.
+            let mut uri_without_path = uri.clone();
+            uri_without_path.set_path("");
+
+            if ObjectStoreScheme::parse(&uri_without_path).is_err() {
+                return format!(
+                    "unrecognized uri {uri}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes."
+                );
+            }
+
+            // the path rather than the scheme is what is wrong with the uri, which is reported
+            // as such so that the user is not sent looking for a scheme that is already there
+            match Path::from_url_path(uri.path()) {
+                Err(path_error) => format!("unsupported path in uri {uri}: {path_error}"),
+                // the path the object store refused is not the one the uri carries, as for an
+                // https uri whose bucket is the first segment of its path
+                Ok(_) => format!("unsupported path in uri {uri}"),
+            }
         })
     }
 
