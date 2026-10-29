@@ -1500,4 +1500,23 @@ mod tests {
         Spi::run("COPY test_table TO 'ftp://host/empty//segment.parquet' WITH (format parquet);")
             .unwrap();
     }
+
+    // a uri whose scheme needs a bucket and that has none, which is what a bucket name read
+    // from an empty variable leaves behind, is reported as the bucket rather than the scheme
+    #[pg_test]
+    #[should_panic(expected = "no bucket in uri s3:///nobucket.parquet")]
+    fn test_copy_to_uri_without_a_bucket_reports_the_bucket() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table TO 's3:///nobucket.parquet' WITH (format parquet);").unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "no bucket in uri az:///nocontainer.parquet")]
+    fn test_copy_from_azure_uri_without_a_container_reports_the_container() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table FROM 'az:///nocontainer.parquet' WITH (format parquet);")
+            .unwrap();
+    }
 }
