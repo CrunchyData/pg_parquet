@@ -1377,6 +1377,118 @@ mod tests {
         }
     }
 
+    // an object store holds no object of the file a copy is in the middle of writing: the
+    // bytes of it are in the writer's buffer or in an upload of its own until the file is
+    // finished, and the only object at that name is still the file a previous copy left
+    // there. A copy that fails in the middle of a file has that file to leave alone rather
+    // than to give up, since giving it up removes rows of a copy that nothing replaced.
+    #[pg_test]
+    fn test_s3_copy_to_file_size_bytes_failed_copy_keeps_what_it_did_not_write() {
+        let test_bucket_name =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let folder = format!("s3://{test_bucket_name}/parallel_copy_to/replace_failed");
+
+        // the bucket outlives the test, so a folder of an earlier run is no part of this one
+        empty_folder(&folder);
+
+        create_wide_table();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 0;").unwrap();
+
+        Spi::run(&format!(
+            "COPY wide_table TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+        ))
+        .unwrap();
+
+        let files_of_the_first_copy = folder_file_names(&folder);
+        assert!(
+            files_of_the_first_copy.len() > 1,
+            "the copy wrote a single file, so a failing copy writes over all of them"
+        );
+
+        let rows_of_the_first_copy = files_of_the_first_copy
+            .iter()
+            .map(|name| (name.clone(), file_metadata(&format!("{folder}/{name}")).0))
+            .collect::<Vec<_>>();
+
+        // fails_above is raised by the row above the given id, so a copy of the whole table
+        // fails once it is that far through its rows
+        Spi::run(
+            "CREATE OR REPLACE FUNCTION fails_above(id bigint, last bigint) RETURNS bigint
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 IF id > last THEN
+                     RAISE EXCEPTION 'no row above % of this copy', last;
+                 END IF;
+
+                 RETURN id;
+             END;
+             $$;",
+        )
+        .unwrap();
+
+        // the copy fails a row into the file it created, which is far short of the
+        // file_size_bytes that finishes one, so it has put no object of its own into the
+        // folder: the folder is the previous copy, whole
+        let failed_inside_the_first_file = failing_copy_to(&format!(
+            "COPY (SELECT fails_above(id, 1) AS id, name FROM wide_table) TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)"
+        ));
+
+        assert_eq!(failed_inside_the_first_file, "no row above 1 of this copy");
+        assert_eq!(folder_file_names(&folder), files_of_the_first_copy);
+        assert_eq!(
+            folder_rows(&folder),
+            rows_of_the_first_copy
+                .iter()
+                .map(|(_, rows)| rows)
+                .sum::<i64>()
+        );
+
+        // a copy that fails halfway has finished some of the files of the folder, and gives
+        // exactly those up. The file it was in the middle of is not one of them, so the
+        // previous copy's file of that name is left where the finished ones are gone. The
+        // whole row is copied here, so that its rows are as big as the ones of the previous
+        // copy and it finishes a file before it fails.
+        let failed_halfway = failing_copy_to(&format!(
+            "COPY (SELECT fails_above(id, {rows}) AS id, name, amount, created_at, flag, payload
+                   FROM wide_table) TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)",
+            rows = WIDE_TABLE_ROWS / 2
+        ));
+
+        assert_eq!(
+            failed_halfway,
+            format!("no row above {} of this copy", WIDE_TABLE_ROWS / 2)
+        );
+
+        let kept_files = folder_file_names(&folder);
+
+        assert!(
+            !kept_files.is_empty() && kept_files.len() < files_of_the_first_copy.len(),
+            "the failed copy left {} of the {} files of the previous copy",
+            kept_files.len(),
+            files_of_the_first_copy.len()
+        );
+
+        // the files it left are the last files of the previous copy, the ones it did not
+        // finish writing over, and they hold what that copy wrote into them
+        assert_eq!(
+            kept_files,
+            files_of_the_first_copy[files_of_the_first_copy.len() - kept_files.len()..]
+        );
+        assert_eq!(
+            folder_rows(&folder),
+            rows_of_the_first_copy
+                .iter()
+                .filter(|(name, _)| kept_files.contains(name))
+                .map(|(_, rows)| rows)
+                .sum::<i64>()
+        );
+    }
+
     #[pg_test]
     fn test_parallel_copy_to_with_options() {
         let _parallel_file = FileCleanup::new(LOCAL_TEST_FILE_PATH);

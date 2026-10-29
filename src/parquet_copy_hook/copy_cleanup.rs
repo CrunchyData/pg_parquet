@@ -61,9 +61,12 @@ pub(crate) enum UnfinishedWrite {
     // the upload object_store's writer started for a single process copy, which is given up
     // through the writer itself: the id of the upload it started is reachable nowhere else.
     WriterUpload(SingleUpload),
-    // the files a COPY TO with file_size_bytes wrote into its folder destination. The folder
-    // is the destination there rather than any file in it, so a copy that does not finish has
-    // every file it created to give up, the ones it finished writing included.
+    // the files a COPY TO with file_size_bytes finished writing into its folder destination.
+    // The folder is the destination there rather than any file in it, so a copy that does not
+    // finish has every file it wrote to give up. The file it was in the middle of is not one
+    // of them: the bytes of that one are still in the writer's buffer or in an upload of its
+    // own, both of which that file's own writer gives up, and the destination holds whatever
+    // it held before the copy started.
     FolderFiles(Arc<dyn ObjectStore>, Vec<ObjectStorePath>),
 }
 
@@ -82,7 +85,7 @@ pub(crate) fn register_unfinished_write(write: UnfinishedWrite) -> CleanupId {
 }
 
 // register_folder_file adds a file of a folder destination to what the copy gives up when it
-// does not finish. The first file registers the write, so a copy that creates no file at all
+// does not finish. The first file registers the write, so a copy that finishes no file at all
 // registers nothing and leaves nothing of the folder to give up.
 pub(crate) fn register_folder_file(
     registered: Option<CleanupId>,

@@ -180,6 +180,11 @@ impl CopyToParquetDestReceiver {
         self.total_bytes_written
     }
 
+    // destination_uri returns the uri of the file that the receiver writes
+    pub(crate) fn destination_uri(&self) -> *const c_char {
+        self.uri
+    }
+
     fn write_tuples_to_parquet(&mut self) {
         debug_assert!(!self.tupledesc.is_null());
 
