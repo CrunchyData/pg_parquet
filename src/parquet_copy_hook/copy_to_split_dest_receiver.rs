@@ -6,7 +6,7 @@ use std::{
 };
 
 use futures::StreamExt;
-use object_store::ObjectStoreExt;
+use object_store::{ObjectStoreExt, ObjectStoreScheme};
 use parquet::file::properties::DEFAULT_BLOOM_FILTER_FPP;
 use pg_sys::{AsPgCStr, CommandDest, DestReceiver, TupleDesc, TupleTableSlot};
 use pgrx::prelude::*;
@@ -172,6 +172,28 @@ pub(crate) fn folder_files_written(dest: *mut DestReceiver) -> Option<i64> {
 // number of the tuples that are collected before the written bytes are reported again
 const BYTES_PROGRESS_INTERVAL: i64 = 1024;
 
+// ChildFileMoment is when the file a child of a folder destination writes comes into
+// existence there, which is when the copy has that file to give up if it does not finish.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChildFileMoment {
+    // a local file is created, and an existing one truncated, by opening it
+    ChildStarted,
+    // an object store holds no object of the file until the child has written its footer: the
+    // bytes of it are in the writer's buffer or in an upload of its own until then, and the
+    // destination still holds whatever a previous copy left at that name
+    ChildFinished,
+}
+
+impl ChildFileMoment {
+    fn of(uri_info: &ParsedUriInfo) -> Self {
+        if uri_info.scheme == ObjectStoreScheme::Local {
+            Self::ChildStarted
+        } else {
+            Self::ChildFinished
+        }
+    }
+}
+
 #[repr(C)]
 struct CopyToParquetSplitDestReceiver {
     dest: DestReceiver,
@@ -210,7 +232,7 @@ impl CopyToParquetSplitDestReceiver {
     fn create_new_child(&mut self) {
         // create a new child receiver
         let child_uri = self.create_uri_for_child();
-        self.register_folder_file(child_uri);
+        self.register_folder_file(child_uri, ChildFileMoment::ChildStarted);
         self.current_child_receiver = create_copy_to_parquet_dest_receiver(
             child_uri,
             self.program,
@@ -268,7 +290,13 @@ impl CopyToParquetSplitDestReceiver {
         };
         self.bytes_written_by_flushed_children += child_parquet_dest.total_bytes_written();
 
+        let child_uri = child_parquet_dest.destination_uri();
+
         self.current_child_receiver = std::ptr::null_mut();
+
+        // a file of an object store destination exists now that the child has written its
+        // footer, which is where that file becomes one this copy gives up
+        self.register_folder_file(child_uri, ChildFileMoment::ChildFinished);
     }
 
     // bytes_written returns the total size of the parquet file(s) that the children wrote
@@ -325,20 +353,26 @@ impl CopyToParquetSplitDestReceiver {
         child_uri.to_str().expect("invalid uri").as_pg_cstr()
     }
 
-    // register_folder_file adds the file the new child writes to what this copy gives up when
-    // it does not finish. Only a folder destination has files to register: the single file a
-    // copy without file_size_bytes writes is the destination itself, and giving it up would be
-    // giving the destination up.
-    fn register_folder_file(&mut self, child_uri: *const c_char) {
+    // register_folder_file adds the file of a child to what this copy gives up when it does
+    // not finish, at the moment that file comes into existence in the destination. Only a
+    // folder destination has files to register: the single file a copy without file_size_bytes
+    // writes is the destination itself, and giving it up would be giving the destination up.
+    fn register_folder_file(&mut self, child_uri: *const c_char, moment: ChildFileMoment) {
         if self.options.file_size_bytes == INVALID_FILE_SIZE_BYTES {
             return;
         }
+
+        debug_assert!(!child_uri.is_null());
 
         let child_uri = unsafe { CStr::from_ptr(child_uri) }
             .to_str()
             .expect("invalid uri");
 
         let uri_info = ParsedUriInfo::try_from(child_uri).unwrap_or_else(|e| panic!("{e}"));
+
+        if moment != ChildFileMoment::of(&uri_info) {
+            return;
+        }
 
         // the store is resolved here rather than where the file is given up, which runs while
         // an error is unwinding and cannot afford to throw. It is resolved the way a read
