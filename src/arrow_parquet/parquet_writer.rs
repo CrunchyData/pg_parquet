@@ -18,7 +18,7 @@ use crate::{
         schema::parse_schema::{
             parquet_schema_string_from_attributes, parse_arrow_schema_from_attributes,
         },
-        uri_utils::parquet_writer_from_uri,
+        uri_utils::{parquet_writer_from_uri, uri_as_string},
     },
     block_on,
     object_store::object_store_error_message,
@@ -39,6 +39,9 @@ pub(crate) const DEFAULT_ROW_GROUP_SIZE_BYTES: i64 = DEFAULT_ROW_GROUP_SIZE * 10
 
 pub(crate) struct ParquetWriterContext {
     parquet_writer: AsyncArrowWriter<Box<dyn AsyncFileWriter>>,
+    // the uri the writer writes, which a copy that fails has to name: a copy with
+    // file_size_bytes writes a file of a folder rather than the uri it was given
+    uri: String,
     schema: SchemaRef,
     attribute_contexts: Vec<PgToArrowAttributeContext>,
     options: CopyToParquetOptions,
@@ -93,6 +96,7 @@ impl ParquetWriterContext {
 
         ParquetWriterContext {
             parquet_writer,
+            uri: uri_as_string(&uri_info.uri),
             schema,
             attribute_contexts,
             options,
@@ -152,11 +156,12 @@ impl ParquetWriterContext {
             self.schema.clone(),
         );
 
+        let uri = &self.uri;
         let parquet_writer = &mut self.parquet_writer;
 
         block_on(parquet_writer.write(&record_batch)).unwrap_or_else(|e| {
             panic!(
-                "failed to write record batch: {}",
+                "failed to write record batch to uri {uri}: {}",
                 object_store_error_message(e)
             )
         });
@@ -166,7 +171,7 @@ impl ParquetWriterContext {
         {
             block_on(parquet_writer.flush()).unwrap_or_else(|e| {
                 panic!(
-                    "failed to flush record batch: {}",
+                    "failed to flush record batch to uri {uri}: {}",
                     object_store_error_message(e)
                 )
             });
@@ -175,9 +180,11 @@ impl ParquetWriterContext {
 
     // finalize flushes the in progress rows to a new row group and finally writes metadata to the file.
     pub(crate) fn finalize(&mut self) {
+        let uri = &self.uri;
+
         let metadata = block_on(self.parquet_writer.finish()).unwrap_or_else(|e| {
             panic!(
-                "failed to finish parquet writer: {}",
+                "failed to finish the parquet writer of uri {uri}: {}",
                 object_store_error_message(e)
             )
         });
