@@ -311,6 +311,67 @@ mod tests {
             .sum()
     }
 
+    // folder_file_names is what a folder destination holds, as paths relative to the folder,
+    // which is how a folder on an object store is read as well as a local one. It descends
+    // into the folder, since only the direct children of it are the files of a copy.
+    fn folder_file_names(folder: &str) -> Vec<String> {
+        let uris = Spi::get_one::<String>(&format!(
+            "SELECT coalesce(string_agg(uri, ' ' ORDER BY uri), '')
+             FROM parquet.list('{folder}/**')"
+        ))
+        .unwrap()
+        .unwrap();
+
+        uris.split_whitespace()
+            .map(|uri| {
+                uri.trim_start_matches(folder)
+                    .trim_start_matches('/')
+                    .to_string()
+            })
+            .collect()
+    }
+
+    // folder_rows is the number of rows the files of a folder destination hold together,
+    // including those of an object store folder
+    fn folder_rows(folder: &str) -> i64 {
+        folder_file_names(folder)
+            .iter()
+            .map(|name| file_metadata(&format!("{folder}/{name}")).0)
+            .sum()
+    }
+
+    // failing_copy_to runs a COPY TO that is expected to fail and gives back what it
+    // reported, caught in plpgsql so that the test can go on asking what the copy left in its
+    // destination
+    fn failing_copy_to(copy: &str) -> String {
+        Spi::run(&format!(
+            "CREATE OR REPLACE FUNCTION failing_copy_to() RETURNS text
+             LANGUAGE plpgsql AS $body$
+             BEGIN
+                 EXECUTE $copy${copy}$copy$;
+
+                 RETURN 'no error';
+             EXCEPTION WHEN others THEN
+                 RETURN SQLERRM;
+             END;
+             $body$;"
+        ))
+        .unwrap();
+
+        Spi::get_one::<String>("SELECT failing_copy_to()")
+            .unwrap()
+            .unwrap()
+    }
+
+    // empty_folder removes everything a folder destination holds, which a test that writes a
+    // folder of an object store needs before it starts: the bucket is not emptied between
+    // the runs of the suite the way a local folder is
+    fn empty_folder(folder: &str) {
+        for name in folder_file_names(folder) {
+            delete_object(&format!("{folder}/{name}"));
+        }
+    }
+
     // object_store_parts is the part objects a parallel COPY TO the given object store uri
     // left behind next to it. The parts of this session's copies are what it looks for, since
     // a part is named after the pid of the backend that led the copy, and a part another
@@ -1024,6 +1085,296 @@ mod tests {
         .unwrap();
 
         assert_eq!(file_metadata(LOCAL_TEST_FILE_PATH).0, 0);
+    }
+
+    // a folder destination holds the rows of the copy that wrote it last, rather than those
+    // rows merged with the tail of an earlier and larger copy, whose files a read of the
+    // folder would otherwise count as data of the copy that did not write them
+    #[pg_test]
+    fn test_copy_to_file_size_bytes_replaces_a_previous_copy() {
+        let sequential_folder = "/tmp/pg_parquet_test_split_replace_sequential";
+        let parallel_folder = "/tmp/pg_parquet_test_split_replace_parallel";
+
+        let _sequential_folder = FileCleanup::new(sequential_folder);
+        let _parallel_folder = FileCleanup::new(parallel_folder);
+
+        create_wide_table();
+
+        let folders = [(sequential_folder, 0), (parallel_folder, 4)];
+
+        let mut files_of_the_first_copy = vec![];
+
+        for (folder, workers) in folders {
+            Spi::run(&format!(
+                "SET pg_parquet.max_parallel_workers TO {workers};"
+            ))
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY wide_table TO '{folder}'
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+            ))
+            .unwrap();
+
+            let files = split_file_names(folder);
+            assert!(
+                files.len() > 1,
+                "the copy wrote {} file(s), so a smaller copy leaves no tail behind",
+                files.len()
+            );
+
+            files_of_the_first_copy.push(files.len());
+        }
+
+        // the rows are deleted by the transaction of the test, so the second copy writes far
+        // fewer files while the relation keeps the blocks the ranges of a parallel copy claim
+        Spi::run("DELETE FROM wide_table WHERE id > 100;").unwrap();
+
+        for ((folder, workers), first_copy_files) in folders.iter().zip(files_of_the_first_copy) {
+            Spi::run(&format!(
+                "SET pg_parquet.max_parallel_workers TO {workers};"
+            ))
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY wide_table TO '{folder}'
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+            ))
+            .unwrap();
+
+            let files = split_file_names(folder);
+            assert!(
+                files.len() < first_copy_files,
+                "the second copy wrote {} of the {first_copy_files} files of the first one",
+                files.len()
+            );
+
+            // the ids of the files are the ids of the second copy alone, so nothing of the
+            // first one is left in the folder
+            let mut expected_files = (0..files.len())
+                .map(|file_id| format!("data_{file_id}.parquet"))
+                .collect::<Vec<_>>();
+            expected_files.sort();
+
+            assert_eq!(files, expected_files);
+            assert_eq!(split_folder_rows(folder), 100);
+        }
+    }
+
+    // a folder can hold files that no copy with file_size_bytes wrote, e.g. the marker a
+    // reader of the folder leaves behind or a folder of its own, and the copy that replaces
+    // the files of a previous copy is not a copy of those
+    #[pg_test]
+    fn test_copy_to_file_size_bytes_keeps_what_no_copy_wrote() {
+        let folder = "/tmp/pg_parquet_test_split_replace_keeps";
+        let _folder = FileCleanup::new(folder);
+
+        create_wide_table();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 0;").unwrap();
+
+        Spi::run(&format!(
+            "COPY wide_table TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+        ))
+        .unwrap();
+
+        assert!(
+            split_file_names(folder).len() > 1,
+            "the copy wrote a single file, so a smaller copy leaves no tail behind"
+        );
+
+        // a file whose name is not the name of a file of a copy, and one that is but is no
+        // direct child of the folder
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{folder}/kept.parquet' WITH (format parquet);
+             COPY (SELECT 1 AS a) TO '{folder}/nested/data_99.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        Spi::run("DELETE FROM wide_table WHERE id > 100;").unwrap();
+
+        Spi::run(&format!(
+            "COPY wide_table TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            folder_file_names(folder),
+            vec!["data_0.parquet", "kept.parquet", "nested/data_99.parquet"]
+        );
+    }
+
+    // the files of a previous copy are removed once the copy has written its own rather than
+    // before it starts, so a copy that fails leaves the files of the previous copy that it
+    // did not write over, rather than a folder it emptied on its way out. The files it did
+    // write over are gone with the ones it gave up, which is a folder that is neither copy:
+    // writing a folder twice is only safe for a copy that gets through its rows.
+    #[pg_test]
+    fn test_copy_to_file_size_bytes_failed_copy_keeps_what_it_did_not_write() {
+        let folder = "/tmp/pg_parquet_test_split_replace_failed";
+        let _folder = FileCleanup::new(folder);
+
+        create_wide_table();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 0;").unwrap();
+
+        Spi::run(&format!(
+            "COPY wide_table TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+        ))
+        .unwrap();
+
+        let files_of_the_first_copy = split_file_names(folder);
+        assert!(
+            files_of_the_first_copy.len() > 1,
+            "the copy wrote a single file, so a failing copy writes over all of them"
+        );
+
+        let rows_of_the_first_copy = files_of_the_first_copy
+            .iter()
+            .map(|name| (name.clone(), file_metadata(&format!("{folder}/{name}")).0))
+            .collect::<Vec<_>>();
+
+        // fails_above is raised by the row above the given id, so a copy of the whole table
+        // fails once it is that far through its rows
+        Spi::run(
+            "CREATE FUNCTION fails_above(id bigint, last bigint) RETURNS bigint
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 IF id > last THEN
+                     RAISE EXCEPTION 'no row above % of this copy', last;
+                 END IF;
+
+                 RETURN id;
+             END;
+             $$;",
+        )
+        .unwrap();
+
+        // the copy fails on its very first row, so it has created no file of its own: the
+        // folder is the previous copy, whole, which emptying it up front would have lost
+        let failed_at_the_first_row = failing_copy_to(&format!(
+            "COPY (SELECT fails_above(id, 0) AS id, name FROM wide_table) TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)"
+        ));
+
+        assert_eq!(failed_at_the_first_row, "no row above 0 of this copy");
+        assert_eq!(split_file_names(folder), files_of_the_first_copy);
+        assert_eq!(split_folder_rows(folder), WIDE_TABLE_ROWS);
+
+        // a copy that fails halfway has written some of the files of the folder, and gives
+        // exactly those up
+        let failed_halfway = failing_copy_to(&format!(
+            "COPY (SELECT fails_above(id, {rows}) AS id, name FROM wide_table) TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)",
+            rows = WIDE_TABLE_ROWS / 2
+        ));
+
+        assert_eq!(
+            failed_halfway,
+            format!("no row above {} of this copy", WIDE_TABLE_ROWS / 2)
+        );
+
+        let kept_files = split_file_names(folder);
+
+        assert!(
+            !kept_files.is_empty() && kept_files.len() < files_of_the_first_copy.len(),
+            "the failed copy left {} of the {} files of the previous copy",
+            kept_files.len(),
+            files_of_the_first_copy.len()
+        );
+
+        // the files it left are the last files of the previous copy, the ones it did not
+        // reach, and they hold what that copy wrote into them
+        assert_eq!(
+            kept_files,
+            files_of_the_first_copy[files_of_the_first_copy.len() - kept_files.len()..]
+        );
+        assert_eq!(
+            split_folder_rows(folder),
+            rows_of_the_first_copy
+                .iter()
+                .filter(|(name, _)| kept_files.contains(name))
+                .map(|(_, rows)| rows)
+                .sum::<i64>()
+        );
+    }
+
+    // a folder on an object store is a prefix rather than a directory, so the files of a
+    // previous copy are told apart from everything else under that prefix by their names
+    // alone, and are removed one request at a time rather than by emptying a directory
+    #[pg_test]
+    fn test_s3_copy_to_file_size_bytes_replaces_a_previous_copy() {
+        let test_bucket_name =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let sequential_folder =
+            format!("s3://{test_bucket_name}/parallel_copy_to/replace_sequential");
+        let parallel_folder = format!("s3://{test_bucket_name}/parallel_copy_to/replace_parallel");
+
+        // the bucket outlives the test, so a folder of an earlier run is no part of this one
+        empty_folder(&sequential_folder);
+        empty_folder(&parallel_folder);
+
+        create_wide_table();
+
+        let folders = [(&sequential_folder, 0), (&parallel_folder, 4)];
+
+        let mut files_of_the_first_copy = vec![];
+
+        for (folder, workers) in folders {
+            Spi::run(&format!(
+                "SET pg_parquet.max_parallel_workers TO {workers};"
+            ))
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY wide_table TO '{folder}'
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+            ))
+            .unwrap();
+
+            let files = folder_file_names(folder);
+            assert!(
+                files.len() > 1,
+                "the copy wrote {} file(s), so a smaller copy leaves no tail behind",
+                files.len()
+            );
+
+            files_of_the_first_copy.push(files.len());
+        }
+
+        Spi::run("DELETE FROM wide_table WHERE id > 100;").unwrap();
+
+        for ((folder, workers), first_copy_files) in folders.iter().zip(files_of_the_first_copy) {
+            Spi::run(&format!(
+                "SET pg_parquet.max_parallel_workers TO {workers};"
+            ))
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY wide_table TO '{folder}'
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+            ))
+            .unwrap();
+
+            let files = folder_file_names(folder);
+            assert!(
+                files.len() < first_copy_files,
+                "the second copy wrote {} of the {first_copy_files} files of the first one",
+                files.len()
+            );
+
+            let mut expected_files = (0..files.len())
+                .map(|file_id| format!("data_{file_id}.parquet"))
+                .collect::<Vec<_>>();
+            expected_files.sort();
+
+            assert_eq!(files, expected_files);
+            assert_eq!(folder_rows(folder), 100);
+        }
     }
 
     #[pg_test]

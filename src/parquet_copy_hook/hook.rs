@@ -24,7 +24,10 @@ use super::{
     copy_from::{copy_from_stack_depths, execute_copy_from, truncate_copy_from_stacks},
     copy_progress::{end_copy_progress, start_copy_to_progress},
     copy_to::execute_copy_to_with_dest_receiver,
-    copy_to_split_dest_receiver::free_copy_to_parquet_split_dest_receiver,
+    copy_to_split_dest_receiver::{
+        folder_files_written, free_copy_to_parquet_split_dest_receiver,
+        remove_files_of_a_previous_copy,
+    },
     copy_utils::{
         copy_to_stmt_bloom_filter, copy_to_stmt_bloom_filter_fpp, copy_to_stmt_compression,
         copy_to_stmt_dictionary, copy_to_stmt_field_ids, copy_to_stmt_file_size_bytes,
@@ -117,13 +120,21 @@ pub(crate) fn process_copy_to_parquet(
         // our dest receiver reports the progress of the COPY TO itself
         start_copy_to_progress(p_stmt);
 
-        execute_copy_to_with_dest_receiver(
+        let nprocessed = execute_copy_to_with_dest_receiver(
             p_stmt,
             query_string,
             params,
             query_env,
             &parquet_split_dest,
-        )
+        );
+
+        // the copy wrote its own files by now, so a folder destination is left holding the
+        // files of a previous and larger copy, which are no part of this copy's result
+        if let Some(files_written) = folder_files_written(parquet_split_dest.as_ptr()) {
+            remove_files_of_a_previous_copy(&uri_as_string(&uri_info.uri), files_written);
+        }
+
+        nprocessed
     })
     .catch_others(|cause| cause.rethrow())
     .finally(|| {
