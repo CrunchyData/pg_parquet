@@ -74,11 +74,16 @@ fn child_file_name(file_id: i64) -> String {
 // child_file_id is the id of a file that a copy with file_size_bytes wrote, and None for
 // anything else that the folder holds
 fn child_file_id(file_name: &str) -> Option<i64> {
-    file_name
+    let file_id = file_name
         .strip_prefix("data_")?
         .strip_suffix(".parquet")?
         .parse()
-        .ok()
+        .ok()?;
+
+    // a name that is not the one a copy gives that file is a name no copy wrote, however it
+    // parses: "data_00007.parquet" and "data_+9.parquet" are read as 7 and 9 by a parse and
+    // by nobody else
+    (child_file_name(file_id) == file_name).then_some(file_id)
 }
 
 // remove_files_of_a_previous_copy removes what a previous copy left in the folder

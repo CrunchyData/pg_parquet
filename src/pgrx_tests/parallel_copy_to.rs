@@ -1192,6 +1192,14 @@ mod tests {
         ))
         .unwrap();
 
+        // names that a parse reads as the id of a file of a copy, while the copy of that id
+        // writes neither of them
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{folder}/data_00007.parquet' WITH (format parquet);
+             COPY (SELECT 1 AS a) TO '{folder}/data_+9.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
         Spi::run("DELETE FROM wide_table WHERE id > 100;").unwrap();
 
         Spi::run(&format!(
@@ -1202,7 +1210,13 @@ mod tests {
 
         assert_eq!(
             folder_file_names(folder),
-            vec!["data_0.parquet", "kept.parquet", "nested/data_99.parquet"]
+            vec![
+                "data_+9.parquet",
+                "data_0.parquet",
+                "data_00007.parquet",
+                "kept.parquet",
+                "nested/data_99.parquet"
+            ]
         );
     }
 
