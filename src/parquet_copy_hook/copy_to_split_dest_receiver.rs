@@ -20,8 +20,8 @@ use crate::{
         parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
         uri_utils::ParsedUriInfo,
     },
+    block_on,
     object_store::{object_store_cache::get_or_create_object_store, object_store_error_message},
-    PG_BACKEND_TOKIO_RUNTIME,
 };
 
 use super::{
@@ -101,7 +101,11 @@ pub(crate) fn remove_files_of_a_previous_copy(folder: &str, files_written: i64) 
     let copy_from = true;
     let (store, folder_path) = get_or_create_object_store(&uri_info, copy_from);
 
-    let stale_files = PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+    // the listing and the removals below are waited for interruptibly, since they run while
+    // the session is still there to send a cancel: an object store that stopped answering
+    // spends a retry budget of minutes on each of them, and the copy already wrote its own
+    // files, so there is nothing here that a cancel would leave half done
+    let stale_files = block_on(async {
         let mut listing = store.list(Some(&folder_path));
 
         let mut stale_files = vec![];
@@ -141,7 +145,7 @@ pub(crate) fn remove_files_of_a_previous_copy(folder: &str, files_written: i64) 
     };
 
     for stale_file in stale_files {
-        let removal = PG_BACKEND_TOKIO_RUNTIME.block_on(store.delete(&stale_file));
+        let removal = block_on(store.delete(&stale_file));
 
         if let Err(e) = removal {
             pgrx::warning!(
