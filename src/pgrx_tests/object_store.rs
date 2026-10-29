@@ -1753,4 +1753,50 @@ mod tests {
         Spi::run("COPY test_table FROM 'az:///nocontainer.parquet' WITH (format parquet);")
             .unwrap();
     }
+
+    // a uri is parsed as the url standard asks it to be parsed, which removes the tab from
+    // "s3://testbucket/cl<tab>ash.parquet" and leaves it naming "s3://testbucket/clash.parquet",
+    // an object of someone else's. Such a uri is refused rather than copied, and the refusal
+    // names the object the copy would have written.
+    #[pg_test]
+    #[should_panic(expected = "unsupported whitespace in uri s3://testbucket/clash.parquet")]
+    fn test_copy_to_uri_with_a_tab_is_refused() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table TO 's3://testbucket/cl\tash.parquet' WITH (format parquet);")
+            .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "unsupported whitespace in uri s3://testbucket/newline.parquet")]
+    fn test_copy_from_uri_with_a_newline_is_refused() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table FROM 's3://testbucket/new\nline.parquet' WITH (format parquet);")
+            .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "unsupported whitespace in uri s3://testbucket/around.parquet")]
+    fn test_copy_to_uri_with_whitespace_around_it_is_refused() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table TO '  s3://testbucket/around.parquet  ' WITH (format parquet);")
+            .unwrap();
+    }
+
+    // a space inside the path is no whitespace the url standard removes, so a name holding one
+    // is written and read as it is
+    #[pg_test]
+    fn test_s3_uri_with_a_space_in_the_name() {
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test with a space.parquet");
+
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(s3_uri);
+
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
 }
