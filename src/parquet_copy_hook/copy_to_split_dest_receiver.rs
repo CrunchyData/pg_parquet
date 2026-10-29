@@ -470,7 +470,8 @@ extern "C-unwind" fn copy_split_startup(
     // a copy that writes a single file creates it up front, since that file is the
     // destination itself and is written even when the copy finds no row. A copy that cuts its
     // rows into the files of a folder creates a file on the first row that goes into it, so
-    // that it leaves no empty file behind.
+    // that it leaves no empty file behind in the middle of the folder; a copy that finds no
+    // row at all writes one at shutdown instead.
     if split_parquet_dest.options.file_size_bytes == INVALID_FILE_SIZE_BYTES {
         split_parquet_dest.create_new_child();
     } else {
@@ -524,6 +525,18 @@ extern "C-unwind" fn copy_split_shutdown(dest: *mut DestReceiver) {
             .as_mut()
             .expect("invalid split parquet dest receiver ptr")
     };
+
+    // a copy that found no row at all still writes one file holding nothing but the schema, so
+    // that a folder destination exists for a reader the way the single file of a copy without
+    // file_size_bytes does. Without it the folder is left with no file of this copy in it,
+    // which a COPY FROM of the folder finds nothing to read rather than no row to read, and
+    // which the removal of a previous copy's files then empties the folder of. A participant
+    // of a parallel copy writes nothing here, since a range that found no row is no reason for
+    // a file while another range is writing them; the leader of such a copy is the one that
+    // knows no range wrote anything.
+    if split_parquet_dest.current_child_id == 0 && !file_id_claim_installed() {
+        split_parquet_dest.create_new_child();
+    }
 
     split_parquet_dest.flush_child();
 

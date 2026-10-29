@@ -755,6 +755,18 @@ fn run_parallel_copy_to(
         // nothing is spliced here either: the files of the folder are complete as the ranges
         // wrote them, so the rows the participants reported copying are the whole result
         ParallelCopyToDestination::SplitFiles(folder) => {
+            // no range found a row, so the folder holds no file of this copy and a reader of
+            // it would find nothing rather than no row. One file of nothing but the schema is
+            // written here, the way a single process copy into a folder writes it, by copying
+            // a range that lies past the last block of the relation and holds nothing.
+            let files_written = if files_written == 0 {
+                copy_empty_range(statement, nranges, pages_per_range, folder);
+
+                1
+            } else {
+                files_written
+            };
+
             // the folder is left holding the files of a previous and larger copy, which are
             // no part of this copy's result
             remove_files_of_a_previous_copy(folder, files_written);
@@ -997,6 +1009,22 @@ fn copy_claimed_ranges(shared: *mut ParallelCopyToShared, upload: Option<&Shared
             uninstall_shared_upload();
         }
     }
+}
+
+// copy_empty_range copies a range that starts past the last block the ranges of the copy
+// covered, so that it finds no tuple at all, into the given folder. The copy writes the one
+// file that a folder destination is left holding when no range of a parallel copy found a
+// row, which holds the schema of the table and no row group of its own. It takes the single
+// process path like the copy of any other range, since its statement is a COPY of a query.
+fn copy_empty_range(statement: &str, nranges: u32, pages_per_range: u32, folder: &str) {
+    let past_the_end = nranges.saturating_mul(pages_per_range).to_string();
+
+    let range_statement = statement
+        .replace(FIRST_BLOCK_PLACEHOLDER, &past_the_end)
+        .replace(LAST_BLOCK_PLACEHOLDER, &past_the_end)
+        .replace(PART_URI_PLACEHOLDER, &quote_literal(folder));
+
+    execute_copy_to_statement(&range_statement);
 }
 
 // the report of a participant of a shared upload, as it travels over the queue:

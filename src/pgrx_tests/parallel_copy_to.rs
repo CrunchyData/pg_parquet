@@ -1044,7 +1044,9 @@ mod tests {
     }
 
     // a range that finds no row of its own writes no file, so a folder destination never holds
-    // a file of no rows. The rows of the table are deleted by the transaction of the test, so
+    // a file of no rows next to the files that hold rows. A copy whose every range found no
+    // row writes one such file, since a folder of no files at all is a destination a reader
+    // finds nothing of. The rows of the table are deleted by the transaction of the test, so
     // the blocks that held them are still there for the ranges to claim while no range finds a
     // row it can see.
     #[pg_test]
@@ -1074,8 +1076,19 @@ mod tests {
         ))
         .unwrap();
 
-        assert_eq!(split_file_names(sequential_folder), Vec::<String>::new());
-        assert_eq!(split_file_names(parallel_folder), Vec::<String>::new());
+        // the one file of the folder holds the schema of the table and no row, so a read of
+        // the folder gives no row rather than failing to find a file to read
+        for folder in [sequential_folder, parallel_folder] {
+            assert_eq!(split_file_names(folder), vec!["data_0.parquet"]);
+            assert_eq!(split_folder_rows(folder), 0);
+
+            Spi::run(&format!(
+                "CREATE TEMP TABLE read_back (LIKE wide_table);
+                 COPY read_back FROM '{folder}/*.parquet' WITH (format parquet);
+                 DROP TABLE read_back;"
+            ))
+            .unwrap();
+        }
 
         // a copy that writes a single file still writes it, since that file is the destination
         // the command names rather than a file one of its ranges needed
@@ -1085,6 +1098,57 @@ mod tests {
         .unwrap();
 
         assert_eq!(file_metadata(LOCAL_TEST_FILE_PATH).0, 0);
+    }
+
+    // a copy that finds no row replaces a folder an earlier copy filled with the one file of
+    // no rows, rather than emptying the folder of every file and leaving none of its own: a
+    // folder that holds nothing is a destination that a read of it finds no file to read.
+    #[pg_test]
+    fn test_copy_to_file_size_bytes_no_row_replaces_a_previous_copy() {
+        let sequential_folder = "/tmp/pg_parquet_test_split_no_row_sequential";
+        let parallel_folder = "/tmp/pg_parquet_test_split_no_row_parallel";
+
+        let _sequential_folder = FileCleanup::new(sequential_folder);
+        let _parallel_folder = FileCleanup::new(parallel_folder);
+
+        create_wide_table();
+
+        let folders = [(sequential_folder, 0), (parallel_folder, 4)];
+
+        for (folder, workers) in folders {
+            Spi::run(&format!(
+                "SET pg_parquet.max_parallel_workers TO {workers};"
+            ))
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY wide_table TO '{folder}'
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+            ))
+            .unwrap();
+
+            assert!(split_file_names(folder).len() > 1);
+        }
+
+        // the rows are deleted by the transaction of the test, so the blocks that held them
+        // are still there for the ranges of a parallel copy to claim
+        Spi::run("DELETE FROM wide_table;").unwrap();
+
+        for (folder, workers) in folders {
+            Spi::run(&format!(
+                "SET pg_parquet.max_parallel_workers TO {workers};"
+            ))
+            .unwrap();
+
+            Spi::run(&format!(
+                "COPY wide_table TO '{folder}'
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+            ))
+            .unwrap();
+
+            assert_eq!(split_file_names(folder), vec!["data_0.parquet"]);
+            assert_eq!(split_folder_rows(folder), 0);
+        }
     }
 
     // a folder destination holds the rows of the copy that wrote it last, rather than those
