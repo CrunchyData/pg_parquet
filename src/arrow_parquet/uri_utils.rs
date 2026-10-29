@@ -287,7 +287,12 @@ fn open_parquet_file(
                     object_store_error_message(e)
                 );
 
-                if let Some(hint) = folder_hint(&parquet_object_store, &location, uri_info).await {
+                let hint = match pattern_hint(uri_info) {
+                    Some(hint) => Some(hint),
+                    None => folder_hint(&parquet_object_store, &location, uri_info).await,
+                };
+
+                if let Some(hint) = hint {
                     message.push_str(". ");
                     message.push_str(&hint);
                 }
@@ -307,6 +312,27 @@ fn open_parquet_file(
 
         Ok((object_reader, reader_metadata, batch_size))
     })
+}
+
+// pattern_hint describes a uri that names no object because it is a pattern. A COPY FROM and
+// parquet.list resolve the "*" and "**" of one, so a pattern is what a user who listed a folder
+// has at hand, while a read of a single file, which is what parquet.schema and the metadata
+// functions are, asks the store for the name it was given: the stars are sent as the key, and
+// the store reports it as an object that is simply missing, percent escaped at that. An object
+// whose own name holds a "*" is read before this is reached, since the uri is read as it is
+// written first.
+fn pattern_hint(uri_info: &ParsedUriInfo) -> Option<String> {
+    if !uri_info.path.as_ref().contains('*') {
+        return None;
+    }
+
+    let uri = uri_as_string(&uri_info.uri);
+
+    Some(format!(
+        "\"{uri}\" holds a \"*\", which a read of a single file does not resolve into the names \
+         it matches. Name one of the files instead, e.g. one of those that \
+         parquet.list('{uri}') lists."
+    ))
 }
 
 // folder_hint describes a uri that holds no object of its own while objects are stored under

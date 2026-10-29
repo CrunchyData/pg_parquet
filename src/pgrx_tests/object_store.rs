@@ -126,6 +126,67 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(
+        expected = "holds a \"*\", which a read of a single file does not resolve into the names it matches"
+    )]
+    fn test_schema_of_an_s3_uri_pattern_names_the_pattern() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri_pattern = format!("s3://{test_bucket_name}/test_schema_of_a_pattern/**");
+
+        Spi::run(&format!(
+            "SELECT * FROM parquet.schema('{s3_uri_pattern}');"
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(
+        expected = "holds a \"*\", which a read of a single file does not resolve into the names it matches"
+    )]
+    fn test_file_metadata_of_an_s3_uri_pattern_names_the_pattern() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri_pattern =
+            format!("s3://{test_bucket_name}/test_file_metadata_of_a_pattern/*.parquet");
+
+        Spi::run(&format!(
+            "SELECT * FROM parquet.file_metadata('{s3_uri_pattern}');"
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    fn test_schema_of_an_s3_object_named_with_a_star() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        // the name of this object holds the characters a pattern is written with, and the read
+        // of the uri as it is written comes first, so it is the object that is read
+        let s3_uri = format!("s3://{test_bucket_name}/test_schema_of_a_star_name/*.parquet");
+
+        Spi::run(&format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{s3_uri}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let columns = Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM parquet.schema('{s3_uri}') WHERE name = 'a';"
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(columns, 1);
+    }
+
+    #[pg_test]
     #[should_panic(expected = "no files found that match the pattern")]
     fn test_s3_with_nonexistent_pattern_uri() {
         object_store_cache_clear();
