@@ -8,7 +8,7 @@ use std::{
 
 use object_store::{
     multipart::MultipartStore, path::Path as ObjectStorePath, Error as ObjectStoreError,
-    MultipartId,
+    MultipartId, ObjectStore, ObjectStoreExt,
 };
 use pgrx::{ereport, pg_sys, PgLogLevel, PgSqlErrorCode};
 
@@ -20,10 +20,11 @@ use crate::{
 // what a part of a parallel COPY TO is named after its prefix with, see part_uri
 pub(crate) const PART_URI_INFIX: &str = ".pgpq-part-";
 
-// how long the object store has to abort the upload of a finished or interrupted copy. The
-// abort also runs while the backend is exiting, where holding the exit up is worse than
-// leaving an unfinished upload behind for the bucket's own expiration to collect.
-const UPLOAD_ABORT_TIMEOUT: Duration = Duration::from_secs(5);
+// how long the object store has to give up what a finished or interrupted copy wrote, which
+// is aborting an upload or removing the files of a folder destination. The cleanup also runs
+// while the backend is exiting, where holding the exit up is worse than leaving what the copy
+// wrote behind for the bucket's own expiration to collect.
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 // the writes of the copies running in this backend that are not finished yet. A copy the
 // backend exits in the middle of dies with a FATAL, which unwinds none of the copy's own
@@ -60,6 +61,10 @@ pub(crate) enum UnfinishedWrite {
     // the upload object_store's writer started for a single process copy, which is given up
     // through the writer itself: the id of the upload it started is reachable nowhere else.
     WriterUpload(SingleUpload),
+    // the files a COPY TO with file_size_bytes wrote into its folder destination. The folder
+    // is the destination there rather than any file in it, so a copy that does not finish has
+    // every file it created to give up, the ones it finished writing included.
+    FolderFiles(Arc<dyn ObjectStore>, Vec<ObjectStorePath>),
 }
 
 pub(crate) fn register_unfinished_write(write: UnfinishedWrite) -> CleanupId {
@@ -72,6 +77,31 @@ pub(crate) fn register_unfinished_write(write: UnfinishedWrite) -> CleanupId {
     let id = CleanupId(NEXT_CLEANUP_ID.replace(NEXT_CLEANUP_ID.get() + 1));
 
     UNFINISHED_WRITES.with_borrow_mut(|unfinished| unfinished.push(RegisteredWrite { id, write }));
+
+    id
+}
+
+// register_folder_file adds a file of a folder destination to what the copy gives up when it
+// does not finish. The first file registers the write, so a copy that creates no file at all
+// registers nothing and leaves nothing of the folder to give up.
+pub(crate) fn register_folder_file(
+    registered: Option<CleanupId>,
+    store: Arc<dyn ObjectStore>,
+    path: ObjectStorePath,
+) -> CleanupId {
+    let Some(id) = registered else {
+        return register_unfinished_write(UnfinishedWrite::FolderFiles(store, vec![path]));
+    };
+
+    UNFINISHED_WRITES.with_borrow_mut(|unfinished| {
+        if let Some(UnfinishedWrite::FolderFiles(_, paths)) = unfinished
+            .iter_mut()
+            .find(|write| write.id == id)
+            .map(|write| &mut write.write)
+        {
+            paths.push(path);
+        }
+    });
 
     id
 }
@@ -125,6 +155,58 @@ fn give_up_write(write: &UnfinishedWrite, report_failures: bool) {
             abort_upload(store, path, upload_id, report_failures)
         }
         UnfinishedWrite::WriterUpload(upload) => abort_writer_upload(upload, report_failures),
+        UnfinishedWrite::FolderFiles(store, paths) => {
+            remove_folder_files(store, paths, report_failures)
+        }
+    }
+}
+
+// remove_folder_files removes the files the copy wrote into its folder destination. It throws
+// nothing: it runs while an error is unwinding as well.
+fn remove_folder_files(
+    store: &Arc<dyn ObjectStore>,
+    paths: &[ObjectStorePath],
+    report_failures: bool,
+) {
+    // the sweep is given one deadline for the whole folder, rather than one per file, so that
+    // an object store that stopped answering cannot hold a backend that is exiting up once
+    // per file the copy wrote
+    let swept = PG_BACKEND_TOKIO_RUNTIME.block_on(async {
+        tokio::time::timeout(CLEANUP_TIMEOUT, async {
+            let mut failure = None;
+
+            for path in paths {
+                match store.delete(path).await {
+                    // a file that is already gone is not a file that was left behind
+                    Ok(()) | Err(ObjectStoreError::NotFound { .. }) => {}
+                    Err(error) => {
+                        failure = failure.or_else(|| {
+                            Some(format!("\"{path}\": {}", object_store_error_message(error)))
+                        });
+                    }
+                }
+            }
+
+            failure
+        })
+        .await
+    });
+
+    let failure = match swept {
+        Err(_) => Some(format!(
+            "they were not removed within {} seconds",
+            CLEANUP_TIMEOUT.as_secs()
+        )),
+        Ok(failure) => failure,
+    };
+
+    if let (true, Some(failure)) = (report_failures, failure) {
+        ereport!(
+            PgLogLevel::WARNING,
+            PgSqlErrorCode::ERRCODE_WARNING,
+            format!("failed to remove the files of the COPY TO: {failure}"),
+            "The files the copy wrote are left in the folder it was writing.".to_string()
+        );
     }
 }
 
@@ -139,7 +221,7 @@ pub(crate) fn abort_upload(
     // the abort is given a deadline, since an object store that stopped answering must not
     // hold a backend that is exiting up
     let result = PG_BACKEND_TOKIO_RUNTIME.block_on(async {
-        tokio::time::timeout(UPLOAD_ABORT_TIMEOUT, store.abort_multipart(path, upload_id)).await
+        tokio::time::timeout(CLEANUP_TIMEOUT, store.abort_multipart(path, upload_id)).await
     });
 
     if report_failures {
@@ -153,7 +235,7 @@ pub(crate) fn abort_upload(
 // error is unwinding as well.
 fn abort_writer_upload(upload: &SingleUpload, report_failures: bool) {
     let result = PG_BACKEND_TOKIO_RUNTIME
-        .block_on(async { tokio::time::timeout(UPLOAD_ABORT_TIMEOUT, upload.abort()).await });
+        .block_on(async { tokio::time::timeout(CLEANUP_TIMEOUT, upload.abort()).await });
 
     if report_failures {
         report_abort_failure(upload.destination(), result);
@@ -170,7 +252,7 @@ fn report_abort_failure(
     let failure = match result {
         Err(_) => Some(format!(
             "it was not aborted within {} seconds",
-            UPLOAD_ABORT_TIMEOUT.as_secs()
+            CLEANUP_TIMEOUT.as_secs()
         )),
         Ok(Ok(())) | Ok(Err(ObjectStoreError::NotFound { .. })) => None,
         Ok(Err(error)) => Some(object_store_error_message(error)),

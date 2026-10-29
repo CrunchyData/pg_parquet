@@ -525,9 +525,9 @@ fn unfinished_write(
         ParallelCopyToDestination::LocalFile(_) => {
             Some(UnfinishedWrite::PartFiles(part_prefix.to_string()))
         }
-        // a folder destination has nothing of its own to give up: every file in it is opened
-        // and finished by the writer of the range that fills it, which gives its own write up
-        // the way the writer of a single process copy does
+        // a folder destination has nothing of its own to give up here: the files in it are
+        // created by the split dest receiver of the participant that writes them, which
+        // registers and gives them up itself, the way a single process copy does
         ParallelCopyToDestination::SplitFiles(_) => None,
         ParallelCopyToDestination::SharedUpload(destination) => {
             Some(UnfinishedWrite::SharedUpload(
