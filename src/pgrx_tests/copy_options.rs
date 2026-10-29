@@ -706,6 +706,20 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "invalid JSON string for field_ids: data did not match any variant")]
+    fn test_out_of_range_id_in_field_ids() {
+        let setup_commands = "create table test_table(a int);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": 2147483648}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
     #[should_panic(expected = "duplicate field id 14 in \"field_ids\"")]
     fn test_duplicate_id_in_field_ids() {
         let setup_commands = "create table test_table(a int, b text);";
@@ -1340,6 +1354,40 @@ mod tests {
         let copy_to_parquet = format!(
             "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
         );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "has a nested field named \"__root_field_id\"")]
+    fn test_explicit_field_ids_with_root_field_id_as_a_nested_field_name() {
+        let setup_commands = "create type root_id as (\"__root_field_id\" int, b int);
+                              create table test_table(a root_id);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": {\"__root_field_id\": 10, \"b\": 20}}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    // the key is only ambiguous for a nested field, so a top level column of that name,
+    // and any column of that name under auto field ids, must keep working
+    #[pg_test]
+    fn test_field_ids_with_root_field_id_as_a_column_name() {
+        let setup_commands = "create type root_id as (\"__root_field_id\" int, b int);
+                              create table test_table(\"__root_field_id\" int, b root_id);";
+        Spi::run(setup_commands).unwrap();
+
+        let copy_to_parquet = format!(
+            "copy (select \"__root_field_id\" from test_table) to '{LOCAL_TEST_FILE_PATH}' \
+             with (field_ids '{{\"__root_field_id\": 10}}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids 'auto');");
         Spi::run(&copy_to_parquet).unwrap();
     }
 

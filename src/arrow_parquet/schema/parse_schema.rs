@@ -20,7 +20,7 @@ use pg_sys::{
 use pgrx::{check_for_interrupts, prelude::*, PgTupleDesc};
 
 use crate::{
-    arrow_parquet::field_ids::FieldIds,
+    arrow_parquet::field_ids::{FieldIds, ROOT_FIELD_ID_KEY},
     pgrx_utils::{
         array_element_typoid, collect_attributes_for, domain_array_base_elem_type, is_array_type,
         is_composite_type, tuple_desc, CollectAttributesFor,
@@ -110,7 +110,7 @@ impl FieldIdMappingContext {
     }
 
     fn next_root_field_id(&mut self) -> Option<i32> {
-        self.add_field_name_to_path("__root_field_id");
+        self.add_field_name_to_path(ROOT_FIELD_ID_KEY);
 
         let root_field_id = self.next_field_id();
 
