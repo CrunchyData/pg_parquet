@@ -1677,7 +1677,9 @@ mod tests {
     // it falls back to the single process path. The write then fails the way the single
     // process path fails it, because nothing answers the uri.
     #[pg_test]
-    #[should_panic(expected = "failed to finish parquet writer")]
+    #[should_panic(
+        expected = "failed to finish the parquet writer of uri http://localhost:1/pg_parquet_test.parquet"
+    )]
     fn test_parallel_copy_to_http_destination() {
         create_wide_table();
 
@@ -1686,6 +1688,22 @@ mod tests {
         Spi::run(
             "COPY wide_table TO 'http://localhost:1/pg_parquet_test.parquet'
                   WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
+    // a copy with file_size_bytes writes the files of a folder rather than the uri it was
+    // given, so the error of a write names the file of the folder it could not write
+    #[pg_test]
+    #[should_panic(expected = "uri http://localhost:1/pg_parquet_test_folder/data_0.parquet")]
+    fn test_copy_to_file_size_bytes_write_error_names_the_file() {
+        create_wide_table();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 0;").unwrap();
+
+        Spi::run(
+            "COPY wide_table TO 'http://localhost:1/pg_parquet_test_folder'
+             WITH (format parquet, file_size_bytes '1MB');",
         )
         .unwrap();
     }
