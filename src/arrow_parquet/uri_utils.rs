@@ -155,6 +155,33 @@ impl ParsedUriInfo {
         })
     }
 
+    // the host of an s3, azure or gcs uri is the bucket or the container that holds the object
+    // rather than an endpoint, so a port written after it is read by nothing: the endpoint
+    // comes from the environment, and the copy goes to the store configured there rather than
+    // to the one at the port. A uri carrying a port is refused instead, so that a copy whose
+    // uri appears to say where it goes does not go somewhere else. An http(s) uri keeps its
+    // port, since there the host is the endpoint and the port is part of it.
+    fn try_reject_port(scheme: &ObjectStoreScheme, uri: &Url) -> Result<(), String> {
+        let Some(port) = uri.port() else {
+            return Ok(());
+        };
+
+        let endpoint_setting = match scheme {
+            ObjectStoreScheme::AmazonS3 => "the AWS_ENDPOINT_URL environment variable",
+            ObjectStoreScheme::MicrosoftAzure => "the AZURE_STORAGE_ENDPOINT environment variable",
+            ObjectStoreScheme::GoogleCloudStorage => {
+                "the \"gcs_base_url\" of the service account key"
+            }
+            _ => return Ok(()),
+        };
+
+        Err(format!(
+            "unsupported port {port} in uri {uri}. The host of this uri is the bucket or the \
+             container that holds the object rather than an endpoint, so the port is read by \
+             nothing: set the endpoint with {endpoint_setting} and write the uri without a port."
+        ))
+    }
+
     fn try_parse_bucket(scheme: &ObjectStoreScheme, uri: &Url) -> Result<Option<String>, String> {
         match scheme {
             ObjectStoreScheme::AmazonS3 => parse_s3_bucket(uri)
@@ -183,6 +210,8 @@ impl TryFrom<&str> for ParsedUriInfo {
         let uri = Self::try_parse_uri(uri)?;
 
         let (scheme, path) = Self::try_parse_scheme(&uri)?;
+
+        Self::try_reject_port(&scheme, &uri)?;
 
         let bucket = Self::try_parse_bucket(&scheme, &uri)?;
 

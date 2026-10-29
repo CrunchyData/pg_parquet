@@ -326,7 +326,7 @@ The byte counters mean different things for the two directions:
 - For `COPY FROM`, `bytes_processed` and `bytes_total` count the bytes of the uncompressed binary stream that `pg_parquet` feeds to Postgres, which is unrelated to the size of the Parquet file. `bytes_total` is extrapolated from the rows that are read so far, so it is an estimation until the last row of the file is read. The estimation is corrected after every record batch, hence it can move in both directions when the rows of the file differ in size.
 
 ## Object Store Support
-`pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage`, `http(s)` and `Google Cloud Storage` object stores.
+`pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage`, `http(s)` and `Google Cloud Storage` object stores. The host of an `s3://`, `az://` or `gs://` uri is the bucket or the container that holds the object rather than an endpoint, so such a uri is written without a port and the endpoint is configured per store below. Only an `http(s)://` uri names its endpoint, and keeps the port of it.
 
 > [!NOTE]
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
