@@ -32,6 +32,11 @@ use crate::{
 
 use self::field_ids::FieldIds;
 
+// A bloom filter is sized from the false positive probability it is asked for, and below this
+// one even a single value needs more than the 128MiB that parquet allows a filter per column,
+// so the filter written would be less precise than the one asked for.
+const MIN_BLOOM_FILTER_FPP: f64 = 1e-62;
+
 use super::{
     copy_to_split_dest_receiver::INVALID_FILE_SIZE_BYTES, hook::ENABLE_PARQUET_COPY_HOOK,
     pg_compat::strVal,
@@ -197,6 +202,13 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
 
         if bloom_filter_fpp <= 0. || bloom_filter_fpp >= 1. {
             panic!("bloom_filter_fpp must be greater than 0 and less than 1");
+        }
+
+        if bloom_filter_fpp < MIN_BLOOM_FILTER_FPP {
+            panic!(
+                "bloom_filter_fpp must be greater than or equal to {MIN_BLOOM_FILTER_FPP:e}, \
+                 below which a bloom filter does not fit the size limit of a column"
+            );
         }
     }
 }

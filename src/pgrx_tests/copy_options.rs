@@ -1565,6 +1565,17 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "bloom_filter_fpp must be greater than or equal to 1e-62")]
+    fn test_too_small_bloom_filter_fpp() {
+        create_test_table();
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (bloom_filter 'all', bloom_filter_fpp 1e-70);"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    #[pg_test]
     #[should_panic(expected = "invalid value for \"bloom_filter\"")]
     fn test_invalid_bloom_filter() {
         create_test_table();
