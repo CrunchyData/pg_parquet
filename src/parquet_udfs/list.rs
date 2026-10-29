@@ -42,46 +42,43 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
         .take_while(|part| !part.as_ref().contains('*'))
         .collect();
 
-    // Collect all paths from the list stream
+    // Collect the paths that match the pattern from the list stream. Only the matches are
+    // kept, rather than the whole listing: the prefix the pattern is listed under is a
+    // directory of its own in a bucket that has one, and the whole of a bucket in a pattern
+    // that names no directory at all, which is a listing of millions of objects a pattern
+    // matching one of them has no use for.
     let mut list_stream = parquet_object_store.list(Some(&prefix));
 
-    let mut paths = vec![];
+    let mut matched_uris = vec![];
 
     block_on(async {
         while let Some(meta) = list_stream.next().await.transpose().unwrap_or_else(|e| {
             panic!("{}", e);
         }) {
-            let path = meta.location.to_string();
-            let size = meta.size as _;
+            let path = std::path::Path::new(meta.location.as_ref());
 
-            paths.push((path, size));
-        }
-    });
-
-    // Filter out uris that don't match the pattern
-    let matched_uris = paths
-        .into_iter()
-        .filter(|(path, _)| {
-            pattern.matches_path_with(
-                std::path::Path::new(path),
+            let matches = pattern.matches_path_with(
+                path,
                 MatchOptions {
                     case_sensitive: true,
                     require_literal_separator: true,
                     require_literal_leading_dot: false,
                 },
-            )
-        })
-        .map(|(path, size)| {
-            (
-                std::path::Path::new(&base_uri)
-                    .join(path)
-                    .to_str()
-                    .expect("invalid list uri path")
-                    .to_string(),
-                size,
-            )
-        })
-        .collect::<Vec<_>>();
+            );
+
+            if !matches {
+                continue;
+            }
+
+            let uri = std::path::Path::new(&base_uri)
+                .join(path)
+                .to_str()
+                .expect("invalid list uri path")
+                .to_string();
+
+            matched_uris.push((uri, meta.size as i64));
+        }
+    });
 
     // a parallel COPY TO writes a part file per range next to its local destination, and the
     // parts of a copy whose backend did not survive it are left there. They hold the rows the
