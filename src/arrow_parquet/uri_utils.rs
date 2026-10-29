@@ -299,7 +299,7 @@ fn open_parquet_file(
         let mut object_reader =
             ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
 
-        let reader_metadata = parquet_reader_metadata(&mut object_reader).await;
+        let reader_metadata = parquet_reader_metadata(&mut object_reader, &uri_info.uri).await;
 
         pgrx::debug2!("Converted arrow schema is: {}", reader_metadata.schema());
 
@@ -340,10 +340,12 @@ async fn folder_hint(
 // hinted.
 async fn parquet_reader_metadata(
     object_reader: &mut ParquetObjectStoreReader,
+    uri: &Url,
 ) -> ArrowReaderMetadata {
     let reader_metadata = ArrowReaderMetadata::load_async(object_reader, ArrowReaderOptions::new())
         .await
-        .unwrap_or_else(|e| panic!("{}", e));
+        // the uri is worth naming since a pattern reads many files with one command
+        .unwrap_or_else(|e| panic!("failed to read the footer of uri {uri}: {e}"));
 
     let schema_hint = {
         let file_schema = reader_metadata.schema();
