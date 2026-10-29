@@ -100,6 +100,13 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
         if copy_stmt_program(p_stmt).is_some() {
             panic!("file_size_bytes is not supported for COPY TO PROGRAM.");
         }
+    } else {
+        // a copy without file_size_bytes writes the single object its uri names, so the uri
+        // has to name one. The destination of a folder copy is the folder rather than an
+        // object in it, and the whole of a store is a folder a copy can fill.
+        uri_info
+            .ensure_names_an_object()
+            .unwrap_or_else(|e| panic!("{}", e));
     }
 
     let field_ids_option = copy_stmt_get_option(p_stmt, "field_ids");
