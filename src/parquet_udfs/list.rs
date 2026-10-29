@@ -157,6 +157,19 @@ impl TryFrom<&ParsedUriInfo> for Pattern {
             return Err("list operation on http(s) object stores is not supported".into());
         }
 
-        Self::new(uri_info.path.as_ref()).map_err(|e| e.to_string())
+        // "*" and "**" are the pattern syntax of a uri, so the characters the glob crate takes
+        // as syntax of its own, a "?" and the "[" and "]" of a class, are escaped into the
+        // literals they are. An object whose name holds one of them is then matched as the
+        // name it is: a pattern like "[a]*.parquet" reads the object named "[a].parquet"
+        // rather than the "a.parquet" next to it, which a class of a single character matched.
+        let pattern = uri_info
+            .path
+            .as_ref()
+            .split('*')
+            .map(Self::escape)
+            .collect::<Vec<_>>()
+            .join("*");
+
+        Self::new(&pattern).map_err(|e| e.to_string())
     }
 }
