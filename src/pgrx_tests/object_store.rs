@@ -125,6 +125,68 @@ mod tests {
         assert_eq!(result, 10);
     }
 
+    // the file whose schema does not match is named, since a pattern reads a file per reader
+    // and the uri of the command is not the file any one of them failed on
+    #[pg_test]
+    #[should_panic(
+        expected = "but table has 2 columns. The file is \"s3://testbucket/test_s3_pattern_schema_mismatch/two.parquet\""
+    )]
+    fn test_s3_uri_pattern_names_the_file_whose_columns_do_not_match() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let folder = format!("s3://{test_bucket_name}/test_s3_pattern_schema_mismatch");
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 a, 'x'::text b) TO '{folder}/one.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "COPY (SELECT 2 a) TO '{folder}/two.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        Spi::run("create table test_table(a int, b text);").unwrap();
+
+        Spi::run(&format!(
+            "COPY test_table FROM '{folder}/**' WITH (format parquet);"
+        ))
+        .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(
+        expected = "column \"b\" is not found in parquet file \"s3://testbucket/test_s3_pattern_match_by_name/two.parquet\""
+    )]
+    fn test_s3_uri_pattern_names_the_file_a_column_is_missing_from() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let folder = format!("s3://{test_bucket_name}/test_s3_pattern_match_by_name");
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 a, 'x'::text b) TO '{folder}/one.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "COPY (SELECT 2 a) TO '{folder}/two.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        Spi::run("create table test_table(a int, b text);").unwrap();
+
+        Spi::run(&format!(
+            "COPY test_table FROM '{folder}/**' WITH (format parquet, match_by 'name');"
+        ))
+        .unwrap();
+    }
+
     #[pg_test]
     #[should_panic(expected = "no files found that match the pattern")]
     fn test_s3_with_nonexistent_pattern_uri() {

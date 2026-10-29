@@ -1599,6 +1599,20 @@ mod tests {
         Spi::run(copy_from).unwrap();
     }
 
+    // a cast that fails while the rows are read names the file it read them from, which is
+    // the only thing that tells the files of a pattern apart
+    #[pg_test]
+    #[should_panic(expected = "failed to cast column a of file \"/tmp/pg_parquet_test.parquet\"")]
+    fn test_runtime_cast_failure_names_the_file() {
+        let copy_to = format!("COPY (SELECT 'abc'::text a) TO '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_to).unwrap();
+
+        Spi::run("CREATE TABLE test_table (a int)").unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+    }
+
     #[pg_test]
     #[should_panic(expected = "column \"name\" is not found in parquet file")]
     fn test_missing_column_in_parquet() {
