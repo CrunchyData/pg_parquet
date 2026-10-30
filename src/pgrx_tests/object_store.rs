@@ -8,7 +8,8 @@ mod tests {
 
     use crate::{
         arrow_parquet::uri_utils::{
-            ParquetObjectStoreReader, ParquetRowGroupOpener, ParsedUriInfo,
+            ensure_version_is_the_one_asked_for, ParquetObjectStoreReader, ParquetRowGroupOpener,
+            ParsedUriInfo,
         },
         object_store::{
             client_options::load_client_options, given_up_upload_hint, no_multipart_upload_hint,
@@ -2220,6 +2221,44 @@ mod tests {
             error.contains("was overwritten while it was being read")
                 && error.contains("\"another-version\""),
             "the read of another version of the object was not described as one: {error}"
+        );
+    }
+
+    // the head a file is opened with is answered by such a store the same way, which is what
+    // tells a worker that the version the leader read the footer of is gone before it reads a
+    // row group of the object the file became
+    #[pg_test]
+    fn test_head_answered_with_another_version_is_refused() {
+        let uri = "s3://testbucket/t.parquet";
+        let location = object_store::path::Path::from("t.parquet");
+
+        let version = "\"the-version-the-footer-came-from\"";
+
+        // a head that asks for no version is answered by whichever version the object is at
+        ensure_version_is_the_one_asked_for(uri, &location, None, Some(version))
+            .expect("a head that asked for no version was refused");
+
+        ensure_version_is_the_one_asked_for(uri, &location, Some(version), Some(version))
+            .expect("a head answered with the version it asked for was refused");
+
+        let error =
+            ensure_version_is_the_one_asked_for(uri, &location, Some(version), Some("\"another\""))
+                .expect_err("a head answered with another version was read");
+
+        assert!(
+            error.contains("was overwritten while it was being read")
+                && error.contains("version \"another\""),
+            "the head of another version of the object was not described as one: {error}"
+        );
+
+        // a store that reports no version for what it answered says nothing about which
+        // version that was, so the head is refused with that rather than with a version
+        let error = ensure_version_is_the_one_asked_for(uri, &location, Some(version), None)
+            .expect_err("a head answered without a version was read");
+
+        assert!(
+            error.contains("no version at all"),
+            "the head answered without a version was not described as one: {error}"
         );
     }
 
