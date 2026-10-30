@@ -16,6 +16,11 @@ use crate::parquet_copy_hook::copy_cleanup::{
     UnfinishedWrite,
 };
 
+// SINGLE_UPLOAD_BUFFER_SIZE is how much of an object the writer holds in memory before it
+// starts an upload for the rest of it. This is object_store's own default, named here so
+// that a store which has no upload to start can report the size it is bounded by.
+pub(crate) const SINGLE_UPLOAD_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+
 // single_upload_writer is the sink a copy that no other process takes part in writes into.
 // object_store's writer puts the bytes of a copy that stays inside its buffer as a single
 // object, and starts an upload of its own for a copy that runs over it. That upload is
@@ -28,7 +33,11 @@ pub(crate) fn single_upload_writer(
 ) -> Box<dyn AsyncFileWriter> {
     let upload = SingleUpload {
         destination: path.to_string(),
-        writer: Arc::new(Mutex::new(Some(BufWriter::new(store, path)))),
+        writer: Arc::new(Mutex::new(Some(BufWriter::with_capacity(
+            store,
+            path,
+            SINGLE_UPLOAD_BUFFER_SIZE,
+        )))),
     };
 
     let cleanup = register_unfinished_write(UnfinishedWrite::WriterUpload(upload.clone()));

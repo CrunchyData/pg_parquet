@@ -1,5 +1,7 @@
 use std::error::Error;
 
+use crate::arrow_parquet::parquet_single_upload::SINGLE_UPLOAD_BUFFER_SIZE;
+
 pub(crate) mod aws;
 pub(crate) mod azure;
 pub(crate) mod client_options;
@@ -15,12 +17,18 @@ pub(crate) mod object_store_cache;
 pub(crate) fn object_store_error_message(error: impl Error + 'static) -> String {
     let error: &(dyn Error + 'static) = &error;
 
-    let mut message = source_of_type::<object_store::Error>(error)
-        .map_or_else(|| error.to_string(), ToString::to_string);
+    let object_store_error = source_of_type::<object_store::Error>(error);
+
+    let mut message = object_store_error.map_or_else(|| error.to_string(), ToString::to_string);
 
     if let Some(hint) = proxy_hint(&message) {
         message.push(' ');
         message.push_str(hint);
+    }
+
+    if let Some(hint) = object_store_error.and_then(no_multipart_upload_hint) {
+        message.push(' ');
+        message.push_str(&hint);
     }
 
     message
@@ -44,6 +52,29 @@ pub(crate) fn proxy_hint(object_store_error_message: &str) -> Option<&'static st
     }
 
     None
+}
+
+// no_multipart_upload_hint describes the error a store that cannot continue an object into
+// an upload of its own answers a copy with, which an `http(s)` destination does: such a
+// destination takes a single request, so it holds the whole object in memory and fails once
+// the copy outgrows that buffer. The size is what makes this worth a sentence, since the
+// same command writing a smaller table succeeds and nothing of the destination says why.
+pub(crate) fn no_multipart_upload_hint(error: &object_store::Error) -> Option<String> {
+    let object_store::Error::NotImplemented { operation, .. } = error else {
+        return None;
+    };
+
+    if !operation.contains("put_multipart") {
+        return None;
+    }
+
+    Some(format!(
+        "(the destination is written in a single request, so it takes an object of at most \
+         {} MiB; a larger table is written to such a destination as a folder of files, with \
+         a smaller file_size_bytes, and each file of that folder is then read back by its \
+         own name since a uri pattern does not apply to an http(s) endpoint)",
+        SINGLE_UPLOAD_BUFFER_SIZE / 1024 / 1024
+    ))
 }
 
 // source_of_type returns the first error of the given type in the source chain of an error

@@ -9,8 +9,8 @@ mod tests {
     use crate::{
         arrow_parquet::uri_utils::{ParquetObjectStoreReader, ParsedUriInfo},
         object_store::{
-            client_options::load_client_options, object_store_cache::get_or_create_object_store,
-            object_store_error_message, proxy_hint,
+            client_options::load_client_options, no_multipart_upload_hint,
+            object_store_cache::get_or_create_object_store, object_store_error_message, proxy_hint,
         },
         pgrx_tests::common::{
             copy_to_helper, CopyOptionValue, FileCleanup, TestTable, LOCAL_TEST_FILE_PATH,
@@ -604,6 +604,46 @@ mod tests {
 
         assert!(message.starts_with("Generic S3 error: "));
         assert!(message.ends_with("likely rejected the request)"));
+    }
+
+    #[pg_test]
+    fn test_no_multipart_upload_hint() {
+        // the store of an http(s) endpoint has no multipart upload
+        let hint = no_multipart_upload_hint(&object_store::Error::NotImplemented {
+            operation: "`put_multipart_opts`".into(),
+            implementer: "HttpStore".into(),
+        });
+        assert!(hint
+            .expect("no hint for a store without multipart upload")
+            .contains("10 MiB"));
+
+        // another operation that a store does not implement is not about a size
+        assert!(
+            no_multipart_upload_hint(&object_store::Error::NotImplemented {
+                operation: "`put_opts` with a mode other than `PutMode::Overwrite`".into(),
+                implementer: "HttpStore".into(),
+            })
+            .is_none()
+        );
+
+        assert!(no_multipart_upload_hint(&object_store::Error::Generic {
+            store: "S3",
+            source: "an error of the store itself".into(),
+        })
+        .is_none());
+    }
+
+    #[pg_test]
+    fn test_object_store_error_message_hints_at_the_single_request_bound() {
+        let error = ParquetError::External(Box::new(object_store::Error::NotImplemented {
+            operation: "`put_multipart_opts`".into(),
+            implementer: "HttpStore".into(),
+        }));
+
+        let message = object_store_error_message(error);
+
+        assert!(message.starts_with("Operation `put_multipart_opts` not yet implemented"));
+        assert!(message.contains("takes an object of at most 10 MiB"));
     }
 
     #[pg_test]
@@ -1299,6 +1339,78 @@ mod tests {
         let count_query = "select count(*) from test_table;";
         let result = Spi::get_one::<i64>(count_query).unwrap().unwrap();
         assert_eq!(result, 10);
+    }
+
+    // an http(s) endpoint takes an object in a single request, so a copy into one is bounded
+    // by the buffer that the object is held in until the copy ends. The error says what the
+    // bound is, rather than naming the operation that the store does not implement and
+    // nothing else, since the same command writing a smaller table succeeds.
+    #[pg_test]
+    #[should_panic(expected = "takes an object of at most 10 MiB")]
+    fn test_http_uri_above_the_single_request_bound() {
+        object_store_cache_clear();
+
+        let http_endpoint: String =
+            std::env::var("HTTP_ENDPOINT").expect("HTTP_ENDPOINT not found");
+
+        let http_uri = format!("{http_endpoint}/above_the_bound.parquet");
+
+        Spi::run(&format!(
+            "COPY (SELECT md5(i::text) || md5((-i)::text) a FROM generate_series(1, 250000) i)
+             TO '{http_uri}' WITH (format parquet);"
+        ))
+        .unwrap();
+    }
+
+    // the way around that bound, which the error above names: a file_size_bytes below it
+    // writes a larger table as a folder of files, each of which fits a single request. The
+    // files are read back one name at a time, since an http(s) endpoint is the one store
+    // that a uri pattern does not apply to.
+    #[pg_test]
+    fn test_http_folder_destination_above_the_single_request_bound() {
+        object_store_cache_clear();
+
+        let http_endpoint: String =
+            std::env::var("HTTP_ENDPOINT").expect("HTTP_ENDPOINT not found");
+
+        let http_uri = format!("{http_endpoint}/above_the_bound_folder");
+
+        Spi::run(&format!(
+            "COPY (SELECT md5(i::text) || md5((-i)::text) a FROM generate_series(1, 250000) i)
+             TO '{http_uri}' WITH (format parquet, file_size_bytes '4MB');"
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TABLE test_table(a text);").unwrap();
+
+        // the files of a folder are numbered, so they are read until a number that the
+        // folder does not hold a file of
+        Spi::run(&format!(
+            "DO $$
+             DECLARE
+                 file_id int := 0;
+             BEGIN
+                 LOOP
+                     BEGIN
+                         EXECUTE format(
+                             'COPY test_table FROM ''{http_uri}/data_%s.parquet'' \
+                              WITH (format parquet)',
+                             file_id
+                         );
+                     EXCEPTION WHEN others THEN
+                         EXIT;
+                     END;
+
+                     file_id := file_id + 1;
+                 END LOOP;
+             END $$;"
+        ))
+        .unwrap();
+
+        let count = Spi::get_one::<i64>("SELECT count(*) FROM test_table;")
+            .unwrap()
+            .unwrap();
+        assert_eq!(count, 250000);
     }
 
     #[pg_test]

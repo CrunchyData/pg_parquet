@@ -422,6 +422,8 @@ Supported authorization methods' priority order is shown below:
 
 Only `https` uris are supported by default. You can set `ALLOW_HTTP` environment variable to allow `http` uris.
 
+An `http(s)` endpoint takes an object in a single request rather than in an upload of several parts, so a `COPY TO` such an endpoint buffers the whole file in memory and writes at most 10 MiB. A larger table is written with a `file_size_bytes` below that size, which writes it as a folder of files, and each file of that folder is then read back by its own name, since a uri pattern does not apply to an `http(s)` endpoint.
+
 You can also use the following environment variables when starting postgres to configure the http(s) client:
 - `HTTP_<HTTP CLIENT OPTION>`: an [http client option](#http-client-options), e.g. `HTTP_TIMEOUT` **(only via environment variables)**
 
