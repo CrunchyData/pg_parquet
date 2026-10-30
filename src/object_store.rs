@@ -37,11 +37,13 @@ pub(crate) fn object_store_error_message(error: impl Error + 'static) -> String 
 // write_error_message describes an error that failed a write into an object store. It is the
 // message of the error, and a sentence about what it is not when the error is the one giving
 // up an upload answers with: a writer that could neither finish nor give up the upload it
-// started reports the error of giving it up rather than the error that failed the write.
+// started reports the error of giving it up rather than the error that failed the write. An
+// error that says the upload is gone gets a sentence of its own, since the destination can
+// hold the whole file of such a write.
 pub(crate) fn write_error_message(error: impl Error + 'static) -> String {
     let mut message = object_store_error_message(error);
 
-    if let Some(hint) = given_up_upload_hint(&message) {
+    if let Some(hint) = given_up_upload_hint(&message).or_else(|| finished_upload_hint(&message)) {
         message.push(' ');
         message.push_str(hint);
     }
@@ -71,6 +73,36 @@ pub(crate) fn given_up_upload_hint(object_store_error_message: &str) -> Option<&
     }
 
     None
+}
+
+// finished_upload_hint describes a write that was answered with an upload that is gone, which
+// is what finishing an upload twice is answered with: a store that finished the upload and
+// whose answer was lost on the way back answers the retry of that finish with NoSuchUpload,
+// so the destination holds the whole file of a copy that reports an error. That is worth a
+// sentence since the error reads as if nothing was written, while the object that was there
+// before the copy is already gone.
+//
+// Finishing an upload is a POST that names an upload id, which tells it apart from starting
+// one (a POST of "?uploads"), from writing a part (a PUT) and from giving the upload up (a
+// DELETE). The request is matched in the message since object_store only exposes it there,
+// as the types that carry a failed request, RetryError and RequestError, are private to it.
+pub(crate) fn finished_upload_hint(object_store_error_message: &str) -> Option<&'static str> {
+    let message = object_store_error_message.to_lowercase();
+
+    if !message.contains("performing post") || !message.contains("uploadid=") {
+        return None;
+    }
+
+    if !message.contains("nosuchupload") && !message.contains("not found") {
+        return None;
+    }
+
+    Some(
+        "(the upload the COPY TO was finishing is gone, which is also what a store that \
+         finished it answers when its answer was lost on the way back, so the destination may \
+         already hold the whole file of this COPY TO and the object it replaced is gone either \
+         way; read the destination before writing it again)",
+    )
 }
 
 // proxy_hint describes an error message that carries an html response body. An object
