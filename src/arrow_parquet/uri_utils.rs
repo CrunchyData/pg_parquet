@@ -252,6 +252,44 @@ impl ParsedUriInfo {
         ))
     }
 
+    // the credentials of an object store come from the environment rather than from the uri of
+    // an object in it, so credentials written in a uri are read by nothing: the copy goes to the
+    // store the environment names, as the user the environment names, and the ones in the uri
+    // are neither used nor reported. A uri carrying them is refused instead, so that a copy whose
+    // uri appears to say whose it is does not go somewhere else as someone else.
+    fn try_reject_credentials(scheme: &ObjectStoreScheme, uri: &Url) -> Result<(), String> {
+        if uri.username().is_empty() && uri.password().is_none() {
+            return Ok(());
+        }
+
+        let credentials_come_from = match scheme {
+            ObjectStoreScheme::AmazonS3 => {
+                "the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables or an aws \
+                 profile"
+            }
+            ObjectStoreScheme::MicrosoftAzure => {
+                "the AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY environment variables, a \
+                 connection string, a sas token or an azure profile"
+            }
+            ObjectStoreScheme::GoogleCloudStorage => {
+                "the GOOGLE_SERVICE_ACCOUNT_KEY or GOOGLE_SERVICE_ACCOUNT_PATH environment \
+                 variable"
+            }
+            // an https endpoint is read as it is reachable: pg_parquet has nowhere to read
+            // credentials for one from, so a uri carrying them asks for what it cannot have
+            ObjectStoreScheme::Http => "nowhere, since pg_parquet reads none for an https endpoint",
+            _ => return Ok(()),
+        };
+
+        Err(format!(
+            "unsupported credentials in uri {} (reported without them). The credentials written \
+             in a uri are read by nothing: pg_parquet reads the credentials of this store from \
+             {credentials_come_from}, and reads the uri for the store and the object alone. Write \
+             the uri as it is reported here.",
+            uri_without_credentials(uri)
+        ))
+    }
+
     // the name of an object is the path of its uri, and a "#" or a "?" written in that name ends
     // the path: what follows is the fragment or the query of the uri, which names nothing in an
     // object store and is sent to none. A uri carrying one names a shorter object than it appears
@@ -276,8 +314,10 @@ impl ParsedUriInfo {
         // which pg_parquet sends to none, and saying so keeps the escape from being read as the
         // way to write one
         let reaches_the_store = match marker {
-            '?' => " A query that is meant for the store, as the version id or the signature of \
-                    a presigned uri is, is sent to it by nothing.",
+            '?' => {
+                " A query that is meant for the store, as the version id or the signature of \
+                    a presigned uri is, is sent to it by nothing."
+            }
             _ => "",
         };
 
@@ -324,6 +364,8 @@ impl TryFrom<&str> for ParsedUriInfo {
 
         Self::try_reject_port(&scheme, &uri)?;
 
+        Self::try_reject_credentials(&scheme, &uri)?;
+
         Self::try_reject_uri_beyond_the_path(&uri, &path)?;
 
         let bucket = Self::try_parse_bucket(&scheme, &uri)?;
@@ -365,6 +407,32 @@ pub(crate) fn uri_as_string(uri: &Url) -> String {
     }
 
     uri.to_string()
+}
+
+// uri_without_credentials is the uri as it would have been written without the credentials it
+// carries, which is what a message about them reports: the error of a copy is written to the
+// server log, and the credentials of the uri would be written to it with the error.
+fn uri_without_credentials(uri: &Url) -> String {
+    let uri = uri.as_str();
+
+    let Some(authority) = uri.find("://").map(|scheme_end| scheme_end + 3) else {
+        return uri.to_string();
+    };
+
+    // the credentials of a uri end at the "@" of its authority, which is the one before the
+    // first "/" that follows the scheme rather than one written in the path
+    let authority_end = uri[authority..]
+        .find('/')
+        .map_or(uri.len(), |path_start| authority + path_start);
+
+    match uri[authority..authority_end].rfind('@') {
+        Some(credentials_end) => format!(
+            "{}{}",
+            &uri[..authority],
+            &uri[authority + credentials_end + 1..]
+        ),
+        None => uri.to_string(),
+    }
 }
 
 pub(crate) fn object_store_base_uri(uri: &Url) -> String {

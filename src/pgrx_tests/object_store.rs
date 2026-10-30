@@ -320,6 +320,48 @@ mod tests {
         Spi::run("SELECT * FROM parquet.list('gs://testbucket:4443/port.parquet');").unwrap();
     }
 
+    // credentials written in a uri are read by nothing, so a copy carrying them goes to the store
+    // the environment names as the user the environment names. The uri is reported without them,
+    // since the error of a copy is written to the server log.
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported credentials in uri s3://testbucket/credentials.parquet (reported without them). The credentials written in a uri are read by nothing: pg_parquet reads the credentials of this store from the AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables or an aws profile, and reads the uri for the store and the object alone. Write the uri as it is reported here."
+    )]
+    fn test_copy_to_s3_uri_with_credentials_is_refused() {
+        Spi::run(
+            "COPY (SELECT 1 AS a) TO 's3://someone:a-secret@testbucket/credentials.parquet' WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported credentials in uri gs://testbucket/credentials.parquet (reported without them)."
+    )]
+    fn test_copy_from_gcs_uri_with_credentials_is_refused() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(
+            "COPY test_table FROM 'gs://someone@testbucket/credentials.parquet' WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
+    // an https endpoint is one pg_parquet reads no credentials for at all, which the refusal of a
+    // uri carrying them says rather than leaving the endpoint to answer the request as no one
+    #[pg_test]
+    #[should_panic(
+        expected = "pg_parquet reads the credentials of this store from nowhere, since pg_parquet reads none for an https endpoint"
+    )]
+    fn test_copy_from_http_uri_with_credentials_is_refused() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(
+            "COPY test_table FROM 'https://someone:a-secret@localhost/credentials.parquet' WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
     // a "#" written in the name of an object ends the path of its uri, so such a uri names a
     // shorter object than it appears to, which a copy would read or write in its place
     #[pg_test]
@@ -340,8 +382,10 @@ mod tests {
     fn test_copy_from_azure_uri_with_a_query_is_refused() {
         Spi::run("CREATE TABLE test_table (a int);").unwrap();
 
-        Spi::run("COPY test_table FROM 'az://testcontainer/query.parquet?a=1' WITH (format parquet);")
-            .unwrap();
+        Spi::run(
+            "COPY test_table FROM 'az://testcontainer/query.parquet?a=1' WITH (format parquet);",
+        )
+        .unwrap();
     }
 
     // a "?" that follows the "#" of a uri is part of its fragment rather than a query of its own
