@@ -4,7 +4,7 @@ use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
 use futures::{future::BoxFuture, FutureExt, StreamExt};
 use object_store::{
-    coalesce_ranges, path::Path, GetOptions, ObjectStore, ObjectStoreExt, ObjectStoreScheme,
+    coalesce_ranges, path::Path, GetOptions, ObjectStore, ObjectStoreScheme,
     OBJECT_STORE_COALESCE_DEFAULT,
 };
 use parquet::{
@@ -456,7 +456,10 @@ pub(crate) fn parquet_schema_from_uri(uri_info: &ParsedUriInfo) -> SchemaDescrip
 }
 
 pub(crate) fn parquet_metadata_from_uri(uri_info: &ParsedUriInfo) -> Arc<ParquetMetaData> {
-    let (_, reader_metadata, _) = open_parquet_file(uri_info).unwrap_or_else(|e| panic!("{e}"));
+    let no_expected_version = None;
+
+    let (_, reader_metadata, _) =
+        open_parquet_file(uri_info, no_expected_version).unwrap_or_else(|e| panic!("{e}"));
 
     reader_metadata.metadata().to_owned()
 }
@@ -468,8 +471,12 @@ pub(crate) const RECORD_BATCH_SIZE: i64 = 1024;
 // file's bytes, the metadata to read it with, and the batch size that its columns call for.
 // None of it differs between the row groups of the file, which is what lets a parallel COPY
 // FROM worker read all of its row groups without going back to the footer.
+// expected_version is the version the object has to have, which is what a reader that is one
+// of many over the same file is opened with: the version is None for the first of them, which
+// reads whichever version the object has, and that version for the rest of them.
 fn open_parquet_file(
     uri_info: &ParsedUriInfo,
+    expected_version: Option<&str>,
 ) -> Result<(ParquetObjectStoreReader, ArrowReaderMetadata, usize), String> {
     uri_info.ensure_names_an_object()?;
 
@@ -480,9 +487,25 @@ fn open_parquet_file(
     let (parquet_object_store, location) = get_or_create_object_store(uri_info, copy_from);
 
     block_on(async move {
-        let object_store_meta = match parquet_object_store.head(&location).await {
-            Ok(object_store_meta) => object_store_meta,
+        let head = GetOptions {
+            head: true,
+            if_match: expected_version.map(ToString::to_string),
+            ..Default::default()
+        };
+
+        let object_store_meta = match parquet_object_store.get_opts(&location, head).await {
+            Ok(object) => object.meta,
             Err(e) => {
+                // the object is no longer the one the version was taken of, which the message
+                // of the store does not say and which the hints below are not about
+                if matches!(e, object_store::Error::Precondition { .. }) {
+                    return Err(format!(
+                        "failed to read uri {}: {}",
+                        uri_info.uri,
+                        overwritten_object_message(&location, &refused_version_detail(e))
+                    ));
+                }
+
                 let mut message = format!(
                     "failed to get object store metadata for uri {}: {}",
                     uri_info.uri,
@@ -502,6 +525,25 @@ fn open_parquet_file(
                 return Err(message);
             }
         };
+
+        // a store that answers a head which asks for a version of the object without checking
+        // that the object still is that version is caught by the version it reports, which is
+        // what keeps a reader that was given a version from reading the object it became
+        if let Some(expected_version) = expected_version {
+            if object_store_meta.e_tag.as_deref() != Some(expected_version) {
+                return Err(format!(
+                    "failed to read uri {}: {}",
+                    uri_info.uri,
+                    overwritten_object_message(
+                        &location,
+                        &answered_version_detail(
+                            expected_version,
+                            object_store_meta.e_tag.as_deref()
+                        )
+                    )
+                ));
+            }
+        }
 
         // the version the store reports for the object is what the reads of the file ask for,
         // so that they all read the object this metadata describes
@@ -644,7 +686,10 @@ async fn parquet_reader_metadata(
 pub(crate) fn parquet_reader_from_uri(
     uri_info: &ParsedUriInfo,
 ) -> Result<(ParquetRecordBatchStream<ParquetObjectStoreReader>, i64), String> {
-    let (object_reader, reader_metadata, batch_size) = open_parquet_file(uri_info)?;
+    let no_expected_version = None;
+
+    let (object_reader, reader_metadata, batch_size) =
+        open_parquet_file(uri_info, no_expected_version)?;
 
     let total_rows = reader_metadata.metadata().file_metadata().num_rows();
 
@@ -669,8 +714,15 @@ pub(crate) struct ParquetRowGroupOpener {
 }
 
 impl ParquetRowGroupOpener {
-    pub(crate) fn try_new(uri_info: &ParsedUriInfo) -> Result<Self, String> {
-        let (object_reader, reader_metadata, batch_size) = open_parquet_file(uri_info)?;
+    // expected_version is the version the file has to have, which is the version the opener
+    // of the leader of a parallel COPY FROM read the footer of: the row groups the workers
+    // split between themselves are the row groups of that version of the file.
+    pub(crate) fn try_new(
+        uri_info: &ParsedUriInfo,
+        expected_version: Option<&str>,
+    ) -> Result<Self, String> {
+        let (object_reader, reader_metadata, batch_size) =
+            open_parquet_file(uri_info, expected_version)?;
 
         Ok(Self {
             uri: uri_info.uri.to_string(),
@@ -684,6 +736,12 @@ impl ParquetRowGroupOpener {
     // a worker that read a row group of it
     pub(crate) fn uri(&self) -> &str {
         &self.uri
+    }
+
+    // version is the version of the file this opener read the footer of, which the openers of
+    // the workers are opened with so that they read the row groups of that version
+    pub(crate) fn version(&self) -> Option<&str> {
+        self.object_reader.version()
     }
 
     // row_groups is how many row groups the file holds and how many rows they hold together
@@ -836,6 +894,39 @@ pub(crate) fn ensure_access_privilege_to_uri(uri_info: &ParsedUriInfo, copy_from
     }
 }
 
+// overwritten_object_message describes a read that did not read the version of the object it
+// asked for, which is an object that was overwritten while it was being read. detail says what
+// became of the read that asked for the version that is gone.
+fn overwritten_object_message(location: &Path, detail: &str) -> String {
+    format!(
+        "the object \"{location}\" was overwritten while it was being read, so the rest of the \
+         read would have been the bytes of the object as it is now, which the footer that was \
+         read first does not describe. Read it again to read it as it is now. {detail}"
+    )
+}
+
+// refused_version_detail describes a read the store itself refused, which it does without
+// saying whose precondition failed or what it was for
+fn refused_version_detail(error: object_store::Error) -> String {
+    format!(
+        "The read of the version it was asked for: {}",
+        object_store_error_message(error)
+    )
+}
+
+// answered_version_detail describes a read a store answered with another version than the one
+// it asked for, which is a store that does not check the precondition of a read itself. The
+// version that was answered is what catches such a store, so the read is refused here instead.
+fn answered_version_detail(asked_for: &str, answered: Option<&str>) -> String {
+    format!(
+        "The read asked for version {asked_for} and the store answered with {}.",
+        match answered {
+            Some(answered) => format!("version {answered}"),
+            None => "no version at all".to_string(),
+        }
+    )
+}
+
 // A minimal AsyncFileReader over an ObjectStore, mirroring parquet's examples/object_store.rs.
 // parquet deprecated ParquetObjectReader in 59.2.0 and asks downstreams to implement the trait
 // themselves instead, see https://github.com/apache/arrow-rs/issues/10308.
@@ -879,15 +970,37 @@ impl ParquetObjectStoreReader {
             ..Default::default()
         };
 
-        let read = async {
-            self.object_store
-                .get_opts(&self.location, options)
-                .await?
-                .bytes()
-                .await
+        let read = self
+            .object_store
+            .get_opts(&self.location, options)
+            .await
+            .map_err(|e| self.read_error(e))?;
+
+        // a store that answers a read which asks for a version of the object without checking
+        // that the object still is that version is caught by the version it reports for what it
+        // answered, so the read is refused here rather than read as the object it became
+        self.ensure_version_was_read(read.meta.e_tag.as_deref())?;
+
+        read.bytes().await.map_err(|e| self.read_error(e))
+    }
+
+    // ensure_version_was_read refuses a read the store answered with another version of the
+    // object than the version the read asked for. A store that reports no version for what it
+    // answered says nothing about which version that was, which leaves the read with the
+    // precondition it carries as its only guard.
+    pub(crate) fn ensure_version_was_read(&self, answered: Option<&str>) -> ParquetResult<()> {
+        let (Some(asked_for), Some(answered)) = (self.e_tag.as_deref(), answered) else {
+            return Ok(());
         };
 
-        read.await.map_err(|e| self.read_error(e))
+        if answered == asked_for {
+            return Ok(());
+        }
+
+        Err(ParquetError::General(overwritten_object_message(
+            &self.location,
+            &answered_version_detail(asked_for, Some(answered)),
+        )))
     }
 
     // read_error describes an error of a read. A read that is refused because the version it
@@ -895,17 +1008,19 @@ impl ParquetObjectStoreReader {
     // precondition failed without saying whose precondition it was or what it was for.
     fn read_error(&self, error: object_store::Error) -> ParquetError {
         if matches!(error, object_store::Error::Precondition { .. }) {
-            return ParquetError::General(format!(
-                "the object \"{}\" was overwritten while it was being read, so the rest of the \
-                 read would have been the bytes of the object as it is now, which the footer \
-                 that was read first does not describe. Read it again to read it as it is now. \
-                 The read of the version it was asked for: {}",
-                self.location,
-                object_store_error_message(error)
+            return ParquetError::General(overwritten_object_message(
+                &self.location,
+                &refused_version_detail(error),
             ));
         }
 
         ParquetError::from(error)
+    }
+
+    // version is the version of the object this reader reads, which the readers that are
+    // opened on the same file after it are opened with
+    pub(crate) fn version(&self) -> Option<&str> {
+        self.e_tag.as_deref()
     }
 
     // ends_with_parquet_magic reports whether the object closes with the marker that every

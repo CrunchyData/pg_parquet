@@ -76,8 +76,8 @@ struct RowGroupSummary {
 }
 
 // ParallelCopyFromShared is the DSM payload. The number of row groups of each file follows it
-// in the same chunk, and then the uris of the files and the attribute names, in that order,
-// both separated by nul bytes.
+// in the same chunk, and then the uris of the files, the version of each of them and the
+// attribute names, in that order, all separated by nul bytes.
 #[repr(C)]
 struct ParallelCopyFromShared {
     // how many workers the command ended up with, which is 0 until they are launched
@@ -88,25 +88,29 @@ struct ParallelCopyFromShared {
     relation_oid: pg_sys::Oid,
     match_by_name: bool,
     uris_len: u32,
+    versions_len: u32,
     attribute_names_len: u32,
 }
 
 impl ParallelCopyFromShared {
-    fn size_with_files(uris: &str, attribute_names: &str, nfiles: usize) -> usize {
+    fn size_with_files(uris: &str, versions: &str, attribute_names: &str, nfiles: usize) -> usize {
         std::mem::size_of::<Self>()
             + nfiles * std::mem::size_of::<u32>()
             + uris.len()
+            + versions.len()
             + attribute_names.len()
     }
 
     unsafe fn write_files(
         shared: *mut Self,
         uris: &str,
+        versions: &str,
         attribute_names: &str,
         row_groups_per_file: &[u32],
     ) {
         (*shared).nfiles = row_groups_per_file.len() as u32;
         (*shared).uris_len = uris.len() as u32;
+        (*shared).versions_len = versions.len() as u32;
         (*shared).attribute_names_len = attribute_names.len() as u32;
 
         std::ptr::copy_nonoverlapping(
@@ -117,9 +121,10 @@ impl ParallelCopyFromShared {
 
         let strings = Self::strings(shared) as *mut u8;
         std::ptr::copy_nonoverlapping(uris.as_ptr(), strings, uris.len());
+        std::ptr::copy_nonoverlapping(versions.as_ptr(), strings.add(uris.len()), versions.len());
         std::ptr::copy_nonoverlapping(
             attribute_names.as_ptr(),
-            strings.add(uris.len()),
+            strings.add(uris.len() + versions.len()),
             attribute_names.len(),
         );
     }
@@ -145,8 +150,21 @@ impl ParallelCopyFromShared {
             .collect()
     }
 
-    unsafe fn attribute_names(shared: *const Self) -> Vec<String> {
+    // versions is the version of each file, in the order of the uris. An empty one is a file
+    // the store reports no version for, which a worker reads whichever version it finds of.
+    unsafe fn versions(shared: *const Self) -> Vec<Option<String>> {
         let strings = Self::strings(shared).add((*shared).uris_len as usize);
+
+        Self::string_at(strings, (*shared).versions_len)
+            .split('\0')
+            .map(|version| (!version.is_empty()).then(|| version.to_string()))
+            .collect()
+    }
+
+    unsafe fn attribute_names(shared: *const Self) -> Vec<String> {
+        let strings = Self::strings(shared)
+            .add((*shared).uris_len as usize)
+            .add((*shared).versions_len as usize);
 
         let attribute_names = Self::string_at(strings, (*shared).attribute_names_len);
 
@@ -522,6 +540,14 @@ pub(crate) fn try_parallel_copy_from(
         .map(|file| file.uri.as_str())
         .collect::<Vec<_>>()
         .join("\0");
+
+    // a file with no version of its own travels as an empty one, which is a worker that reads
+    // whichever version of it the store has
+    let versions = files
+        .iter()
+        .map(|file| file.version.as_deref().unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join("\0");
     let row_groups_per_file = files.iter().map(|file| file.nrowgroups).collect::<Vec<_>>();
 
     let attribute_names = copy_stmt_attribute_names(p_stmt).join("\0");
@@ -539,8 +565,12 @@ pub(crate) fn try_parallel_copy_from(
             nworkers,
         );
 
-        let shared_size =
-            ParallelCopyFromShared::size_with_files(&uris, &attribute_names, files.len());
+        let shared_size = ParallelCopyFromShared::size_with_files(
+            &uris,
+            &versions,
+            &attribute_names,
+            files.len(),
+        );
         let queues_size = QUEUE_SIZE * nworkers as usize;
 
         // shm_toc_estimate_chunk and shm_toc_estimate_keys are macros, so they are spelled
@@ -565,7 +595,13 @@ pub(crate) fn try_parallel_copy_from(
         (*shared).nrowgroups = nrowgroups;
         (*shared).relation_oid = relation.oid();
         (*shared).match_by_name = matches!(match_by, MatchBy::Name);
-        ParallelCopyFromShared::write_files(shared, &uris, &attribute_names, &row_groups_per_file);
+        ParallelCopyFromShared::write_files(
+            shared,
+            &uris,
+            &versions,
+            &attribute_names,
+            &row_groups_per_file,
+        );
 
         pg_sys::shm_toc_insert((*pcxt).toc, PARALLEL_COPY_FROM_SHARED_KEY, shared as _);
 
@@ -641,6 +677,9 @@ pub(crate) fn try_parallel_copy_from(
 // there is to read.
 struct ParallelCopyFromFile {
     uri: String,
+    // the version of the file the row groups below were counted in, which is the version the
+    // workers read it as. It is None for a store that reports no version for an object.
+    version: Option<String>,
     nrowgroups: u32,
     total_rows: i64,
 }
@@ -678,10 +717,16 @@ fn parallel_copy_from_files(uri_info: &ParsedUriInfo) -> Option<Vec<ParallelCopy
 // parallel_copy_from_file reads the footer of a single file, which is what says how much of it
 // there is for the workers to split. None is a uri that is not a parquet file of its own.
 fn parallel_copy_from_file(uri_info: &ParsedUriInfo) -> Option<ParallelCopyFromFile> {
-    let (nrowgroups, total_rows) = ParquetRowGroupOpener::try_new(uri_info).ok()?.row_groups();
+    let any_version = None;
+
+    let opener = ParquetRowGroupOpener::try_new(uri_info, any_version).ok()?;
+
+    let version = opener.version().map(ToString::to_string);
+    let (nrowgroups, total_rows) = opener.row_groups();
 
     Some(ParallelCopyFromFile {
         uri: uri_as_string(&uri_info.uri),
+        version,
         nrowgroups,
         total_rows,
     })
@@ -906,6 +951,7 @@ fn decode_row_groups(
     };
 
     let uris = unsafe { ParallelCopyFromShared::uris(shared) };
+    let versions = unsafe { ParallelCopyFromShared::versions(shared) };
     let row_groups_per_file = unsafe { ParallelCopyFromShared::row_groups_per_file(shared) };
     let attribute_names = unsafe { ParallelCopyFromShared::attribute_names(shared) };
 
@@ -939,7 +985,9 @@ fn decode_row_groups(
             let uri_info = ParsedUriInfo::try_from(uri.as_str())
                 .unwrap_or_else(|e| panic!("failed to parse uri {uri}: {e}"));
 
-            let opener = ParquetRowGroupOpener::try_new(&uri_info)
+            // the file is read as the version the leader counted the row groups of, since the
+            // row groups this worker was given are the row groups of that version of it
+            let opener = ParquetRowGroupOpener::try_new(&uri_info, versions[file].as_deref())
                 .unwrap_or_else(|e| panic!("failed to open uri {uri}: {e}"));
 
             open_file = Some((file, opener));

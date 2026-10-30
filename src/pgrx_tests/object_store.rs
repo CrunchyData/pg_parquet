@@ -7,7 +7,9 @@ mod tests {
     use pgrx::{pg_sys::Timestamp, pg_test, Spi};
 
     use crate::{
-        arrow_parquet::uri_utils::{ParquetObjectStoreReader, ParsedUriInfo},
+        arrow_parquet::uri_utils::{
+            ParquetObjectStoreReader, ParquetRowGroupOpener, ParsedUriInfo,
+        },
         object_store::{
             client_options::load_client_options, given_up_upload_hint, no_multipart_upload_hint,
             object_store_cache::get_or_create_object_store, object_store_error_message, proxy_hint,
@@ -2091,6 +2093,134 @@ mod tests {
             "COPY test_table FROM '{local_path}' WITH (format parquet);"
         ))
         .unwrap();
+    }
+
+    // The readers of one parallel COPY FROM read one version of a file: a worker is given the
+    // row groups the leader found in the version it read the footer of, so a worker that finds
+    // another version of the file reads nothing of it rather than reading row groups of one
+    // version at the offsets of another.
+    #[pg_test]
+    fn test_open_of_another_version_of_a_file_is_refused() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        Spi::run(&format!(
+            "COPY (SELECT i AS a FROM generate_series(1, 100) i) TO '{LOCAL_TEST_FILE_PATH}'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
+
+        let any_version = None;
+        let opener = ParquetRowGroupOpener::try_new(&uri_info, any_version).unwrap();
+
+        // the local store reports a version of its own for every file it holds
+        let version = opener
+            .version()
+            .expect("the store reported no version of the file")
+            .to_string();
+
+        // the version the leader read the footer of opens the file again, which is what every
+        // worker of the command does
+        ParquetRowGroupOpener::try_new(&uri_info, Some(&version)).unwrap();
+
+        let Err(error) = ParquetRowGroupOpener::try_new(&uri_info, Some("\"another-version\""))
+        else {
+            panic!("a file of another version was opened");
+        };
+
+        assert!(
+            error.contains("was overwritten while it was being read"),
+            "the open of another version of the file was not described as one: {error}"
+        );
+    }
+
+    // the same over a store that is reached over http, which refuses the read of a version the
+    // object is no longer at with a status of its own rather than answering it with the version
+    // the object is at
+    #[pg_test]
+    fn test_s3_open_of_another_version_of_a_file_is_refused() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!("s3://{test_bucket_name}/pg_parquet_test_another_version.parquet");
+
+        Spi::run(&format!(
+            "COPY (SELECT i AS a FROM generate_series(1, 100) i) TO '{s3_uri}'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let uri_info = ParsedUriInfo::try_from(s3_uri.as_str()).unwrap();
+
+        let any_version = None;
+        let opener = ParquetRowGroupOpener::try_new(&uri_info, any_version).unwrap();
+
+        let version = opener
+            .version()
+            .expect("the store reported no version of the object")
+            .to_string();
+
+        ParquetRowGroupOpener::try_new(&uri_info, Some(&version)).unwrap();
+
+        let Err(error) =
+            ParquetRowGroupOpener::try_new(&uri_info, Some("\"00000000000000000000000000000000\""))
+        else {
+            panic!("an object of another version was opened");
+        };
+
+        assert!(
+            error.contains("was overwritten while it was being read")
+                && error.contains("The read of the version it was asked for:"),
+            "the open of another version of the object was not described as one the store \
+             refused: {error}"
+        );
+    }
+
+    // A store that answers a read which asks for a version of the object without checking that
+    // the object still is that version hands back the bytes of the object it became, which the
+    // version it reports for what it answered is what catches. A store that reports no version
+    // for what it answered says nothing about which version that was.
+    #[pg_test]
+    fn test_read_answered_with_another_version_is_refused() {
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        Spi::run(&format!(
+            "COPY (SELECT i AS a FROM generate_series(1, 100) i) TO '{LOCAL_TEST_FILE_PATH}'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
+
+        let copy_from = true;
+        let (store, location) = get_or_create_object_store(&uri_info, copy_from);
+
+        let version = "\"the-version-the-footer-came-from\"";
+        let file_size = 0;
+        let reader =
+            ParquetObjectStoreReader::new(store, location, file_size, Some(version.to_string()));
+
+        reader
+            .ensure_version_was_read(Some(version))
+            .expect("a read answered with the version it asked for was refused");
+
+        reader
+            .ensure_version_was_read(None)
+            .expect("a read answered without a version was refused");
+
+        let error = reader
+            .ensure_version_was_read(Some("\"another-version\""))
+            .expect_err("a read answered with another version was read")
+            .to_string();
+
+        assert!(
+            error.contains("was overwritten while it was being read")
+                && error.contains("\"another-version\""),
+            "the read of another version of the object was not described as one: {error}"
+        );
     }
 
     #[pg_test]
