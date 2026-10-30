@@ -61,6 +61,7 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
     tupledesc_schema: Arc<Schema>,
     attributes: &[FormData_pg_attribute],
     match_by: MatchBy,
+    file_uri: &str,
 ) -> Vec<Option<DataType>> {
     let mut cast_to_types = Vec::new();
 
@@ -69,7 +70,8 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
     {
         panic!(
             "column count mismatch between table and parquet file. \
-             parquet file has {} columns, but table has {} columns",
+             parquet file has {} columns, but table has {} columns. \
+             The file is \"{file_uri}\".",
             file_schema.fields().len(),
             tupledesc_schema.fields().len()
         );
@@ -93,7 +95,7 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
                     .map(|file_field_idx| file_schema.field(file_field_idx));
 
                 if file_schema_field.is_none() {
-                    panic!("column \"{field_name}\" is not found in parquet file");
+                    panic!("column \"{field_name}\" is not found in parquet file \"{file_uri}\"");
                 }
 
                 file_schema_field.unwrap()
@@ -121,7 +123,8 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
         .unwrap_or_else(|| {
             panic!(
                 "type mismatch for column \"{field_name}\" between table and parquet file.\n\n\
-                 table has \"{to_type}\"\n\nparquet file has \"{from_type}\""
+                 table has \"{to_type}\"\n\nparquet file has \"{from_type}\"\n\n\
+                 the file is \"{file_uri}\""
             )
         });
 

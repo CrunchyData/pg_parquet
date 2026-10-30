@@ -288,6 +288,10 @@ pub(crate) struct SingleParquetReader {
     attribute_contexts: Vec<ArrowToPgAttributeContext>,
     match_by: MatchBy,
     total_rows: i64,
+    // the file the reader reads, which is what names it in the errors of a read that got
+    // that far: a copy over a pattern reads a file per reader, so the uri of the command is
+    // not the file any one of them failed on
+    file_uri: String,
 }
 
 impl Deref for SingleParquetReader {
@@ -326,6 +330,7 @@ impl SingleParquetReader {
             match_by,
             tupledesc_schema,
             attributes,
+            &uri_as_string(&uri_info.uri),
         ))
     }
 
@@ -346,6 +351,7 @@ impl SingleParquetReader {
             match_by,
             tupledesc_schema,
             attributes,
+            opener.uri(),
         ))
     }
 
@@ -355,6 +361,7 @@ impl SingleParquetReader {
         match_by: MatchBy,
         tupledesc_schema: SchemaRef,
         attributes: &[FormData_pg_attribute],
+        file_uri: &str,
     ) -> Self {
         // the tupledesc schema only knows the crs of the target columns, so the geometry and
         // geography columns take the crs that the file has for them. This happens before the
@@ -373,6 +380,7 @@ impl SingleParquetReader {
             tupledesc_schema.clone(),
             attributes,
             match_by,
+            file_uri,
         );
 
         let attribute_contexts = collect_arrow_to_pg_attribute_contexts(
@@ -386,6 +394,7 @@ impl SingleParquetReader {
             attribute_contexts,
             match_by,
             total_rows,
+            file_uri: file_uri.to_string(),
         }
     }
 
@@ -436,16 +445,18 @@ impl SingleParquetReader {
         for (attribute_idx, attribute_context) in self.attribute_contexts.iter().enumerate() {
             let name = attribute_context.name();
 
+            let file_uri = &self.file_uri;
+
             let column_array = match self.match_by {
                 MatchBy::Position => record_batch
                     .columns()
                     .get(attribute_idx)
-                    .unwrap_or_else(|| panic!("column {name} not found"))
+                    .unwrap_or_else(|| panic!("column {name} not found in file \"{file_uri}\""))
                     .clone(),
 
                 MatchBy::Name => column_index_by_name(record_batch.schema_ref().fields(), name)
                     .map(|column_idx| record_batch.column(column_idx))
-                    .unwrap_or_else(|| panic!("column {name} not found"))
+                    .unwrap_or_else(|| panic!("column {name} not found in file \"{file_uri}\""))
                     .clone(),
             };
 
@@ -461,7 +472,9 @@ impl SingleParquetReader {
                     round_for_integer_cast(&column_array, attribute_context.data_type(), name);
 
                 cast_with_options(&column_array, attribute_context.data_type(), &cast_options)
-                    .unwrap_or_else(|e| panic!("failed to cast column {name}: {e}"))
+                    .unwrap_or_else(|e| {
+                        panic!("failed to cast column {name} of file \"{file_uri}\": {e}")
+                    })
             } else {
                 column_array
             };

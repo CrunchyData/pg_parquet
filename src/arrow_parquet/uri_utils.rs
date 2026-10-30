@@ -415,6 +415,12 @@ impl ParquetRowGroupOpener {
         })
     }
 
+    // uri is the file the opener was opened on, which is what names the file in the errors of
+    // a worker that read a row group of it
+    pub(crate) fn uri(&self) -> &str {
+        &self.uri
+    }
+
     // row_groups is how many row groups the file holds and how many rows they hold together
     pub(crate) fn row_groups(&self) -> (u32, i64) {
         let metadata = self.reader_metadata.metadata();
