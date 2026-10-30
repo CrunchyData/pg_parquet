@@ -2,18 +2,34 @@
 mod tests {
     use std::{collections::HashMap, io::Write};
 
-    use object_store::ClientConfigKey;
+    use object_store::{ClientConfigKey, ObjectStoreExt, PutPayload};
     use parquet::errors::ParquetError;
     use pgrx::{pg_sys::Timestamp, pg_test, Spi};
 
     use crate::{
+        arrow_parquet::uri_utils::ParsedUriInfo,
         object_store::{
-            client_options::load_client_options, object_store_error_message, proxy_hint,
+            client_options::load_client_options, object_store_cache::get_or_create_object_store,
+            object_store_error_message, proxy_hint,
         },
         pgrx_tests::common::{
             copy_to_helper, CopyOptionValue, FileCleanup, TestTable, LOCAL_TEST_FILE_PATH,
         },
+        PG_BACKEND_TOKIO_RUNTIME,
     };
+
+    // put_empty_object writes an object that holds no byte, the way the marker of a folder an
+    // object store browser created and the "_SUCCESS" of a job that wrote one are written
+    fn put_empty_object(uri: &str) {
+        let uri_info = ParsedUriInfo::try_from(uri).unwrap();
+
+        let copy_from = false;
+        let (store, location) = get_or_create_object_store(&uri_info, copy_from);
+
+        PG_BACKEND_TOKIO_RUNTIME
+            .block_on(async move { store.put(&location, PutPayload::new()).await })
+            .unwrap();
+    }
 
     fn object_store_cache_clear() {
         Spi::run("SELECT parquet_test.object_store_cache_clear();").unwrap();
@@ -302,6 +318,45 @@ mod tests {
     #[should_panic(expected = "unsupported port 4443 in uri gs://testbucket:4443/port.parquet")]
     fn test_list_gcs_uri_with_a_port_is_refused() {
         Spi::run("SELECT * FROM parquet.list('gs://testbucket:4443/port.parquet');").unwrap();
+    }
+
+    #[pg_test]
+    fn test_s3_uri_pattern_over_an_empty_marker() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let folder = format!("s3://{test_bucket_name}/test_s3_uri_pattern_over_an_empty_marker");
+        let s3_uri = format!("{folder}/part-0.parquet");
+
+        let copy_to_command = format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{s3_uri}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to_command).unwrap();
+
+        // the marker a job that wrote the folder leaves next to the files it wrote
+        put_empty_object(&format!("{folder}/_SUCCESS"));
+
+        // the marker holds no row, so the pattern matches the file written next to it alone
+        let listed = Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM parquet.list('{folder}/**');"
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(listed, 1);
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        // and the copy reads that file rather than failing over the marker
+        let copy_from_command =
+            format!("COPY test_table FROM '{folder}/**' WITH (format parquet);");
+        Spi::run(copy_from_command.as_str()).unwrap();
+
+        let count_query = "select count(*) from test_table;";
+        let result = Spi::get_one::<i64>(count_query).unwrap().unwrap();
+        assert_eq!(result, 10);
     }
 
     #[pg_test]

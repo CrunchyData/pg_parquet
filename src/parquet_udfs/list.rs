@@ -89,6 +89,17 @@ pub(crate) fn list_uri(uri_info: &ParsedUriInfo) -> Vec<(String, i64)> {
 
     report_parts_not_listed(&parts);
 
+    // an object store also holds objects that are no data of their own: the zero byte marker a
+    // browser writes for a folder it was asked to create, whose name ends at the separator,
+    // and the "_SUCCESS" of a job that wrote the folder. A reader refuses either of them,
+    // since a parquet file is its footer at the very least, so a pattern that covers one would
+    // fail over it rather than read the files it matched next to it. They hold no row, so they
+    // are reported rather than read, the way the parts of a copy are.
+    let (empty_files, matched_uris): (Vec<_>, Vec<_>) =
+        matched_uris.into_iter().partition(|(_, size)| *size == 0);
+
+    report_empty_files_not_listed(&empty_files);
+
     matched_uris
 }
 
@@ -111,6 +122,29 @@ fn report_parts_not_listed(parts: &[(String, i64)]) {
             "\"{part}\" and the files named like it hold the ranges of a copy rather than \
              data of their own. A copy that is still running takes its parts with it, and the \
              parts of a copy whose backend did not survive it can be removed."
+        )
+    );
+}
+
+// report_empty_files_not_listed describes the empty objects a pattern covered. They are not
+// listed, since a file holding no byte holds no row either, and the report is what tells the
+// user that the folder the pattern names holds a marker a reader would have refused.
+fn report_empty_files_not_listed(empty_files: &[(String, i64)]) {
+    let Some((empty_file, _)) = empty_files.first() else {
+        return;
+    };
+
+    ereport!(
+        PgLogLevel::WARNING,
+        PgSqlErrorCode::ERRCODE_WARNING,
+        format!(
+            "{} empty file(s) that the pattern matches are not read",
+            empty_files.len()
+        ),
+        format!(
+            "\"{empty_file}\" holds no byte, and a parquet file is its footer at the very \
+             least. The marker an object store browser writes for a folder it creates and the \
+             \"_SUCCESS\" of a job that wrote one are empty this way."
         )
     );
 }
