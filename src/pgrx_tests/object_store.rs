@@ -320,6 +320,99 @@ mod tests {
         Spi::run("SELECT * FROM parquet.list('gs://testbucket:4443/port.parquet');").unwrap();
     }
 
+    // a "#" written in the name of an object ends the path of its uri, so such a uri names a
+    // shorter object than it appears to, which a copy would read or write in its place
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported \"#\" in uri s3://testbucket/report#2026.parquet. Everything from the \"#\" is the fragment of the uri rather than part of the name of the object, so this uri names the object \"report\" rather than the one it appears to name. Write a \"#\" that is part of the name of an object as \"%23\", e.g. s3://testbucket/report%232026.parquet."
+    )]
+    fn test_copy_to_s3_uri_with_a_fragment_is_refused() {
+        Spi::run(
+            "COPY (SELECT 1 AS a) TO 's3://testbucket/report#2026.parquet' WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported \"?\" in uri az://testcontainer/query.parquet?a=1. Everything from the \"?\" is the query of the uri rather than part of the name of the object, so this uri names the object \"query.parquet\" rather than the one it appears to name. Write a \"?\" that is part of the name of an object as \"%3F\", e.g. az://testcontainer/query.parquet%3Fa=1."
+    )]
+    fn test_copy_from_azure_uri_with_a_query_is_refused() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table FROM 'az://testcontainer/query.parquet?a=1' WITH (format parquet);")
+            .unwrap();
+    }
+
+    // a "?" that follows the "#" of a uri is part of its fragment rather than a query of its own
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported \"#\" in uri gs://testbucket/both#a?b.parquet. Everything from the \"#\" is the fragment of the uri"
+    )]
+    fn test_list_gcs_uri_with_a_fragment_holding_a_query_is_refused() {
+        Spi::run("SELECT * FROM parquet.list('gs://testbucket/both#a?b.parquet');").unwrap();
+    }
+
+    // the escapes the refusals above ask for name an object whose name holds the characters
+    // themselves, which is an object like any other
+    #[pg_test]
+    fn test_s3_object_whose_name_holds_a_fragment_marker() {
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!(
+            "s3://{test_bucket_name}/test_s3_object_whose_name_holds_a_fragment_marker/report%232026%3Fa.parquet"
+        );
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{s3_uri}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(&format!(
+            "COPY test_table FROM '{s3_uri}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Spi::get_one::<i32>("SELECT a FROM test_table;").unwrap(),
+            Some(1)
+        );
+    }
+
+    // a local path never reaches the refusals above: building the uri of a path escapes the
+    // characters that would end it, so a file whose name holds one is copied as it is named
+    #[pg_test]
+    fn test_local_path_with_a_fragment_marker() {
+        let local_path = "/tmp/pg_parquet_test#2026.parquet";
+
+        let _file_cleanup = FileCleanup::new(local_path);
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{local_path}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert!(
+            std::path::Path::new(local_path).exists(),
+            "the copy wrote no \"{local_path}\""
+        );
+
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(&format!(
+            "COPY test_table FROM '{local_path}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Spi::get_one::<i32>("SELECT a FROM test_table;").unwrap(),
+            Some(1)
+        );
+    }
+
     #[pg_test]
     fn test_s3_uri_pattern_over_an_empty_marker() {
         object_store_cache_clear();
