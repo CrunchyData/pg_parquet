@@ -858,10 +858,39 @@ impl ParquetObjectStoreReader {
 
         Some(tail == PARQUET_MAGIC)
     }
+
+    // ensure_range_is_in_the_object refuses a read of bytes the object does not have. The footer
+    // of a parquet file says where in the file the rows it describes are, and an object that is
+    // shorter than those places is not the file its footer describes, which is what a file cut
+    // short after its footer was written and two files written into one object both leave behind.
+    // Such a read is answered by nothing useful: a store answers a range that begins in the
+    // object and ends after it with the bytes it does hold, which the reader slices the asked for
+    // range out of and panics over ("range start must not be greater than end: 742858 <= 2925",
+    // measured on minio, fake-gcs-server and a webdav), and a local store answers it with a
+    // message that reports the same number as both what it expected and what it found. The read
+    // is refused with what is wrong with the object instead.
+    fn ensure_range_is_in_the_object(&self, range: &Range<u64>) -> ParquetResult<()> {
+        if range.end <= self.file_size {
+            return Ok(());
+        }
+
+        Err(ParquetError::General(format!(
+            "the object \"{}\" is {} bytes long, and the footer read from it places a part of \
+             the file it describes at the bytes {}..{} of it, which are beyond its end. The \
+             object is not the file that footer describes: a file that was cut short after its \
+             footer was written reads this way, as do two parquet files that were written into \
+             one object. Write the file again.",
+            self.location, self.file_size, range.start, range.end
+        )))
+    }
 }
 
 impl AsyncFileReader for ParquetObjectStoreReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, ParquetResult<Bytes>> {
+        if let Err(e) = self.ensure_range_is_in_the_object(&range) {
+            return std::future::ready(Err(e)).boxed();
+        }
+
         async move { self.read_range(range).await }.boxed()
     }
 
@@ -870,6 +899,10 @@ impl AsyncFileReader for ParquetObjectStoreReader {
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, ParquetResult<Vec<Bytes>>> {
         async move {
+            for range in &ranges {
+                self.ensure_range_is_in_the_object(range)?;
+            }
+
             // the ranges are merged and read the way ObjectStore::get_ranges reads them, which
             // is what this would call if a read of a range could be conditional there
             coalesce_ranges(

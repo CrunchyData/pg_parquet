@@ -31,6 +31,47 @@ mod tests {
             .unwrap();
     }
 
+    // cut_the_object_short_after_its_footer rewrites an object as the head of the parquet file it
+    // holds followed by the footer of it, which is the file an upload that stopped halfway and a
+    // "cat a.parquet b.parquet" both leave behind: a footer that describes rows the object does
+    // not hold, read from an object that ends in the marker a parquet file ends in
+    fn cut_the_object_short_after_its_footer(uri: &str, head_len: usize) {
+        let uri_info = ParsedUriInfo::try_from(uri).unwrap();
+
+        // the object is read through a reader and written through a writer, since asking for a
+        // writer of a local path truncates the file as the store is built
+        let (reader, location) = get_or_create_object_store(&uri_info, true);
+
+        PG_BACKEND_TOKIO_RUNTIME.block_on(async move {
+            let file = reader.get(&location).await.unwrap().bytes().await.unwrap();
+
+            // a parquet file ends in its metadata, the length of it and then the marker, so the
+            // footer is the last length + 8 bytes of the file
+            let metadata_length_at = file.len() - 8;
+            let metadata_length = u32::from_le_bytes(
+                file[metadata_length_at..metadata_length_at + 4]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            let footer_at = file.len() - (metadata_length + 8);
+
+            assert!(
+                head_len < footer_at,
+                "the head of the file reaches its footer"
+            );
+
+            let mut cut_short = file.slice(0..head_len).to_vec();
+            cut_short.extend_from_slice(&file.slice(footer_at..));
+
+            let (writer, location) = get_or_create_object_store(&uri_info, false);
+
+            writer
+                .put(&location, PutPayload::from(cut_short))
+                .await
+                .unwrap();
+        });
+    }
+
     fn object_store_cache_clear() {
         Spi::run("SELECT parquet_test.object_store_cache_clear();").unwrap();
     }
@@ -1777,6 +1818,65 @@ mod tests {
                 "the read of an overwritten object failed with \"{error}\""
             );
         });
+    }
+
+    // an object whose footer describes rows beyond the end of the object says what is wrong with
+    // the object. The read of such a row group is answered by nothing useful: a store answers a
+    // range that begins in the object and ends after it with the bytes it does hold, which the
+    // reader panics over while slicing the range it asked for out of them.
+    #[pg_test]
+    #[should_panic(
+        expected = "which are beyond its end. The object is not the file that footer describes: a file that was cut short after its footer was written reads this way, as do two parquet files that were written into one object. Write the file again."
+    )]
+    fn test_s3_read_of_an_object_cut_short_after_its_footer_is_refused() {
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let s3_uri = format!(
+            "s3://{test_bucket_name}/test_s3_read_of_an_object_cut_short_after_its_footer/cut_short.parquet"
+        );
+
+        // the rows are enough that the row groups of the file lie beyond the head kept below
+        Spi::run(&format!(
+            "COPY (SELECT i AS a, i::text AS b FROM generate_series(1, 100000) i) TO '{s3_uri}'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+
+        cut_the_object_short_after_its_footer(&s3_uri, 2000);
+
+        Spi::run("CREATE TABLE test_table (a int, b text);").unwrap();
+
+        Spi::run(&format!(
+            "COPY test_table FROM '{s3_uri}' WITH (format parquet);"
+        ))
+        .unwrap();
+    }
+
+    // the local store answers such a read with a message of its own that reports the same number
+    // as both what it expected of the object and what it found in it, so the object is reported
+    // here as well rather than by the store
+    #[pg_test]
+    #[should_panic(expected = "the object \"tmp/pg_parquet_test_cut_short.parquet\" is ")]
+    fn test_local_read_of_a_file_cut_short_after_its_footer_is_refused() {
+        let local_path = "/tmp/pg_parquet_test_cut_short.parquet";
+
+        let _file_cleanup = FileCleanup::new(local_path);
+
+        Spi::run(&format!(
+            "COPY (SELECT i AS a, i::text AS b FROM generate_series(1, 100000) i) TO '{local_path}'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+
+        cut_the_object_short_after_its_footer(local_path, 2000);
+
+        Spi::run("CREATE TABLE test_table (a int, b text);").unwrap();
+
+        Spi::run(&format!(
+            "COPY test_table FROM '{local_path}' WITH (format parquet);"
+        ))
+        .unwrap();
     }
 
     #[pg_test]
