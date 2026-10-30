@@ -332,6 +332,8 @@ The byte counters mean different things for the two directions:
 
 The uri of an object is parsed as the url standard asks it to be parsed, which removes a tab, a newline and a carriage return in it and trims the whitespace around it, so a uri holding one of those characters is refused rather than copied into an object other than the one it names. A space inside the path is kept, so an object whose name holds one is written and read as it is.
 
+The object of a uri is named by the whole path of that uri, and a `#` or a `?` ends that path rather than belonging to it: `s3://bucket/report#2026.parquet` names the object `report`. A uri holding one of those characters is rejected, since it names an object other than the one it was written for, and an object whose name holds one is named by writing the character as `%23` or `%3F`. A query that is meant for the store rather than for the object, as the version id or the signature of a presigned uri is, is sent to no store. A local path is a path and not a uri, so both characters are part of the name of the file there.
+
 > [!NOTE]
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
 > Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.

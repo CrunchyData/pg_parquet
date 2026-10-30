@@ -2291,4 +2291,73 @@ mod tests {
             Some(1)
         );
     }
+
+    // a "#" written in the name of an object ends the path of its uri, so such a uri names a
+    // shorter object than it appears to, which a copy would read or write in its place
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported \"#\" in uri s3://testbucket/report#2026.parquet. Everything from the \"#\" is the fragment of the uri rather than part of the name of the object, so this uri names the object \"report\" rather than the one it appears to name. Write a \"#\" that is part of the name of an object as \"%23\", e.g. s3://testbucket/report%232026.parquet."
+    )]
+    fn test_copy_to_s3_uri_with_a_fragment_is_refused() {
+        Spi::run(
+            "COPY (SELECT 1 AS a) TO 's3://testbucket/report#2026.parquet' WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported \"?\" in uri az://testcontainer/query.parquet?a=1. Everything from the \"?\" is the query of the uri rather than part of the name of the object, so this uri names the object \"query.parquet\" rather than the one it appears to name. Write a \"?\" that is part of the name of an object as \"%3F\", e.g. az://testcontainer/query.parquet%3Fa=1."
+    )]
+    fn test_copy_from_azure_uri_with_a_query_is_refused() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(
+            "COPY test_table FROM 'az://testcontainer/query.parquet?a=1' WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
+    // a "?" that follows the "#" of a uri is part of its fragment rather than a query of its own
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported \"#\" in uri gs://testbucket/both#a?b.parquet. Everything from the \"#\" is the fragment of the uri"
+    )]
+    fn test_list_gcs_uri_with_a_fragment_holding_a_query_is_refused() {
+        Spi::run("SELECT * FROM parquet.list('gs://testbucket/both#a?b.parquet');").unwrap();
+    }
+
+    // the escapes the refusals above ask for name an object whose name holds the characters
+    // themselves, which is written, listed and read like any other object
+    #[pg_test]
+    fn test_s3_uri_with_an_escaped_truncating_sign() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        Spi::run("create table test_table(a int);").unwrap();
+
+        for escaped_name in ["hash%231.parquet", "query%3Fa=b.parquet"] {
+            let s3_uri = format!("s3://{test_bucket_name}/escaped_sign/{escaped_name}");
+
+            let copy_to_command = format!(
+                "COPY (SELECT a FROM generate_series(1,10) a) TO '{s3_uri}' WITH (format parquet);"
+            );
+            Spi::run(&copy_to_command).unwrap();
+
+            let copy_from_command =
+                format!("COPY test_table FROM '{s3_uri}' WITH (format parquet);");
+            Spi::run(copy_from_command.as_str()).unwrap();
+        }
+
+        let count_query = "select count(*) from test_table;";
+        let result = Spi::get_one::<i64>(count_query).unwrap().unwrap();
+        assert_eq!(result, 20);
+
+        let list_query =
+            format!("select count(*) from parquet.list('s3://{test_bucket_name}/escaped_sign/*');");
+        let listed = Spi::get_one::<i64>(&list_query).unwrap().unwrap();
+        assert_eq!(listed, 2);
+    }
 }
