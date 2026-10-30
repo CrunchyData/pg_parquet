@@ -2033,7 +2033,8 @@ mod tests {
         PG_BACKEND_TOKIO_RUNTIME.block_on(async move {
             let object = store.head(&location).await.unwrap();
 
-            let mut reader = ParquetObjectStoreReader::new(store, location, object.size);
+            let mut reader =
+                ParquetObjectStoreReader::new(store, location, object.size, object.e_tag);
 
             ParquetMetaDataReader::new()
                 .with_page_index_policy(PageIndexPolicy::Required)
