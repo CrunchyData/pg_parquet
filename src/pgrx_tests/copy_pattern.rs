@@ -33,6 +33,82 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "is not a parquet file at all rather than a damaged one")]
+    fn test_non_parquet_file_says_it_is_not_a_parquet_file() {
+        let parquet_filename = "/tmp/pg_parquet_test/dummy_for_the_folder.parquet";
+        let filename = "/tmp/pg_parquet_test/not_parquet.csv";
+        let _parquet_file = FileCleanup::new(parquet_filename);
+        let _file = FileCleanup::new(filename);
+
+        // the parquet copy creates the folder that the csv one then writes into
+        let copy_to_parquet =
+            format!("copy (select 1 as a) to '{parquet_filename}' with (format parquet);");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        // the csv holds more bytes than the marker, so the tail of the object is what the
+        // read of it compares rather than its length alone
+        let copy_to_csv = format!(
+            "copy (select i as a from generate_series(1, 100) i) to '{filename}' \
+             with (format csv);"
+        );
+        Spi::run(&copy_to_csv).unwrap();
+
+        Spi::run("create table test_table(a int);").unwrap();
+
+        let copy_from_command = format!("copy test_table from '{filename}' with (format parquet);");
+        Spi::run(&copy_from_command).unwrap();
+    }
+
+    // a parquet file whose bytes went bad is reported the way it always was: it ends in the
+    // marker, so what was read is a parquet file and the error is about the damage to it
+    // rather than about an object that is not one
+    #[pg_test]
+    fn test_damaged_parquet_file_is_not_called_a_non_parquet_file() {
+        let filename = "/tmp/pg_parquet_test/damaged.parquet";
+        let _file = FileCleanup::new(filename);
+
+        let copy_to_parquet =
+            format!("copy (select 1 as a) to '{filename}' with (format parquet);");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        // a parquet file ends in the length of its metadata and then the marker, so a length
+        // that reaches past the start of the file damages the file while leaving the marker
+        // that closes it in place
+        let mut bytes = std::fs::read(filename).unwrap();
+        let metadata_length_at = bytes.len() - 8;
+        bytes[metadata_length_at..metadata_length_at + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        std::fs::write(filename, bytes).unwrap();
+
+        Spi::run("create table test_table(a int);").unwrap();
+
+        let error = copy_from_error(filename);
+        assert!(
+            error.contains("failed to read the footer of uri")
+                && !error.contains("not a parquet file at all"),
+            "reading a damaged file reported: {error}"
+        );
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "is not a parquet file at all rather than a damaged one")]
+    fn test_empty_file_says_it_is_not_a_parquet_file() {
+        let filename = "/tmp/pg_parquet_test/empty_marker.parquet";
+        let _file = FileCleanup::new(filename);
+
+        // the copy creates the folder, and the file it wrote is then emptied: a job's success
+        // marker is an empty object, which is not a parquet file either
+        let copy_to_parquet =
+            format!("copy (select 1 as a) to '{filename}' with (format parquet);");
+        Spi::run(&copy_to_parquet).unwrap();
+        std::fs::File::create(filename).unwrap();
+
+        Spi::run("create table test_table(a int);").unwrap();
+
+        let copy_from_command = format!("copy test_table from '{filename}' with (format parquet);");
+        Spi::run(&copy_from_command).unwrap();
+    }
+
+    #[pg_test]
     fn test_path_with_special_parquet_file_name() {
         let filename = "/tmp/pg_parquet_test/du**mm*y1.parquet";
         let _file = FileCleanup::new(filename);
