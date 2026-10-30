@@ -359,6 +359,47 @@ mod tests {
         assert_eq!(result, 10);
     }
 
+    // "[" and "]" are no pattern syntax of a uri, so a pattern holding them reads the object
+    // whose name holds them rather than the one a glob class of a single character matches
+    #[pg_test]
+    fn test_s3_uri_pattern_with_a_bracket_in_the_name() {
+        object_store_cache_clear();
+
+        let test_bucket_name: String =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let folder = format!("s3://{test_bucket_name}/test_s3_uri_pattern_with_a_bracket");
+
+        // the object the pattern names, and the one a glob class would read instead
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{folder}/[a].parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+        Spi::run(&format!(
+            "COPY (SELECT 2 AS a) TO '{folder}/a.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+        Spi::run(&format!(
+            "COPY test_table FROM '{folder}/[a]*.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            Spi::get_one::<i64>("SELECT sum(a) FROM test_table;").unwrap(),
+            Some(1)
+        );
+
+        assert_eq!(
+            Spi::get_one::<String>(&format!(
+                "SELECT string_agg(uri, ' ' ORDER BY uri) FROM parquet.list('{folder}/[a]*.parquet')"
+            ))
+            .unwrap(),
+            Some(format!("{folder}/[a].parquet"))
+        );
+    }
+
     #[pg_test]
     #[should_panic(expected = "no files found that match the pattern")]
     fn test_s3_with_nonexistent_pattern_uri() {

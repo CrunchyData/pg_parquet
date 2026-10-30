@@ -277,7 +277,7 @@ SELECT * FROM parquet.column_stats('/tmp/product_example.parquet')
 ### List and read Parquet files from uri pattern
 
 You can call `SELECT * FROM parquet.list(<uri_pattern>)` to see all uris that matches with the uri pattern.
-Uri pattern can resolve `**` for directories and `*` for words in the uri. A file that holds no byte is not among the uris a pattern matches, since a Parquet file is its footer at the very least: the marker an object store browser writes for a folder it creates and the `_SUCCESS` of a job that wrote one are reported rather than read, so that a pattern covering one of them reads the files next to it instead of failing over it.
+Uri pattern can resolve `**` for directories and `*` for words in the uri. A file that holds no byte is not among the uris a pattern matches, since a Parquet file is its footer at the very least: the marker an object store browser writes for a folder it creates and the `_SUCCESS` of a job that wrote one are reported rather than read, so that a pattern covering one of them reads the files next to it instead of failing over it. No other character is pattern syntax, so a `?` or a `[...]` in a uri is part of the name of the object it is written as rather than a pattern that matches a name next to it.
 
 
 ```sql
