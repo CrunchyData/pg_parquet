@@ -128,6 +128,35 @@ mod tests {
         assert_eq!(result, 1);
     }
 
+    // a local path is a path and not a uri, so the characters that end the path of a uri are
+    // part of the name of the file instead of ending it: building the uri of a path escapes them
+    #[pg_test]
+    fn test_path_with_a_sign_that_would_end_a_uri() {
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        for filename in [
+            "/tmp/pg_parquet_test/hash#1.parquet",
+            "/tmp/pg_parquet_test/query?a=b.parquet",
+        ] {
+            let _file = FileCleanup::new(filename);
+
+            let copy_to_parquet =
+                format!("copy (select 1 as a) to '{filename}' with (format parquet);");
+            Spi::run(&copy_to_parquet).unwrap();
+
+            assert!(std::path::Path::new(filename).exists());
+
+            let copy_from_parquet =
+                format!("COPY test_table FROM '{filename}' WITH (format parquet);");
+            Spi::run(copy_from_parquet.as_str()).unwrap();
+        }
+
+        let count_query = "select count(*) from test_table;";
+        let result = Spi::get_one::<i64>(count_query).unwrap().unwrap();
+        assert_eq!(result, 2);
+    }
+
     #[pg_test]
     #[should_panic(expected = "failed to get object store metadata")]
     fn test_path_with_special_chars() {

@@ -306,6 +306,49 @@ impl ParsedUriInfo {
         ))
     }
 
+    // the name of an object is the path of its uri, and a "#" or a "?" written in that name ends
+    // the path: what follows is the fragment or the query of the uri, which names nothing in an
+    // object store and is sent to none. A uri carrying one names a shorter object than it appears
+    // to, which is read or written in place of the object the uri was meant to name, so it is
+    // refused instead. Both characters are part of the name of an object once they are escaped,
+    // which is what the refusal asks for. A local path never reaches this: building its uri
+    // escapes both of them.
+    fn try_reject_uri_beyond_the_path(uri: &Url, path: &Path) -> Result<(), String> {
+        let (marker, part, escape) = if let Some(index) = uri.as_str().find('?') {
+            match uri.as_str()[..index].find('#') {
+                // a "?" written after the "#" is part of the fragment rather than a query
+                Some(_) => ('#', "fragment", "%23"),
+                None => ('?', "query", "%3F"),
+            }
+        } else if uri.fragment().is_some() {
+            ('#', "fragment", "%23")
+        } else {
+            return Ok(());
+        };
+
+        // a query is where a uri carries what is meant for the store rather than for the object,
+        // which pg_parquet sends to none, and saying so keeps the escape from being read as the
+        // way to write one
+        let reaches_the_store = match marker {
+            '?' => {
+                " A query that is meant for the store, as the version id or the signature of \
+                    a presigned uri is, is sent to it by nothing."
+            }
+            _ => "",
+        };
+
+        // every one of both characters is escaped, since the ones that follow the first are
+        // already part of the query or the fragment and are meant as part of the name as well
+        let escaped_uri = uri.as_str().replace('?', "%3F").replace('#', "%23");
+
+        Err(format!(
+            "unsupported \"{marker}\" in uri {uri}. Everything from the \"{marker}\" is the \
+             {part} of the uri rather than part of the name of the object, so this uri names the \
+             object \"{path}\" rather than the one it appears to name. Write a \"{marker}\" that \
+             is part of the name of an object as \"{escape}\", e.g. {escaped_uri}.{reaches_the_store}"
+        ))
+    }
+
     fn try_parse_bucket(scheme: &ObjectStoreScheme, uri: &Url) -> Result<Option<String>, String> {
         match scheme {
             ObjectStoreScheme::AmazonS3 => parse_s3_bucket(uri)
@@ -338,6 +381,8 @@ impl TryFrom<&str> for ParsedUriInfo {
         let (scheme, path) = Self::try_parse_scheme(&uri)?;
 
         Self::try_reject_port(&scheme, &uri)?;
+
+        Self::try_reject_uri_beyond_the_path(&uri, &path)?;
 
         let bucket = Self::try_parse_bucket(&scheme, &uri)?;
 
