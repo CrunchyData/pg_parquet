@@ -1220,6 +1220,46 @@ mod tests {
         );
     }
 
+    // a folder destination whose uri already names an object is refused before the copy
+    // writes a file of it: a store that keeps a name for one thing only, e.g. a local path,
+    // refuses the first file of such a copy anyway, and a store that lets the name hold both
+    // leaves the copy worse off than refused, since the folder's own uri keeps reading the
+    // rows of whoever wrote the object there
+    #[pg_test]
+    fn test_copy_to_file_size_bytes_over_a_file_is_refused() {
+        let folder = "/tmp/pg_parquet_test_split_over_a_file";
+        let _folder = FileCleanup::new(folder);
+
+        create_wide_table();
+
+        // a plain copy writes a file of its own at the uri the folder would be written into
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{folder}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        for workers in [0, 4] {
+            Spi::run(&format!(
+                "SET pg_parquet.max_parallel_workers TO {workers};"
+            ))
+            .unwrap();
+
+            let error = failing_copy_to(&format!(
+                "COPY wide_table TO '{folder}'
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)"
+            ));
+
+            assert!(
+                error.contains(&format!("\"{folder}\" is an object")),
+                "the copy with {workers} worker(s) reported \"{error}\" instead"
+            );
+        }
+
+        // the file the copy was refused over is the file that was there, rows and all
+        assert_eq!(file_metadata(folder).0, 1);
+        assert_eq!(split_file_names(folder), Vec::<String>::new());
+    }
+
     // the files of a previous copy are removed once the copy has written its own rather than
     // before it starts, so a copy that fails leaves the files of the previous copy that it
     // did not write over, rather than a folder it emptied on its way out. The files it did
@@ -1389,6 +1429,51 @@ mod tests {
             assert_eq!(files, expected_files);
             assert_eq!(folder_rows(folder), 100);
         }
+    }
+
+    // a folder on an object store is a prefix, and a prefix is free to be the name of an
+    // object as well, which is a folder destination that the store itself has no reason to
+    // refuse: MinIO takes the files of such a copy and then lists none of them, so the copy
+    // reports its rows into a folder that reads as the object it was written over. The copy
+    // is refused rather than left to the store.
+    #[pg_test]
+    fn test_s3_copy_to_file_size_bytes_over_an_object_is_refused() {
+        let test_bucket_name =
+            std::env::var("AWS_S3_TEST_BUCKET").expect("AWS_S3_TEST_BUCKET not found");
+
+        let folder = format!("s3://{test_bucket_name}/parallel_copy_to/split_over_an_object");
+
+        // the bucket outlives the test, so a folder of an earlier run is no part of this one
+        empty_folder(&folder);
+
+        create_wide_table();
+
+        // a plain copy writes an object of its own at the uri the folder would be written to
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{folder}' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        for workers in [0, 4] {
+            Spi::run(&format!(
+                "SET pg_parquet.max_parallel_workers TO {workers};"
+            ))
+            .unwrap();
+
+            let error = failing_copy_to(&format!(
+                "COPY wide_table TO '{folder}'
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)"
+            ));
+
+            assert!(
+                error.contains(&format!("\"{folder}\" is an object")),
+                "the copy with {workers} worker(s) reported \"{error}\" instead"
+            );
+        }
+
+        // the object the copy was refused over is the object that was there, rows and all
+        assert_eq!(file_metadata(&folder).0, 1);
+        assert_eq!(folder_file_names(&folder), Vec::<String>::new());
     }
 
     // an object store holds no object of the file a copy is in the middle of writing: the

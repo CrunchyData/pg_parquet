@@ -86,6 +86,39 @@ fn child_file_id(file_name: &str) -> Option<i64> {
     (child_file_name(file_id) == file_name).then_some(file_id)
 }
 
+// reject_a_folder_over_an_object refuses a folder destination whose uri is the name of an
+// object, since the files of the copy would be written under a name that is taken. A local
+// path and an object store that keeps a name for one thing only, e.g. a filesystem backed one,
+// refuse the first file of such a copy, and a store that lets the name hold both leaves the
+// copy worse off than refused: the folder's own uri keeps reading the rows of whoever wrote the
+// object, and MinIO lists no file of the folder at all, so the copy reports the rows it wrote
+// into a folder that is read as the object it was written over.
+fn reject_a_folder_over_an_object(uri: &str) {
+    let Ok(uri_info) = ParsedUriInfo::try_from(uri) else {
+        // a uri that cannot be parsed is reported where the copy parses it
+        return;
+    };
+
+    // the store is asked for as a reader, since asking for a writer would create the folder
+    // itself as a file
+    let copy_from = true;
+    let (store, folder_path) = get_or_create_object_store(&uri_info, copy_from);
+
+    // only an answer that the name holds an object refuses the copy: a store that does not
+    // answer, which is what a credential that may write but not read gets, is no reason to
+    // refuse a copy that can write
+    if block_on(store.head(&folder_path)).is_err() {
+        return;
+    }
+
+    ereport!(
+        pgrx::PgLogLevel::ERROR,
+        pgrx::PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        format!("\"{uri}\" is an object, so the files of a folder destination cannot be written under it"),
+        "Remove that object, or write the folder into a uri of its own.",
+    );
+}
+
 // remove_files_of_a_previous_copy removes what a previous copy left in the folder
 // destination, which are the files with an id that this copy did not write, so that the
 // folder holds the rows of the copy that wrote it last rather than those rows merged with
@@ -440,6 +473,12 @@ extern "C-unwind" fn copy_split_startup(
     // that it leaves no empty file behind.
     if split_parquet_dest.options.file_size_bytes == INVALID_FILE_SIZE_BYTES {
         split_parquet_dest.create_new_child();
+    } else {
+        let uri = unsafe { CStr::from_ptr(split_parquet_dest.uri) }
+            .to_str()
+            .expect("invalid uri");
+
+        reject_a_folder_over_an_object(uri);
     }
 }
 
