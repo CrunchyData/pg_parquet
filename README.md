@@ -328,6 +328,8 @@ The byte counters mean different things for the two directions:
 ## Object Store Support
 `pg_parquet` supports reading and writing Parquet files from/to `S3`, `Azure Blob Storage`, `http(s)` and `Google Cloud Storage` object stores. The host of an `s3://`, `az://` or `gs://` uri is the bucket or the container that holds the object rather than an endpoint, so such a uri is written without a port and the endpoint is configured per store below. Only an `http(s)://` uri names its endpoint, and keeps the port of it.
 
+The uri of an object is parsed as the url standard asks it to be parsed, which removes a tab, a newline and a carriage return in it and trims the whitespace around it, so a uri holding one of those characters is refused rather than copied into an object other than the one it names. A space inside the path is kept, so an object whose name holds one is written and read as it is.
+
 > [!NOTE]
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
 > Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.

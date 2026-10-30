@@ -177,8 +177,39 @@ impl ParsedUriInfo {
 
             Url::parse(file_uri.as_str()).map_err(|e| e.to_string())
         } else {
+            Self::try_reject_removed_whitespace(uri)?;
+
             Url::parse(uri).map_err(|e| e.to_string())
         }
+    }
+
+    // a uri is parsed as the url standard asks it to be parsed, which removes every tab,
+    // carriage return and newline in it and trims the whitespace around it. The name of the
+    // object a copy writes is taken from the parsed uri, so a uri holding one of those
+    // characters names an object other than the one it was written as: a copy into
+    // "s3://bucket/cl<tab>ash.parquet" writes "s3://bucket/clash.parquet", over whatever that
+    // object holds, and reports the rows it wrote. Such a uri is refused instead. A local path
+    // is not parsed this way, since its characters are escaped into the uri it is turned into,
+    // and keeps the name it is given, a trailing space included.
+    fn try_reject_removed_whitespace(uri: &str) -> Result<(), String> {
+        let uri_as_parsed = uri
+            .chars()
+            .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+            .collect::<String>();
+
+        // the url standard trims the C0 controls and the spaces around a uri rather than
+        // removing them, so the uri is trimmed the same way before it is compared
+        let uri_as_parsed = uri_as_parsed.trim_matches(|c: char| c <= ' ');
+
+        if uri_as_parsed == uri {
+            return Ok(());
+        }
+
+        Err(format!(
+            "unsupported whitespace in uri {uri_as_parsed}. A tab, a newline, a carriage return \
+             and the whitespace around a uri are removed from it before the name of the object \
+             is read out of it, so write the uri without them."
+        ))
     }
 
     fn try_parse_scheme(uri: &Url) -> Result<(ObjectStoreScheme, Path), String> {
