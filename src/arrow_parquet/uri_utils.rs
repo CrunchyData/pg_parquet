@@ -215,6 +215,26 @@ impl ParsedUriInfo {
         ))
     }
 
+    // the credentials a uri can carry before its host, "s3://key:secret@bucket/a.parquet",
+    // never reach an object store: the store is built from the scheme, the host and the port
+    // alone, and its credentials come from the environment, so such a uri is signed with the
+    // environment's credentials no matter what it carries. What the credentials in it do reach
+    // is every message that names the uri, the server log included, so a uri holding them is
+    // refused rather than copied into a log file.
+    fn try_reject_credentials(uri: &Url) -> Result<(), String> {
+        if uri.username().is_empty() && uri.password().is_none() {
+            return Ok(());
+        }
+
+        let uri_without_credentials = format!("{}{}", object_store_base_uri(uri), uri.path());
+
+        Err(format!(
+            "unsupported credentials in uri {uri_without_credentials}. pg_parquet reads the \
+             credentials of an object store from its environment rather than from a uri, so \
+             write the uri without them."
+        ))
+    }
+
     fn try_parse_scheme(uri: &Url) -> Result<(ObjectStoreScheme, Path), String> {
         if let Ok(scheme_and_path) = ObjectStoreScheme::parse(uri) {
             return Ok(scheme_and_path);
@@ -312,6 +332,8 @@ impl TryFrom<&str> for ParsedUriInfo {
 
     fn try_from(uri: &str) -> Result<Self, Self::Error> {
         let uri = Self::try_parse_uri(uri)?;
+
+        Self::try_reject_credentials(&uri)?;
 
         let (scheme, path) = Self::try_parse_scheme(&uri)?;
 

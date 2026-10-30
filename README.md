@@ -336,6 +336,8 @@ The uri of an object is parsed as the url standard asks it to be parsed, which r
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
 > Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
 
+The credentials of an object store are read from the environment of the postgres process, as described below for each store, and never from the uri: a uri that carries credentials before its host, e.g. `s3://key:secret@bucket/file.parquet`, is rejected rather than signed with the credentials of the environment while its own are only written into the logs.
+
 #### S3 Storage
 
 The simplest way to configure object storage is by creating the standard `~/.aws/credentials` and `~/.aws/config` files:
