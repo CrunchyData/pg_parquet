@@ -15,10 +15,11 @@ use crate::arrow_parquet::uri_utils::ParsedUriInfo;
 use super::{
     aws::create_s3_object_store, azure::create_azure_object_store, gcs::create_gcs_object_store,
     http::create_http_object_store, local_file::create_local_file_object_store,
+    profile::current_profile,
 };
 
 // OBJECT_STORE_CACHE is a global cache for object stores per Postgres session.
-// It caches object stores based on the scheme and bucket.
+// It caches object stores based on the scheme, the bucket and the profile.
 // Local paths are not cached.
 static mut OBJECT_STORE_CACHE: Lazy<ObjectStoreCache> = Lazy::new(ObjectStoreCache::new);
 
@@ -76,15 +77,24 @@ impl ObjectStoreCache {
 
         // no need to cache local files
         if scheme == ObjectStoreScheme::Local {
-            let item = Self::create(scheme, &uri, copy_from);
+            let profile = None;
+            let item = Self::create(scheme, &uri, copy_from, profile);
             return (item, path);
         }
 
         let bucket = bucket.expect("bucket is None");
 
+        // the profile is read on every call rather than only when a store is created: it is
+        // what authorizes the credentials the store was built with, so a session that is no
+        // longer mapped to the profile is refused the store that is cached for it. It is a
+        // part of the key as well, since two profiles name two sets of credentials and the
+        // store of one must never answer the requests made with the other.
+        let profile = current_profile(&scheme);
+
         let key = ObjectStoreCacheKey {
             scheme: scheme.clone(),
             bucket,
+            profile: profile.clone(),
         };
 
         if let Some(item) = self.cache.get(&key) {
@@ -95,21 +105,26 @@ impl ObjectStoreCache {
             }
         }
 
-        let item = Self::create(scheme, &uri, copy_from);
+        let item = Self::create(scheme, &uri, copy_from, profile.as_deref());
 
         self.cache.insert(key, item.clone());
 
         (item, path)
     }
 
-    fn create(scheme: ObjectStoreScheme, uri: &Url, copy_from: bool) -> ObjectStoreWithExpiration {
+    fn create(
+        scheme: ObjectStoreScheme,
+        uri: &Url,
+        copy_from: bool,
+        profile: Option<&str>,
+    ) -> ObjectStoreWithExpiration {
         // object_store crate can recognize a bunch of different schemes and paths, but we only support
         // local, s3, azure, https and gs schemes with a subset of all supported paths.
         match scheme {
-            ObjectStoreScheme::AmazonS3 => create_s3_object_store(uri),
-            ObjectStoreScheme::MicrosoftAzure => create_azure_object_store(uri),
+            ObjectStoreScheme::AmazonS3 => create_s3_object_store(uri, profile),
+            ObjectStoreScheme::MicrosoftAzure => create_azure_object_store(uri, profile),
             ObjectStoreScheme::Http => create_http_object_store(uri),
-            ObjectStoreScheme::GoogleCloudStorage => create_gcs_object_store(uri),
+            ObjectStoreScheme::GoogleCloudStorage => create_gcs_object_store(uri, profile),
             ObjectStoreScheme::Local => create_local_file_object_store(uri, copy_from),
             _ => panic!(
                     "unsupported scheme {} in uri {}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes.",
@@ -153,12 +168,16 @@ impl ObjectStoreWithExpiration {
 }
 
 // ObjectStoreCacheKey is a key for the object store cache map
-// We cache object stores based on the scheme and bucket.
-// i.e. 1 object store per scheme and bucket.
+// We cache object stores based on the scheme, the bucket and the profile.
+// i.e. 1 object store per scheme, bucket and profile.
 #[derive(Clone, Eq, PartialEq)]
 struct ObjectStoreCacheKey {
     scheme: ObjectStoreScheme,
     bucket: String,
+
+    // the profile the credentials of the store were read from, None for the credentials of
+    // the server's environment
+    profile: Option<String>,
 }
 
 impl Hash for ObjectStoreCacheKey {
@@ -166,6 +185,7 @@ impl Hash for ObjectStoreCacheKey {
         let schema_tag = self.scheme.clone() as i32;
         schema_tag.hash(state);
         self.bucket.hash(state);
+        self.profile.hash(state);
     }
 }
 
@@ -201,6 +221,7 @@ mod parquet_test {
         (
             name!(scheme, String),
             name!(bucket, String),
+            name!(profile, Option<String>),
             name!(expire_at, Option<Timestamp>),
         ),
     > {
@@ -212,11 +233,12 @@ mod parquet_test {
             .map(|(key, value)| {
                 let scheme = format!("{:?}", key.scheme);
                 let bucket = key.bucket.clone();
+                let profile = key.profile.clone();
                 let expire_at = value
                     .expire_at
                     .map(|t| t.duration_since(UNIX_EPOCH).unwrap().as_micros() as Timestamp);
 
-                (scheme, bucket, expire_at)
+                (scheme, bucket, profile, expire_at)
             })
             .collect::<Vec<_>>();
 
