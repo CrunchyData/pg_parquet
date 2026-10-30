@@ -3,11 +3,11 @@ mod tests {
     use std::{collections::HashMap, io::Write};
 
     use object_store::{ClientConfigKey, ObjectStoreExt, PutPayload};
-    use parquet::errors::ParquetError;
+    use parquet::{arrow::async_reader::AsyncFileReader, errors::ParquetError};
     use pgrx::{pg_sys::Timestamp, pg_test, Spi};
 
     use crate::{
-        arrow_parquet::uri_utils::ParsedUriInfo,
+        arrow_parquet::uri_utils::{ParquetObjectStoreReader, ParsedUriInfo},
         object_store::{
             client_options::load_client_options, object_store_cache::get_or_create_object_store,
             object_store_error_message, proxy_hint,
@@ -1638,6 +1638,89 @@ mod tests {
              WITH (format parquet);"
         ))
         .unwrap();
+    }
+
+    // A copy reads a parquet file with a request for its footer and more requests for the row
+    // groups the footer points at, so the object all of them read has to be the object the
+    // footer came from: one that is overwritten in between is otherwise read as a file made of
+    // the footer of the object it was and the bytes of the object it became, which reports
+    // nothing at all when the two are laid out alike.
+    #[pg_test]
+    fn test_read_of_an_overwritten_object_is_refused() {
+        let other_file_path = "/tmp/pg_parquet_other_test.parquet";
+
+        let _file_cleanup = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+        let _other_file_cleanup = FileCleanup::new(other_file_path);
+
+        Spi::run(&format!(
+            "COPY (SELECT i AS a FROM generate_series(1, 100) i) TO '{LOCAL_TEST_FILE_PATH}'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+
+        // another parquet file of the same schema, which is what the object is overwritten with
+        Spi::run(&format!(
+            "COPY (SELECT i AS a FROM generate_series(1001, 1500) i) TO '{other_file_path}'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let original_bytes = std::fs::read(LOCAL_TEST_FILE_PATH).unwrap();
+        let other_bytes = std::fs::read(other_file_path).unwrap();
+
+        let uri_info = ParsedUriInfo::try_from(LOCAL_TEST_FILE_PATH).unwrap();
+
+        let copy_from = true;
+        let (store, location) = get_or_create_object_store(&uri_info, copy_from);
+
+        let (refused, read_without_a_version) = PG_BACKEND_TOKIO_RUNTIME.block_on(async move {
+            let object = store.head(&location).await.unwrap();
+
+            let mut reader = ParquetObjectStoreReader::new(
+                store.clone(),
+                location.clone(),
+                object.size,
+                object.e_tag,
+            );
+
+            // the footer is read from the object as it is before it is overwritten
+            reader.get_metadata(None).await.unwrap();
+
+            std::fs::copy(other_file_path, LOCAL_TEST_FILE_PATH).unwrap();
+
+            let refused = reader.get_bytes(0..object.size).await.unwrap_err();
+
+            // the same read of a reader that holds no version of the object, which is what a
+            // store that reports none leaves: it reads the bytes of the object it became
+            let mut reader_without_a_version =
+                ParquetObjectStoreReader::new(store, location, object.size, None);
+
+            let read_without_a_version = reader_without_a_version
+                .get_bytes(0..object.size)
+                .await
+                .unwrap();
+
+            (refused, read_without_a_version)
+        });
+
+        assert!(
+            refused
+                .to_string()
+                .contains("was overwritten while it was being read"),
+            "the read of the overwritten object was not described as one: {refused}"
+        );
+
+        assert_eq!(
+            read_without_a_version.as_ref(),
+            &other_bytes[..original_bytes.len()],
+            "a read that asks for no version read something other than the object it found"
+        );
+
+        assert_ne!(
+            read_without_a_version.as_ref(),
+            original_bytes.as_slice(),
+            "the object was not overwritten at all"
+        );
     }
 
     #[pg_test]
