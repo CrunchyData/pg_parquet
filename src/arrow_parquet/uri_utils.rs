@@ -526,24 +526,12 @@ fn open_parquet_file(
             }
         };
 
-        // a store that answers a head which asks for a version of the object without checking
-        // that the object still is that version is caught by the version it reports, which is
-        // what keeps a reader that was given a version from reading the object it became
-        if let Some(expected_version) = expected_version {
-            if object_store_meta.e_tag.as_deref() != Some(expected_version) {
-                return Err(format!(
-                    "failed to read uri {}: {}",
-                    uri_info.uri,
-                    overwritten_object_message(
-                        &location,
-                        &answered_version_detail(
-                            expected_version,
-                            object_store_meta.e_tag.as_deref()
-                        )
-                    )
-                ));
-            }
-        }
+        ensure_version_is_the_one_asked_for(
+            uri_info.uri.as_str(),
+            &location,
+            expected_version,
+            object_store_meta.e_tag.as_deref(),
+        )?;
 
         // the version the store reports for the object is what the reads of the file ask for,
         // so that they all read the object this metadata describes
@@ -912,6 +900,34 @@ fn refused_version_detail(error: object_store::Error) -> String {
         "The read of the version it was asked for: {}",
         object_store_error_message(error)
     )
+}
+
+// ensure_version_is_the_one_asked_for refuses the metadata a store answered a head with that
+// asked for a version of the object without checking that the object still is that version:
+// the version the store reports for what it answered is what catches it, which is what keeps a
+// reader that was given a version from reading the object it became. It is the counterpart of
+// ParquetObjectStoreReader::ensure_version_was_read for the head a file is opened with.
+pub(crate) fn ensure_version_is_the_one_asked_for(
+    uri: &str,
+    location: &Path,
+    expected_version: Option<&str>,
+    answered: Option<&str>,
+) -> Result<(), String> {
+    let Some(expected_version) = expected_version else {
+        return Ok(());
+    };
+
+    if answered == Some(expected_version) {
+        return Ok(());
+    }
+
+    Err(format!(
+        "failed to read uri {uri}: {}",
+        overwritten_object_message(
+            location,
+            &answered_version_detail(expected_version, answered)
+        )
+    ))
 }
 
 // answered_version_detail describes a read a store answered with another version than the one
