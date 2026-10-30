@@ -34,6 +34,45 @@ pub(crate) fn object_store_error_message(error: impl Error + 'static) -> String 
     message
 }
 
+// write_error_message describes an error that failed a write into an object store. It is the
+// message of the error, and a sentence about what it is not when the error is the one giving
+// up an upload answers with: a writer that could neither finish nor give up the upload it
+// started reports the error of giving it up rather than the error that failed the write.
+pub(crate) fn write_error_message(error: impl Error + 'static) -> String {
+    let mut message = object_store_error_message(error);
+
+    if let Some(hint) = given_up_upload_hint(&message) {
+        message.push(' ');
+        message.push_str(hint);
+    }
+
+    message
+}
+
+// given_up_upload_hint describes a write that was answered with the error of giving up an
+// upload, which is a DELETE of an upload id: object_store's writer gives the upload it
+// started up when the write into it fails, and answers with the error of that abort when the
+// abort fails as well, so the error that failed the write is reported nowhere. The error of
+// an abort reads as if the copy was removing something, which is worth a sentence since
+// what the copy was doing is writing, and the upload it wrote into is still there.
+//
+// The request is matched in the message since object_store only exposes it there, as the
+// types that carry a failed request, RetryError and RequestError, are private to it.
+pub(crate) fn given_up_upload_hint(object_store_error_message: &str) -> Option<&'static str> {
+    let message = object_store_error_message.to_lowercase();
+
+    if message.contains("performing delete") && message.contains("uploadid=") {
+        return Some(
+            "(this is the error of giving up the upload the COPY TO had started, which it gave \
+             up because the write into it failed first; the error of that write is not reported \
+             by the writer of the destination, and the upload is left unfinished, which only the \
+             rule of the bucket for unfinished uploads removes)",
+        );
+    }
+
+    None
+}
+
 // proxy_hint describes an error message that carries an html response body. An object
 // store answers with xml or json, so an html page means that something else answered,
 // a proxy in front of the endpoint for instance, which is worth pointing out since the

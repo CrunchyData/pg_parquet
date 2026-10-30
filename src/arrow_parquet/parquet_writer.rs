@@ -21,7 +21,7 @@ use crate::{
         uri_utils::{parquet_writer_from_uri, uri_as_string},
     },
     block_on,
-    object_store::object_store_error_message,
+    object_store::{object_store_error_message, write_error_message},
     parquet_copy_hook::copy_to_split_dest_receiver::CopyToParquetOptions,
     pgrx_utils::{collect_attributes_for, CollectAttributesFor},
     type_compat::{geometry::reset_postgis_context, map::reset_map_context},
@@ -182,10 +182,12 @@ impl ParquetWriterContext {
     pub(crate) fn finalize(&mut self) {
         let uri = &self.uri;
 
+        // the writer finishes the upload of the destination here, which is the one write that
+        // gives an upload up when it fails, so the error of it is described as such a write
         let metadata = block_on(self.parquet_writer.finish()).unwrap_or_else(|e| {
             panic!(
                 "failed to finish the parquet writer of uri {uri}: {}",
-                object_store_error_message(e)
+                write_error_message(e)
             )
         });
 

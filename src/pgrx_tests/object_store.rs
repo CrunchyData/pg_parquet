@@ -9,8 +9,9 @@ mod tests {
     use crate::{
         arrow_parquet::uri_utils::{ParquetObjectStoreReader, ParsedUriInfo},
         object_store::{
-            client_options::load_client_options, no_multipart_upload_hint,
+            client_options::load_client_options, given_up_upload_hint, no_multipart_upload_hint,
             object_store_cache::get_or_create_object_store, object_store_error_message, proxy_hint,
+            write_error_message,
         },
         pgrx_tests::common::{
             copy_to_helper, CopyOptionValue, FileCleanup, TestTable, LOCAL_TEST_FILE_PATH,
@@ -685,6 +686,66 @@ mod tests {
 
         assert!(message.starts_with("Operation `put_multipart_opts` not yet implemented"));
         assert!(message.contains("takes an object of at most 10 MiB"));
+    }
+
+    #[pg_test]
+    fn test_given_up_upload_hint() {
+        // the abort of an upload, which is the error a write that could not finish its upload
+        // and could not give it up either is answered with
+        assert!(given_up_upload_hint(
+            "The operation lacked the necessary privileges to complete for path t.parquet: \
+             Error performing DELETE http://localhost:9000/testbucket/t.parquet?uploadId=abc - \
+             Server returned non-2xx status code: 403 Forbidden: <Code>AccessDenied</Code>"
+        )
+        .is_some());
+
+        // the write of a part carries an upload id as well, and is the error of the write
+        // itself rather than of giving the upload up
+        assert!(given_up_upload_hint(
+            "The operation lacked the necessary privileges to complete for path t.parquet: \
+             Error performing PUT http://localhost:9000/testbucket/t.parquet?partNumber=1&\
+             uploadId=abc - Server returned non-2xx status code: 403 Forbidden"
+        )
+        .is_none());
+
+        // the removal of an object names no upload, so it is the copy giving up what it wrote
+        // rather than the upload it wrote into
+        assert!(given_up_upload_hint(
+            "Error performing DELETE http://localhost:9000/testbucket/t.parquet - \
+             Server returned non-2xx status code: 403 Forbidden"
+        )
+        .is_none());
+
+        assert!(given_up_upload_hint("Generic S3 error: 404 Not Found").is_none());
+    }
+
+    #[pg_test]
+    fn test_write_error_message_says_the_abort_is_not_the_write() {
+        let abort_error = object_store::Error::PermissionDenied {
+            path: "t.parquet".into(),
+            source: "Error performing DELETE http://localhost:9000/testbucket/t.parquet\
+                     ?uploadId=abc - Server returned non-2xx status code: 403 Forbidden"
+                .into(),
+        };
+
+        let message = write_error_message(ParquetError::External(Box::new(abort_error)));
+
+        assert!(message.starts_with("The operation lacked the necessary privileges"));
+        assert!(message.ends_with("for unfinished uploads removes)"));
+
+        // a write that failed on its own is described by its own error and nothing else
+        let write_error = ParquetError::External(Box::new(object_store::Error::Generic {
+            store: "S3",
+            source: "Server returned non-2xx status code: 500 Internal Server Error".into(),
+        }));
+        let expected_message = object_store_error_message(ParquetError::External(Box::new(
+            object_store::Error::Generic {
+                store: "S3",
+                source: "Server returned non-2xx status code: 500 Internal Server Error".into(),
+            },
+        )));
+
+        assert_eq!(write_error_message(write_error), expected_message);
     }
 
     #[pg_test]
