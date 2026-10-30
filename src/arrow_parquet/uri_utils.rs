@@ -133,6 +133,37 @@ impl ParsedUriInfo {
         self.tmp_fd.is_some() && !self.is_program
     }
 
+    // ensure_names_an_object refuses a uri that names the store but no object in it, e.g.
+    // "s3://bucket", which a bucket name with an empty path appended to it leaves behind. The
+    // object store takes the name of the object it is given, and an empty one asks it to read
+    // or write the store itself: a read is answered with the zero bytes a bucket is long, which
+    // reads as a file that is too short to hold a footer, and a write is refused only once
+    // every row has been written and the upload is being finished, in the words of the store
+    // and once per store at that. The uri is refused before any of that instead.
+    //
+    // A folder destination is not reached here, since the files it holds are named after it,
+    // and neither is a pattern, which names the objects it matches rather than a single one.
+    pub(crate) fn ensure_names_an_object(&self) -> Result<(), String> {
+        if !self.path.as_ref().is_empty() {
+            return Ok(());
+        }
+
+        let (names_what, example) = match self.scheme {
+            ObjectStoreScheme::AmazonS3 => ("the bucket", "s3://bucket/file.parquet"),
+            ObjectStoreScheme::MicrosoftAzure => ("the container", "az://container/file.parquet"),
+            ObjectStoreScheme::GoogleCloudStorage => ("the bucket", "gs://bucket/file.parquet"),
+            ObjectStoreScheme::Http => ("the endpoint", "https://endpoint/file.parquet"),
+            _ => ("the root", "/tmp/file.parquet"),
+        };
+
+        Err(format!(
+            "uri {} names no object. It names {names_what} and nothing in it, while an object \
+             is named by the path that follows: write the name of the object as well, e.g. \
+             {example}.",
+            self.uri
+        ))
+    }
+
     fn try_parse_uri(uri: &str) -> Result<Url, String> {
         if !uri.contains("://") {
             // local file. The built uri is parsed again so that the ".." segments of the path
@@ -271,6 +302,8 @@ pub(crate) const RECORD_BATCH_SIZE: i64 = 1024;
 fn open_parquet_file(
     uri_info: &ParsedUriInfo,
 ) -> Result<(ParquetObjectStoreReader, ArrowReaderMetadata, usize), String> {
+    uri_info.ensure_names_an_object()?;
+
     let copy_from = true;
 
     // the object store is created before the runtime is entered, since creating one blocks on

@@ -188,6 +188,30 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "uri s3://testbucket names no object. It names the bucket")]
+    fn test_copy_to_s3_uri_without_an_object_is_refused() {
+        let copy_to_command =
+            "COPY (SELECT a FROM generate_series(1,10) a) TO 's3://testbucket' WITH (format parquet);";
+        Spi::run(copy_to_command).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "uri az://testcontainer/ names no object. It names the container")]
+    fn test_copy_from_azure_uri_without_an_object_is_refused() {
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command = "COPY test_table FROM 'az://testcontainer/' WITH (format parquet);";
+        Spi::run(copy_from_command).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "uri gs://testbucket names no object. It names the bucket")]
+    fn test_file_metadata_of_a_gcs_uri_without_an_object_is_refused() {
+        Spi::run("SELECT * FROM parquet.file_metadata('gs://testbucket');").unwrap();
+    }
+
+    #[pg_test]
     #[should_panic(expected = "no files found that match the pattern")]
     fn test_s3_with_nonexistent_pattern_uri() {
         object_store_cache_clear();
