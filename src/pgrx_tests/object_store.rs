@@ -1695,4 +1695,62 @@ mod tests {
 
         Spi::run("COPY test_table FROM 'ftp://host/dummy.parquet' WITH (format parquet);").unwrap();
     }
+
+    // a uri whose scheme is supported and whose path is not is reported as the path it is,
+    // rather than as a scheme pg_parquet does not support
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported path in uri s3://testbucket/empty//segment.parquet: Path \"/empty//segment.parquet\" contained empty path segment"
+    )]
+    fn test_copy_to_uri_with_an_empty_path_segment_reports_the_path() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(
+            "COPY test_table TO 's3://testbucket/empty//segment.parquet' WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
+    // a separator escaped into a segment is a path error too, and the uri is reported as it
+    // was written rather than as the path the object store decoded it into
+    #[pg_test]
+    #[should_panic(expected = "unsupported path in uri s3://testbucket/..%2F..%2Fescape.parquet")]
+    fn test_copy_from_uri_with_an_escaped_separator_reports_the_path() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run(
+            "COPY test_table FROM 's3://testbucket/..%2F..%2Fescape.parquet' WITH (format parquet);",
+        )
+        .unwrap();
+    }
+
+    // a uri that has both an unsupported scheme and a path the object store refuses is
+    // reported as the scheme, which is the one the user has to fix first
+    #[pg_test]
+    #[should_panic(expected = "unrecognized uri ftp://host/empty//segment.parquet")]
+    fn test_copy_to_unparseable_uri_with_a_bad_path_reports_the_scheme() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table TO 'ftp://host/empty//segment.parquet' WITH (format parquet);")
+            .unwrap();
+    }
+
+    // a uri whose scheme needs a bucket and that has none, which is what a bucket name read
+    // from an empty variable leaves behind, is reported as the bucket rather than the scheme
+    #[pg_test]
+    #[should_panic(expected = "no bucket in uri s3:///nobucket.parquet")]
+    fn test_copy_to_uri_without_a_bucket_reports_the_bucket() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table TO 's3:///nobucket.parquet' WITH (format parquet);").unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "no bucket in uri az:///nocontainer.parquet")]
+    fn test_copy_from_azure_uri_without_a_container_reports_the_container() {
+        Spi::run("CREATE TABLE test_table (a int);").unwrap();
+
+        Spi::run("COPY test_table FROM 'az:///nocontainer.parquet' WITH (format parquet);")
+            .unwrap();
+    }
 }

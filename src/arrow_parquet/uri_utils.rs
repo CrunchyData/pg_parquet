@@ -179,11 +179,47 @@ impl ParsedUriInfo {
     }
 
     fn try_parse_scheme(uri: &Url) -> Result<(ObjectStoreScheme, Path), String> {
-        ObjectStoreScheme::parse(uri).map_err(|_| {
-            format!(
-                "unrecognized uri {uri}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes."
-            )
-        })
+        if let Ok(scheme_and_path) = ObjectStoreScheme::parse(uri) {
+            return Ok(scheme_and_path);
+        }
+
+        // the parse fails for a scheme the object store does not know, for a uri that names no
+        // host where its scheme needs one, and for a path it refuses, e.g. one with an empty
+        // "//" segment or with a separator escaped into a segment, and the error that tells
+        // them apart is of a type the object store does not export. Parsing the same uri
+        // without its path, and then with a host in place of the one it is missing, tells them
+        // apart instead.
+        let mut uri_without_path = uri.clone();
+        uri_without_path.set_path("");
+
+        if ObjectStoreScheme::parse(&uri_without_path).is_ok() {
+            // the path rather than the scheme is what is wrong with the uri, which is reported
+            // as such so that the user is not sent looking for a scheme that is already there
+            return Err(match Path::from_url_path(uri.path()) {
+                Err(path_error) => format!("unsupported path in uri {uri}: {path_error}"),
+                // the path the object store refused is not the one the uri carries, as for an
+                // https uri whose bucket is the first segment of its path
+                Ok(_) => format!("unsupported path in uri {uri}"),
+            });
+        }
+
+        if uri.host_str().is_none() {
+            let mut uri_with_a_host = uri_without_path.clone();
+
+            if uri_with_a_host.set_host(Some("bucket")).is_ok()
+                && ObjectStoreScheme::parse(&uri_with_a_host).is_ok()
+            {
+                // the scheme needs a host and the uri has none, which is what a bucket name
+                // that is read from an empty variable leaves behind
+                return Err(format!(
+                    "no bucket in uri {uri}. pg_parquet reads the bucket or container of an object store from the host of its uri, e.g. s3://bucket/file.parquet."
+                ));
+            }
+        }
+
+        Err(format!(
+            "unrecognized uri {uri}. pg_parquet supports local paths, https://, s3://, az:// or gs:// schemes."
+        ))
     }
 
     // the host of an s3, azure or gcs uri is the bucket or the container that holds the object
