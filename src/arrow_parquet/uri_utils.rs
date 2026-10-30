@@ -2,8 +2,11 @@ use std::{ffi::CStr, fs::File, ops::Range, os::fd::FromRawFd, panic, sync::Arc};
 
 use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
-use futures::{future::BoxFuture, FutureExt, StreamExt, TryFutureExt};
-use object_store::{path::Path, ObjectStore, ObjectStoreExt, ObjectStoreScheme};
+use futures::{future::BoxFuture, FutureExt, StreamExt};
+use object_store::{
+    coalesce_ranges, path::Path, GetOptions, ObjectStore, ObjectStoreExt, ObjectStoreScheme,
+    OBJECT_STORE_COALESCE_DEFAULT,
+};
 use parquet::{
     arrow::{
         arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions},
@@ -433,8 +436,14 @@ fn open_parquet_file(
             }
         };
 
-        let mut object_reader =
-            ParquetObjectStoreReader::new(parquet_object_store, location, object_store_meta.size);
+        // the version the store reports for the object is what the reads of the file ask for,
+        // so that they all read the object this metadata describes
+        let mut object_reader = ParquetObjectStoreReader::new(
+            parquet_object_store,
+            location,
+            object_store_meta.size,
+            object_store_meta.e_tag,
+        );
 
         let reader_metadata = parquet_reader_metadata(&mut object_reader, &uri_info.uri).await;
 
@@ -768,15 +777,68 @@ pub(crate) struct ParquetObjectStoreReader {
     object_store: Arc<dyn ObjectStore>,
     location: Path,
     file_size: u64,
+    // the version of the object that every read of this reader asks for, which is the version
+    // its size and its footer were read from. See read_range.
+    e_tag: Option<String>,
 }
 
 impl ParquetObjectStoreReader {
-    pub(crate) fn new(object_store: Arc<dyn ObjectStore>, location: Path, file_size: u64) -> Self {
+    pub(crate) fn new(
+        object_store: Arc<dyn ObjectStore>,
+        location: Path,
+        file_size: u64,
+        e_tag: Option<String>,
+    ) -> Self {
         Self {
             object_store,
             location,
             file_size,
+            e_tag,
         }
+    }
+
+    // read_range reads a range of the object as it was when the reader was opened. An object
+    // store knows nothing of a read that spans requests, and reading a parquet file takes many
+    // of them: the footer says where the row groups are, and the row groups are read with
+    // requests of their own. An object that is overwritten in between is otherwise read as one
+    // file made of two, the footer of the one it was and the bytes of the one it became, which
+    // is a wrong read that reports nothing when the two happen to be laid out alike. So the
+    // read asks for the version the footer came from. A store that reports no version for the
+    // object cannot be asked for one, which leaves the read as unconditional as it was.
+    async fn read_range(&self, range: Range<u64>) -> ParquetResult<Bytes> {
+        let options = GetOptions {
+            range: Some(range.into()),
+            if_match: self.e_tag.clone(),
+            ..Default::default()
+        };
+
+        let read = async {
+            self.object_store
+                .get_opts(&self.location, options)
+                .await?
+                .bytes()
+                .await
+        };
+
+        read.await.map_err(|e| self.read_error(e))
+    }
+
+    // read_error describes an error of a read. A read that is refused because the version it
+    // asks for is gone is described as the overwrite it is, since the store says that a
+    // precondition failed without saying whose precondition it was or what it was for.
+    fn read_error(&self, error: object_store::Error) -> ParquetError {
+        if matches!(error, object_store::Error::Precondition { .. }) {
+            return ParquetError::General(format!(
+                "the object \"{}\" was overwritten while it was being read, so the rest of the \
+                 read would have been the bytes of the object as it is now, which the footer \
+                 that was read first does not describe. Read it again to read it as it is now. \
+                 The read of the version it was asked for: {}",
+                self.location,
+                object_store_error_message(error)
+            ));
+        }
+
+        ParquetError::from(error)
     }
 
     // ends_with_parquet_magic reports whether the object closes with the marker that every
@@ -789,11 +851,10 @@ impl ParquetObjectStoreReader {
             return Some(false);
         };
 
-        let tail = self
-            .object_store
-            .get_range(&self.location, tail_start..self.file_size)
-            .await
-            .ok()?;
+        // the tail is read of the version the footer was read of, so that an object which was
+        // overwritten is not described by what took its place: a read of a version that is
+        // gone fails, which tells nothing, and nothing is what is said of it then
+        let tail = self.read_range(tail_start..self.file_size).await.ok()?;
 
         Some(tail == PARQUET_MAGIC)
     }
@@ -801,10 +862,7 @@ impl ParquetObjectStoreReader {
 
 impl AsyncFileReader for ParquetObjectStoreReader {
     fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, ParquetResult<Bytes>> {
-        self.object_store
-            .get_range(&self.location, range)
-            .map_err(ParquetError::from)
-            .boxed()
+        async move { self.read_range(range).await }.boxed()
     }
 
     fn get_byte_ranges(
@@ -812,10 +870,14 @@ impl AsyncFileReader for ParquetObjectStoreReader {
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, ParquetResult<Vec<Bytes>>> {
         async move {
-            self.object_store
-                .get_ranges(&self.location, &ranges)
-                .await
-                .map_err(ParquetError::from)
+            // the ranges are merged and read the way ObjectStore::get_ranges reads them, which
+            // is what this would call if a read of a range could be conditional there
+            coalesce_ranges(
+                &ranges,
+                |range| self.read_range(range),
+                OBJECT_STORE_COALESCE_DEFAULT,
+            )
+            .await
         }
         .boxed()
     }

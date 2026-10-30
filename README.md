@@ -297,6 +297,8 @@ SELECT * FROM parquet.list('/tmp/some/**/*.parquet');
 ```
 
 Uri pattern is also supported by `COPY FROM` for all supported object stores except `http(s)` endpoints. A folder that a `COPY TO` with `file_size_bytes` wrote is read this way too: the folder holds no object of its own name, so `COPY FROM '<folder>/*.parquet'` is what reads the files in it.
+
+A `COPY FROM` reads an object of a store over several requests, and every one of them names the version of the object that the read was opened on, so an object that is replaced while it is being read fails the copy rather than giving the rows of two objects at once.
 ```sql
 COPY (SELECT i FROM generate_series(1, 1000000) i) TO 's3://testbucket/some/test.parquet' with (file_size_bytes '1MB');
 COPY 1000000
