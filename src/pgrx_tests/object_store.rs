@@ -11,9 +11,9 @@ mod tests {
             ParquetObjectStoreReader, ParquetRowGroupOpener, ParsedUriInfo,
         },
         object_store::{
-            client_options::load_client_options, given_up_upload_hint, no_multipart_upload_hint,
-            object_store_cache::get_or_create_object_store, object_store_error_message, proxy_hint,
-            write_error_message,
+            client_options::load_client_options, finished_upload_hint, given_up_upload_hint,
+            no_multipart_upload_hint, object_store_cache::get_or_create_object_store,
+            object_store_error_message, proxy_hint, write_error_message,
         },
         pgrx_tests::common::{
             copy_to_helper, CopyOptionValue, FileCleanup, TestTable, LOCAL_TEST_FILE_PATH,
@@ -719,6 +719,68 @@ mod tests {
         .is_none());
 
         assert!(given_up_upload_hint("Generic S3 error: 404 Not Found").is_none());
+    }
+
+    #[pg_test]
+    fn test_finished_upload_hint() {
+        // the finish of an upload that is gone, which is what a store whose answer to the
+        // first finish was lost answers the retry of that finish with
+        assert!(finished_upload_hint(
+            "Object at location t.parquet not found: Error performing POST \
+             http://localhost:9000/testbucket/t.parquet?uploadId=abc - Server returned non-2xx \
+             status code: 404 Not Found: <Code>NoSuchUpload</Code>"
+        )
+        .is_some());
+
+        // the start of an upload is a POST as well, and names no upload id since it is the
+        // request that hands one out
+        assert!(finished_upload_hint(
+            "Object at location t.parquet not found: Error performing POST \
+             http://localhost:9000/testbucket/t.parquet?uploads - Server returned non-2xx \
+             status code: 404 Not Found"
+        )
+        .is_none());
+
+        // the write of a part names an upload id, and is no finish of the upload
+        assert!(finished_upload_hint(
+            "Object at location t.parquet not found: Error performing PUT \
+             http://localhost:9000/testbucket/t.parquet?partNumber=1&uploadId=abc - Server \
+             returned non-2xx status code: 404 NoSuchUpload"
+        )
+        .is_none());
+
+        // giving the upload up is reported by given_up_upload_hint rather than by this one
+        assert!(finished_upload_hint(
+            "Error performing DELETE http://localhost:9000/testbucket/t.parquet?uploadId=abc - \
+             Server returned non-2xx status code: 404 NoSuchUpload"
+        )
+        .is_none());
+
+        // a finish that failed for a reason other than the upload being gone is the error of
+        // the write itself, and the destination holds no file of it
+        assert!(finished_upload_hint(
+            "Error performing POST http://localhost:9000/testbucket/t.parquet?uploadId=abc - \
+             Server returned non-2xx status code: 503 Service Unavailable"
+        )
+        .is_none());
+
+        assert!(finished_upload_hint("Generic S3 error: 404 Not Found").is_none());
+    }
+
+    #[pg_test]
+    fn test_write_error_message_says_the_upload_was_finished() {
+        let finish_error = object_store::Error::NotFound {
+            path: "t.parquet".into(),
+            source: "Error performing POST http://localhost:9000/testbucket/t.parquet\
+                     ?uploadId=abc - Server returned non-2xx status code: 404 Not Found: \
+                     <Code>NoSuchUpload</Code>"
+                .into(),
+        };
+
+        let message = write_error_message(ParquetError::External(Box::new(finish_error)));
+
+        assert!(message.starts_with("Object at location t.parquet not found"));
+        assert!(message.ends_with("read the destination before writing it again)"));
     }
 
     #[pg_test]

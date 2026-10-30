@@ -38,7 +38,10 @@ use crate::{
         uri_utils::{uri_as_string, ParsedUriInfo},
     },
     block_on,
-    object_store::{object_store_cache::get_or_create_multipart_store, object_store_error_message},
+    object_store::{
+        object_store_cache::get_or_create_multipart_store, object_store_error_message,
+        write_error_message,
+    },
     parquet_copy_hook::{
         copy_cleanup::{
             finish_unfinished_write, give_up_unfinished_write, register_unfinished_write,
@@ -784,7 +787,13 @@ fn run_parallel_copy_to(
                 participants,
                 nranges,
             ))
-            .unwrap_or_else(|e| panic!("failed to write \"{}\": {e}", upload.uri_info.uri));
+            .unwrap_or_else(|e| {
+                panic!(
+                    "failed to write \"{}\": {}",
+                    upload.uri_info.uri,
+                    write_error_message(e)
+                )
+            });
 
             // the upload is the destination now, so the cleanup of the copy must not abort it
             finish_unfinished_write(
