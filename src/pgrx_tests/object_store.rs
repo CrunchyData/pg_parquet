@@ -273,6 +273,38 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "unsupported port 9000 in uri s3://testbucket:9000/port.parquet")]
+    fn test_copy_to_s3_uri_with_a_port_is_refused() {
+        let s3_uri = "s3://testbucket:9000/port.parquet";
+
+        let copy_to_command = format!(
+            "COPY (SELECT a FROM generate_series(1,10) a) TO '{s3_uri}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to_command).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(
+        expected = "unsupported port 10000 in uri az://testcontainer:10000/port.parquet"
+    )]
+    fn test_copy_from_azure_uri_with_a_port_is_refused() {
+        let azure_uri = "az://testcontainer:10000/port.parquet";
+
+        let create_table = "create table test_table(a int);";
+        Spi::run(create_table).unwrap();
+
+        let copy_from_command =
+            format!("COPY test_table FROM '{azure_uri}' WITH (format parquet);");
+        Spi::run(&copy_from_command).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "unsupported port 4443 in uri gs://testbucket:4443/port.parquet")]
+    fn test_list_gcs_uri_with_a_port_is_refused() {
+        Spi::run("SELECT * FROM parquet.list('gs://testbucket:4443/port.parquet');").unwrap();
+    }
+
+    #[pg_test]
     #[should_panic(expected = "no files found that match the pattern")]
     fn test_s3_with_nonexistent_pattern_uri() {
         object_store_cache_clear();
