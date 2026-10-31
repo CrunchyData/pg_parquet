@@ -475,10 +475,97 @@ Which profiles a role may name is a table that only a superuser and the `parquet
 GRANT parquet_profile_manager TO lake_admin;
 
 INSERT INTO parquet.user_profile_mapping (userid, profiles)
-VALUES ('analytics_team'::regrole::oid, '{"aws_profiles": ["analytics"], "gcs_profiles": ["analytics"]}');
+VALUES ('analytics_team', '{"aws_profiles": ["analytics"], "gcs_profiles": ["analytics"]}');
 ```
 
 A row is read for every role the session has the privileges of, so a profile mapped to a group role is one each of its members may name. The mapping is read on every copy rather than when the GUC was set, so a mapping that is taken away stops the next copy of a session that already named the profile. `pg_parquet.profile_name` is settable by any role for that reason: the GUC says which profile a session wants and the mapping is what says whether it may have it, which is also why a role carrying the GUC in `pg_db_role_setting` grants it nothing. A session reads the profiles it may name from `parquet.my_profiles`, and `parquet.profile_is_allowed('s3', 'analytics')` answers for one of them. A superuser names any profile, since it reads the credential files of the server anyway.
+
+##### End to end
+
+The administrator keeps the credentials in the config files the sdks already read, one profile per identity, and points the server at them:
+
+```ini
+# /etc/pg_parquet/aws/config -- AWS_CONFIG_FILE
+[profile analytics]
+region=us-east-1
+aws_access_key_id=...
+aws_secret_access_key=...
+
+[profile reporting]
+region=us-east-1
+aws_access_key_id=...
+aws_secret_access_key=...
+```
+
+```ini
+# /etc/pg_parquet/azure/config -- AZURE_CONFIG_FILE
+[storage:analytics]
+account=analyticslake
+key=...
+```
+
+```
+# /etc/pg_parquet/gcs/analytics.json -- a service account key, named after the profile
+```
+
+```conf
+# postgresql.conf
+pg_parquet.gcs_credential_directory = '/etc/pg_parquet/gcs'
+```
+
+Then, in the database, the mapping. Note the two shapes: `analytics_team` reaches all three clouds, `reporting_team` reaches one.
+
+```sql
+GRANT parquet_profile_manager TO lake_admin;    -- lake_admin writes the mapping from here on
+
+-- all three clouds at once, under one profile name
+INSERT INTO parquet.user_profile_mapping (userid, profiles) VALUES
+  ('analytics_team', '{"aws_profiles":   ["analytics"],
+                       "azure_profiles": ["analytics"],
+                       "gcs_profiles":   ["analytics"]}');
+
+-- s3 only, under a profile of its own
+INSERT INTO parquet.user_profile_mapping (userid, profiles) VALUES
+  ('reporting_team', '{"aws_profiles": ["reporting"]}');
+
+GRANT parquet_object_store_read, parquet_object_store_write TO analytics_team, reporting_team;
+GRANT analytics_team TO alice;      -- the mapping is read through role membership
+GRANT reporting_team TO bob;
+```
+
+`alice` names the profile once and reaches all three stores, because the same name is mapped for each:
+
+```sql
+SET pg_parquet.profile_name TO 'analytics';
+
+COPY orders TO 's3://analytics-lake/orders.parquet';   -- [profile analytics] of the aws config
+COPY orders TO 'az://analytics-lake/orders.parquet';   -- [storage:analytics] of the azure config
+COPY orders TO 'gs://analytics-lake/orders.parquet';   -- /etc/pg_parquet/gcs/analytics.json
+
+SELECT * FROM parquet.my_profiles;
+   mapped_to    |                                   profiles
+----------------+-------------------------------------------------------------------------------
+ analytics_team | {"aws_profiles": ["analytics"], "azure_profiles": ["analytics"], "gcs_profiles": ["analytics"]}
+```
+
+`bob` is mapped for `s3://` only, so the same name on another scheme is refused rather than resolved against the server's own credentials:
+
+```sql
+SET pg_parquet.profile_name TO 'reporting';
+COPY orders TO 's3://reporting-lake/orders.parquet';   -- COPY 1000
+COPY orders TO 'gs://reporting-lake/orders.parquet';
+-- ERROR:  permission denied for profile "reporting"
+-- DETAIL: parquet.user_profile_mapping does not map the session to the profile for a gs store. ...
+
+SET pg_parquet.profile_name TO 'analytics';            -- a profile mapped to another role
+COPY orders TO 's3://analytics-lake/orders.parquet';
+-- ERROR:  permission denied for profile "analytics"
+
+RESET pg_parquet.profile_name;                         -- back to the server's own credentials
+COPY orders TO 's3://shared-lake/orders.parquet';      -- COPY 1000
+```
+
+Because one GUC names one profile, a session that reaches several clouds at once needs the **same profile name in each of them** — which is the administrator's choice in all three places, since the azure section name and the gcs key file name are picked when the credentials are written, and an aws profile can be aliased. A session whose clouds are named differently selects them one at a time.
 
 #### Http Client Options
 

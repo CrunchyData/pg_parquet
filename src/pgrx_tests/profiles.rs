@@ -22,9 +22,20 @@ mod tests {
     fn map_profiles(role: &str, profiles: &str) {
         Spi::run(&format!(
             "INSERT INTO parquet.user_profile_mapping (userid, profiles)
-             VALUES ('{role}'::regrole::oid, '{profiles}'::jsonb)"
+             VALUES ('{role}', '{profiles}'::jsonb)"
         ))
         .unwrap();
+    }
+
+    // the mapping is keyed by the role rather than by its oid, which is what a dump of it
+    // carries into another cluster and what a row that names no role is refused by
+    #[pg_test]
+    #[should_panic(expected = "role \"no_such_role_at_all\" does not exist")]
+    fn test_mapping_refuses_a_role_that_does_not_exist() {
+        map_profiles(
+            "no_such_role_at_all",
+            &format!(r#"{{"aws_profiles": ["{PROFILE}"]}}"#),
+        );
     }
 
     // write_aws_config_file writes a config file that holds the credentials of the test

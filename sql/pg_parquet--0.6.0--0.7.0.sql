@@ -16,7 +16,11 @@ END $$;
 -- session from selecting a profile it was not mapped to: the GUC that names the profile is
 -- settable by anyone, and this is the mapping that it is checked against.
 CREATE TABLE parquet.user_profile_mapping (
-    userid oid PRIMARY KEY,
+    -- regrole rather than oid: it is written and dumped as the name of the role, so a
+    -- restore resolves the role of this cluster rather than whichever role happens to
+    -- hold the oid the dump was taken with, and a role that does not exist is refused
+    -- when the row is written rather than mapping a profile to nobody
+    userid regrole PRIMARY KEY,
     profiles jsonb NOT NULL DEFAULT '{}'::jsonb,
     CONSTRAINT profiles_is_an_object CHECK (jsonb_typeof(profiles) = 'object'),
     -- a misspelled key would otherwise map no profile at all, which reads as a profile
@@ -48,9 +52,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON parquet.user_profile_mapping
 -- installed the extension and every row of the table would be one of the session's. In a
 -- view it is the session's own role, while the table is still read as the owner.
 CREATE VIEW parquet.my_profiles AS
-    SELECT m.userid::regrole AS mapped_to, m.profiles
+    SELECT m.userid AS mapped_to, m.profiles
     FROM parquet.user_profile_mapping m
-    WHERE pg_catalog.pg_has_role(current_user, m.userid, 'USAGE');
+    WHERE pg_catalog.pg_has_role(current_user, m.userid::oid, 'USAGE');
 
 REVOKE ALL ON parquet.my_profiles FROM public;
 GRANT SELECT ON parquet.my_profiles TO public;
