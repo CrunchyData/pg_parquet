@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
+use object_store::profile::{GCS_CREDENTIAL_DIRECTORY, PROFILE_NAME};
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
 use parquet_copy_hook::parallel_copy_to::{MAX_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS_LIMIT};
 use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
@@ -30,6 +31,12 @@ pub use crate::parquet_copy_hook::copy_to_split_dest_receiver::create_copy_to_pa
 pgrx::pg_module_magic!();
 
 extension_sql_file!("../sql/bootstrap.sql", name = "role_setup", bootstrap);
+
+extension_sql_file!(
+    "../sql/profiles.sql",
+    name = "profile_setup",
+    requires = ["role_setup"]
+);
 
 // PG_BACKEND_TOKIO_RUNTIME creates a tokio runtime that uses the current thread
 // to run the tokio reactor. This uses the same thread that is running the Postgres backend.
@@ -101,6 +108,41 @@ pub extern "C-unwind" fn _PG_init() {
                 CStr::from_ptr("Enable parquet copy hooks".as_pg_cstr()),
                 &ENABLE_PARQUET_COPY_HOOK,
                 GucContext::Userset,
+                GucFlags::default(),
+            );
+
+            GucRegistry::define_string_guc(
+                CStr::from_ptr("pg_parquet.profile_name".as_pg_cstr()),
+                CStr::from_ptr(
+                    "Name of the profile the object store credentials are read from".as_pg_cstr(),
+                ),
+                CStr::from_ptr(
+                    "A profile names a set of credentials in the config files of the cloud \
+                     sdks, which the session makes its object store requests with instead of \
+                     the credentials of the server's environment. Any role may set this, and \
+                     parquet.user_profile_mapping is what says which profiles a role may \
+                     name. Unset reads the environment of the server."
+                        .as_pg_cstr(),
+                ),
+                &PROFILE_NAME,
+                GucContext::Userset,
+                GucFlags::default(),
+            );
+
+            GucRegistry::define_string_guc(
+                CStr::from_ptr("pg_parquet.gcs_credential_directory".as_pg_cstr()),
+                CStr::from_ptr(
+                    "Directory the service account key of a gcs profile is read from".as_pg_cstr(),
+                ),
+                CStr::from_ptr(
+                    "A gcs profile is read from <directory>/<profile>.json, since gcs has no \
+                     config file with a section per profile as s3 and azure have. Only a \
+                     superuser sets this, which is what keeps a session to the keys that \
+                     were put there."
+                        .as_pg_cstr(),
+                ),
+                &GCS_CREDENTIAL_DIRECTORY,
+                GucContext::Suset,
                 GucFlags::default(),
             );
 

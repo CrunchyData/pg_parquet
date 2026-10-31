@@ -8,6 +8,10 @@ use url::Url;
 
 use super::{client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration};
 
+// AZURE_CONFIG_SECTION is the section of the azure config file the storage settings are
+// read from. A profile is a section named after it, as [storage:<profile>].
+const AZURE_CONFIG_SECTION: &str = "storage";
+
 // create_azure_object_store creates a MicrosoftAzure object store with the given container name.
 // It is configured by environment variables and azure config files as fallback method.
 // We need to read the config files to make the fallback method work since object_store
@@ -21,14 +25,19 @@ use super::{client_options::load_client_options, object_store_cache::ObjectStore
 // - AZURE_STORAGE_ENDPOINT (env var only, object_store specific)
 // - AZURE_ALLOW_HTTP (env var only, object_store specific)
 // - AZURE_<HTTP CLIENT OPTION>, e.g. AZURE_TIMEOUT (env var only, object_store specific)
-pub(crate) fn create_azure_object_store(uri: &Url) -> ObjectStoreWithExpiration {
+// A session that named a profile reads every one of the config parameters above from the
+// [storage:<profile>] section of the config file instead.
+pub(crate) fn create_azure_object_store(
+    uri: &Url,
+    profile: Option<&str>,
+) -> ObjectStoreWithExpiration {
     let container_name = parse_azure_blob_container(uri).unwrap_or_else(|| {
         panic!("unsupported azure blob storage uri: {uri}");
     });
 
     let mut azure_builder = MicrosoftAzureBuilder::new().with_container_name(container_name);
 
-    let azure_blob_config = AzureStorageConfig::load();
+    let azure_blob_config = AzureStorageConfig::load(profile);
 
     // http client options, including allow http
     azure_builder = azure_builder
@@ -128,11 +137,12 @@ struct AzureStorageConfig {
 }
 
 impl AzureStorageConfig {
-    // load reads the azure config from the environment variables first and config files as fallback.
+    // load reads the azure config from the environment variables first and config files as fallback,
+    // or from the section of the profile the session named.
     // There is no proper azure sdk config crate that can read the config files.
     // So, we need to read the config files manually from azure's ini config.
     // See https://learn.microsoft.com/en-us/cli/azure/azure-cli-configuration?view=azure-cli-latest
-    fn load() -> Self {
+    fn load(profile: Option<&str>) -> Self {
         // ~/.azure/config
         let azure_config_file_path = std::env::var("AZURE_CONFIG_FILE").unwrap_or(
             home_dir()
@@ -146,14 +156,40 @@ impl AzureStorageConfig {
 
         let azure_config_content = Ini::load_from_file(&azure_config_file_path).ok();
 
-        let connection_string = match std::env::var("AZURE_STORAGE_CONNECTION_STRING") {
-            Ok(connection_string) => Some(connection_string),
-            Err(_) => azure_config_content
-                .as_ref()
-                .and_then(|ini| ini.section(Some("storage")))
-                .and_then(|section| section.get("connection_string"))
-                .map(|connection_string| connection_string.to_string()),
+        // a profile is a section of the config file of its own, named after it, and the
+        // section every session shares is the one with no profile
+        let section_name = match profile {
+            Some(profile) => format!("{AZURE_CONFIG_SECTION}:{profile}"),
+            None => AZURE_CONFIG_SECTION.to_string(),
         };
+
+        let section = azure_config_content
+            .as_ref()
+            .and_then(|ini| ini.section(Some(section_name.as_str())));
+
+        if profile.is_some() && section.is_none() {
+            pgrx::error!(
+                "the azure config file \"{azure_config_file_path}\" has no \
+                 [{section_name}] section, so the profile names no credentials"
+            );
+        }
+
+        let from_section = |key: &str| {
+            section
+                .and_then(|section| section.get(key))
+                .map(str::to_string)
+        };
+
+        // a profile is read on its own rather than before the environment: the environment
+        // is what every session of the server shares, so falling back to it would make a
+        // profile whose section is missing a key read the credentials of the server
+        let from_env_or_section = |variable: &str, key: &str| match profile {
+            Some(_) => from_section(key),
+            None => std::env::var(variable).ok().or_else(|| from_section(key)),
+        };
+
+        let connection_string =
+            from_env_or_section("AZURE_STORAGE_CONNECTION_STRING", "connection_string");
 
         // connection string overrides everything
         if let Some(connection_string) = connection_string {
@@ -162,52 +198,39 @@ impl AzureStorageConfig {
             }
         }
 
-        let account_name = match std::env::var("AZURE_STORAGE_ACCOUNT") {
-            Ok(account) => Some(account),
-            Err(_) => azure_config_content
-                .as_ref()
-                .and_then(|ini| ini.section(Some("storage")))
-                .and_then(|section| section.get("account"))
-                .map(|account| account.to_string()),
-        };
+        let account_name = from_env_or_section("AZURE_STORAGE_ACCOUNT", "account");
 
-        let account_key = match std::env::var("AZURE_STORAGE_KEY") {
-            Ok(key) => Some(key),
-            Err(_) => azure_config_content
-                .as_ref()
-                .and_then(|ini| ini.section(Some("storage")))
-                .and_then(|section| section.get("key"))
-                .map(|key| key.to_string()),
-        };
+        let account_key = from_env_or_section("AZURE_STORAGE_KEY", "key");
 
-        let sas_token = match std::env::var("AZURE_STORAGE_SAS_TOKEN") {
-            Ok(token) => Some(token),
-            Err(_) => azure_config_content
-                .as_ref()
-                .and_then(|ini| ini.section(Some("storage")))
-                .and_then(|section| section.get("sas_token"))
-                .map(|token| token.to_string()),
+        let sas_token = from_env_or_section("AZURE_STORAGE_SAS_TOKEN", "sas_token");
+
+        // the settings below are read from the environment for the session that named no
+        // profile, which is what they have always been read from, and from the section of
+        // the profile for a session that named one
+        let from_env_or_profile_section = |variable: &str, key: &str| match profile {
+            Some(_) => from_section(key),
+            None => std::env::var(variable).ok(),
         };
 
         // endpoint, object_store specific
-        let endpoint = std::env::var("AZURE_STORAGE_ENDPOINT").ok();
+        let endpoint = from_env_or_profile_section("AZURE_STORAGE_ENDPOINT", "endpoint");
 
         // allow http, object_store specific
-        let allow_http = std::env::var("AZURE_ALLOW_HTTP")
-            .ok()
+        let allow_http = from_env_or_profile_section("AZURE_ALLOW_HTTP", "allow_http")
             .map(|allow_http| allow_http.parse().unwrap_or(false))
             .unwrap_or(false);
 
         // tenant id, object_store specific
-        let tenant_id = std::env::var("AZURE_TENANT_ID").ok();
+        let tenant_id = from_env_or_profile_section("AZURE_TENANT_ID", "tenant_id");
 
         // client id, object_store specific
-        let client_id = std::env::var("AZURE_CLIENT_ID").ok();
+        let client_id = from_env_or_profile_section("AZURE_CLIENT_ID", "client_id");
 
         // client secret, object_store specific
-        let client_secret = std::env::var("AZURE_CLIENT_SECRET").ok();
+        let client_secret = from_env_or_profile_section("AZURE_CLIENT_SECRET", "client_secret");
 
-        let federated_token_file = std::env::var("AZURE_FEDERATED_TOKEN_FILE").ok();
+        let federated_token_file =
+            from_env_or_profile_section("AZURE_FEDERATED_TOKEN_FILE", "federated_token_file");
 
         AzureStorageConfig {
             account_name,

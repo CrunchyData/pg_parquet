@@ -9,6 +9,7 @@ pub(crate) mod gcs;
 pub(crate) mod http;
 pub(crate) mod local_file;
 pub(crate) mod object_store_cache;
+pub(crate) mod profile;
 
 // object_store_error_message describes an error that came from an object store.
 // Both arrow and parquet wrap such errors, which repeats their own prefixes in the
