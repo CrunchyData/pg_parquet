@@ -43,6 +43,7 @@ impl GeoStatsAccumulatorFactory for BoundableWkbGeoStatsAccumulatorFactory {
 struct BoundableWkbGeoStatsAccumulator {
     inner: ParquetGeoStatsAccumulator,
     unboundable: bool,
+    non_finite: bool,
 }
 
 impl GeoStatsAccumulator for BoundableWkbGeoStatsAccumulator {
@@ -51,22 +52,40 @@ impl GeoStatsAccumulator for BoundableWkbGeoStatsAccumulator {
     }
 
     fn update_wkb(&mut self, wkb: &[u8]) {
-        if wkb_is_boundable(wkb) {
+        let (boundable, finite) = wkb_is_boundable_and_finite(wkb);
+
+        if boundable {
             self.inner.update_wkb(wkb);
         } else {
             self.unboundable = true;
         }
+
+        self.non_finite |= !finite;
     }
 
     fn finish(&mut self) -> Option<Box<GeospatialStatistics>> {
         // the inner accumulator is always finished to reset its state
         let statistics = self.inner.finish();
 
-        if std::mem::take(&mut self.unboundable) {
-            None
-        } else {
-            statistics
+        let unboundable = std::mem::take(&mut self.unboundable);
+        let non_finite = std::mem::take(&mut self.non_finite);
+
+        if unboundable {
+            return None;
         }
+
+        if non_finite {
+            // the geometry types are exact either way, so only the box goes
+            return Some(Box::new(GeospatialStatistics::new(
+                None,
+                statistics
+                    .as_ref()
+                    .and_then(|statistics| statistics.geospatial_types())
+                    .cloned(),
+            )));
+        }
+
+        statistics
     }
 }
 
@@ -79,6 +98,7 @@ struct GeographyGeoStatsAccumulator {
     bounder: GeometryBounder,
     invalid: bool,
     has_edges: bool,
+    non_finite: bool,
 }
 
 impl Default for GeographyGeoStatsAccumulator {
@@ -87,6 +107,7 @@ impl Default for GeographyGeoStatsAccumulator {
             bounder: new_geography_bounder(),
             invalid: false,
             has_edges: false,
+            non_finite: false,
         }
     }
 }
@@ -105,12 +126,15 @@ impl GeoStatsAccumulator for GeographyGeoStatsAccumulator {
     }
 
     fn update_wkb(&mut self, wkb: &[u8]) {
-        if !wkb_is_boundable(wkb) || self.bounder.update_wkb(wkb).is_err() {
+        let (boundable, finite) = wkb_is_boundable_and_finite(wkb);
+
+        if !boundable || self.bounder.update_wkb(wkb).is_err() {
             self.invalid = true;
             return;
         }
 
         self.has_edges |= wkb_has_edges(wkb);
+        self.non_finite |= !finite;
     }
 
     fn finish(&mut self) -> Option<Box<GeospatialStatistics>> {
@@ -118,12 +142,13 @@ impl GeoStatsAccumulator for GeographyGeoStatsAccumulator {
         let bounder = std::mem::replace(&mut self.bounder, new_geography_bounder());
         let invalid = std::mem::take(&mut self.invalid);
         let has_edges = std::mem::take(&mut self.has_edges);
+        let non_finite = std::mem::take(&mut self.non_finite);
 
         if invalid {
             return None;
         }
 
-        let bbox = if has_edges {
+        let bbox = if has_edges || non_finite {
             None
         } else {
             bounding_box_of(&bounder)
@@ -178,14 +203,21 @@ fn wkb_geometry_type(wkb: &[u8]) -> Option<u32> {
     Some(type_code % 1000)
 }
 
-// returns true if the whole wkb payload consists of the geometry types that parquet can bound
-fn wkb_is_boundable(wkb: &[u8]) -> bool {
-    matches!(consume_geometry(wkb, 0), Some(rest) if rest.is_empty())
+// returns whether the whole wkb payload consists of the geometry types that parquet can bound,
+// and whether every coordinate in it is a finite number. A NaN or an infinity bounds nothing: a
+// box that carries one reads as a box a query does not intersect, so a reader that skips a row
+// group by it skips rows that are in there.
+fn wkb_is_boundable_and_finite(wkb: &[u8]) -> (bool, bool) {
+    let mut finite = true;
+
+    let boundable = matches!(consume_geometry(wkb, 0, &mut finite), Some(rest) if rest.is_empty());
+
+    (boundable, finite)
 }
 
 // consumes one wkb geometry and returns the bytes that follow it, or None if the geometry is not
 // one that parquet can bound
-fn consume_geometry(wkb: &[u8], depth: u32) -> Option<&[u8]> {
+fn consume_geometry<'a>(wkb: &'a [u8], depth: u32, finite: &mut bool) -> Option<&'a [u8]> {
     if depth > MAX_WKB_NESTING_DEPTH {
         return None;
     }
@@ -209,20 +241,18 @@ fn consume_geometry(wkb: &[u8], depth: u32) -> Option<&[u8]> {
         _ => return None,
     };
 
-    let point_len = coords_per_point * size_of::<f64>();
-
     // see https://github.com/apache/parquet-format/blob/master/Geospatial.md for the type codes
     match type_code % 1000 {
         // point
-        1 => consume_bytes(rest, point_len),
+        1 => consume_points(rest, little_endian, coords_per_point, 1, finite),
         // linestring
-        2 => consume_coord_sequence(rest, little_endian, point_len),
+        2 => consume_coord_sequence(rest, little_endian, coords_per_point, finite),
         // polygon
         3 => {
             let (ring_count, mut rest) = consume_u32(rest, little_endian)?;
 
             for _ in 0..ring_count {
-                rest = consume_coord_sequence(rest, little_endian, point_len)?;
+                rest = consume_coord_sequence(rest, little_endian, coords_per_point, finite)?;
             }
 
             Some(rest)
@@ -232,7 +262,7 @@ fn consume_geometry(wkb: &[u8], depth: u32) -> Option<&[u8]> {
             let (part_count, mut rest) = consume_u32(rest, little_endian)?;
 
             for _ in 0..part_count {
-                rest = consume_geometry(rest, depth + 1)?;
+                rest = consume_geometry(rest, depth + 1, finite)?;
             }
 
             Some(rest)
@@ -241,10 +271,53 @@ fn consume_geometry(wkb: &[u8], depth: u32) -> Option<&[u8]> {
     }
 }
 
-fn consume_coord_sequence(wkb: &[u8], little_endian: bool, point_len: usize) -> Option<&[u8]> {
+fn consume_coord_sequence<'a>(
+    wkb: &'a [u8],
+    little_endian: bool,
+    coords_per_point: usize,
+    finite: &mut bool,
+) -> Option<&'a [u8]> {
     let (point_count, rest) = consume_u32(wkb, little_endian)?;
 
-    consume_bytes(rest, point_len.checked_mul(point_count as usize)?)
+    consume_points(
+        rest,
+        little_endian,
+        coords_per_point,
+        point_count as usize,
+        finite,
+    )
+}
+
+// consumes the coordinates of the given number of points, and clears `finite` for a coordinate
+// that is not a finite number
+fn consume_points<'a>(
+    wkb: &'a [u8],
+    little_endian: bool,
+    coords_per_point: usize,
+    point_count: usize,
+    finite: &mut bool,
+) -> Option<&'a [u8]> {
+    let len = coords_per_point
+        .checked_mul(size_of::<f64>())?
+        .checked_mul(point_count)?;
+
+    let (coords, rest) = wkb.split_at_checked(len)?;
+
+    let (coords, _) = coords.as_chunks::<{ size_of::<f64>() }>();
+
+    for coord in coords {
+        let coord = *coord;
+
+        let coord = if little_endian {
+            f64::from_le_bytes(coord)
+        } else {
+            f64::from_be_bytes(coord)
+        };
+
+        *finite &= coord.is_finite();
+    }
+
+    Some(rest)
 }
 
 fn consume_u32(wkb: &[u8], little_endian: bool) -> Option<(u32, &[u8])> {
@@ -259,10 +332,4 @@ fn consume_u32(wkb: &[u8], little_endian: bool) -> Option<(u32, &[u8])> {
     };
 
     Some((value, rest))
-}
-
-fn consume_bytes(wkb: &[u8], len: usize) -> Option<&[u8]> {
-    let (_, rest) = wkb.split_at_checked(len)?;
-
-    Some(rest)
 }
