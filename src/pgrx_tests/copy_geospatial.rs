@@ -42,6 +42,30 @@ mod tests {
         Spi::get_one::<String>(&query).unwrap()
     }
 
+    // copy_to_error is the message a copy failed with. A postgres error inside spi unwinds
+    // rather than answering with an Err, and aborts the transaction with it, so the copy runs
+    // inside a plpgsql block that catches it: the block is a subtransaction, which is what
+    // lets a table of cases run one after another.
+    fn copy_to_error(copy: &str) -> String {
+        Spi::run(&format!(
+            "CREATE OR REPLACE FUNCTION failing_copy_to() RETURNS text
+             LANGUAGE plpgsql AS $body$
+             BEGIN
+                 EXECUTE $copy${copy}$copy$;
+
+                 RETURN 'no error';
+             EXCEPTION WHEN others THEN
+                 RETURN SQLERRM;
+             END;
+             $body$;"
+        ))
+        .unwrap();
+
+        Spi::get_one::<String>("SELECT failing_copy_to()")
+            .unwrap()
+            .unwrap()
+    }
+
     fn stats_geospatial_text(column: &str) -> Option<String> {
         let query = format!(
             "SELECT (SELECT stats_geospatial::text
@@ -215,33 +239,13 @@ mod tests {
         );
     }
 
+    // a curved geography needs no case of its own: postgis refuses the cast to geography
+    // before pg_parquet is given the bytes, answering "Geography type does not support
+    // CircularString", so the refusal below is never the one that fires.
+    //
+    // and the geometry the specification does define is written as it always was
     #[pg_test]
-    fn test_geo_unsupported_wkb_types() {
-        if postgis_missing() {
-            return;
-        }
-        create_postgis();
-
-        let test_table = TestTable::<Geometry>::new("geometry".into());
-        test_table.insert(
-            "INSERT INTO test_expected (a) VALUES
-               (ST_GeomFromText('CIRCULARSTRING(0 0, 1 1, 2 0)')),
-               (ST_GeomFromText('COMPOUNDCURVE(CIRCULARSTRING(0 0, 1 1, 2 0), (2 0, 3 0))')),
-               (ST_GeomFromText('CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0))')),
-               (ST_GeomFromText('MULTICURVE((0 0, 1 1), CIRCULARSTRING(2 0, 3 1, 4 0))')),
-               (ST_GeomFromText('MULTISURFACE(CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0)))')),
-               (ST_GeomFromText('TIN(((0 0 0, 0 0 1, 0 1 0, 0 0 0)))')),
-               (ST_GeomFromText('POLYHEDRALSURFACE(((0 0 0, 0 0 1, 0 1 1, 0 1 0, 0 0 0)))')),
-               (ST_GeomFromText('TRIANGLE((0 0, 0 1, 1 1, 0 0))'));",
-        );
-        test_table.assert_expected_and_result_rows();
-
-        // the bounder cannot walk these, so the whole column loses its statistics
-        assert_eq!(stats_geospatial_text("a"), None);
-    }
-
-    #[pg_test]
-    fn test_geo_unsupported_geometry_drops_statistics() {
+    fn test_geo_the_defined_types_are_still_written() {
         if postgis_missing() {
             return;
         }
@@ -251,11 +255,21 @@ mod tests {
         test_table.insert(
             "INSERT INTO test_expected (a) VALUES
                (ST_GeomFromText('POINT(1 2)')),
-               (ST_GeomFromText('TRIANGLE((0 0, 0 1, 1 1, 0 0))'));",
+               (ST_GeomFromText('LINESTRING(0 0, 1 1)')),
+               (ST_GeomFromText('POLYGON((0 0, 0 1, 1 1, 1 0, 0 0))')),
+               (ST_GeomFromText('MULTIPOINT(0 0, 1 1)')),
+               (ST_GeomFromText('GEOMETRYCOLLECTION(POINT(0 0), LINESTRING(0 0, 1 1))'));",
         );
         test_table.assert_expected_and_result_rows();
 
-        assert_eq!(stats_geospatial_text("a"), None);
+        assert_eq!(
+            stats_geospatial_text("a"),
+            Some(
+                "{\"bbox\": {\"xmax\": 1.0, \"xmin\": 0.0, \"ymax\": 2.0, \"ymin\": 0.0}, \
+                 \"geospatial_types\": [1, 2, 3, 4, 7]}"
+                    .to_string()
+            )
+        );
     }
 
     #[pg_test]
@@ -1373,6 +1387,10 @@ mod tests {
         .unwrap();
         assert_eq!(logical_type_of("a"), Some("GEOMETRY".to_string()));
     }
+    // every postgis type the parquet geospatial specification does not cover is refused, each
+    // one written after a point so that the copy is the ordinary looking case: a reader of the
+    // specification refuses the whole column one of them is in rather than the row, so the
+    // point would be unreadable with it.
     #[pg_test]
     fn test_geo_unsupported_geometry_types_one_by_one() {
         if postgis_missing() {
@@ -1380,30 +1398,134 @@ mod tests {
         }
         create_postgis();
 
-        // postgis types that the parquet geospatial specification does not cover. the bounder
-        // misreads most of their wkb instead of rejecting it, so none of them may produce
-        // statistics.
-        let unboundable_wkts = [
-            "TRIANGLE((0 0, 0 1, 1 1, 0 0))",
-            "TIN(((0 0 0, 0 0 1, 0 1 0, 0 0 0)))",
-            "POLYHEDRALSURFACE(((0 0 0, 0 0 1, 0 1 1, 0 1 0, 0 0 0)))",
-            "CIRCULARSTRING(0 0, 1 1, 2 0)",
-            "COMPOUNDCURVE(CIRCULARSTRING(0 0, 1 1, 2 0), (2 0, 3 0))",
-            "CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0))",
-            "MULTICURVE((0 0, 1 1), CIRCULARSTRING(2 0, 3 1, 4 0))",
-            "MULTISURFACE(CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0)))",
-            "GEOMETRYCOLLECTION(TRIANGLE((0 0, 0 1, 1 1, 0 0)))",
+        let unsupported = [
+            ("TRIANGLE((0 0, 0 1, 1 1, 0 0))", "a triangle"),
+            ("TIN(((0 0 0, 0 0 1, 0 1 0, 0 0 0)))", "a tin"),
+            (
+                "POLYHEDRALSURFACE(((0 0 0, 0 0 1, 0 1 1, 0 1 0, 0 0 0)))",
+                "a polyhedral surface",
+            ),
+            ("CIRCULARSTRING(0 0, 1 1, 2 0)", "a circular string"),
+            (
+                "COMPOUNDCURVE(CIRCULARSTRING(0 0, 1 1, 2 0), (2 0, 3 0))",
+                "a compound curve",
+            ),
+            (
+                "CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0))",
+                "a curve polygon",
+            ),
+            (
+                "MULTICURVE((0 0, 1 1), CIRCULARSTRING(2 0, 3 1, 4 0))",
+                "a multi curve",
+            ),
+            (
+                "MULTISURFACE(CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0)))",
+                "a multi surface",
+            ),
+            // a collection is named by what it holds, since its own type is one the
+            // specification does define
+            (
+                "GEOMETRYCOLLECTION(TRIANGLE((0 0, 0 1, 1 1, 0 0)))",
+                "a geometry collection holding a type the specification does not define",
+            ),
         ];
 
-        for wkt in unboundable_wkts {
-            let copy_to_query = format!(
+        for (wkt, type_name) in unsupported {
+            let error = copy_to_error(&format!(
                 "COPY (SELECT ST_GeomFromText('POINT(1 2)') as a
                        UNION ALL SELECT ST_GeomFromText('{wkt}'))
                  TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
-            );
-            Spi::run(&copy_to_query).unwrap();
+            ));
 
-            assert_eq!(stats_geospatial_text("a"), None, "{wkt}");
+            assert!(
+                error.contains(&format!(
+                    "cannot write {type_name} to a parquet geospatial column"
+                )),
+                "{wkt} was refused with: {error}"
+            );
+        }
+    }
+
+    // and every type it does define is written, in each of the four dimensions it defines them
+    // in: the specification covers the codes 1 to 7 and the same codes plus 1000 per extra
+    // dimension, which is 28 of them, and a refusal that reached one of those would be a
+    // refusal of an ordinary geometry.
+    #[pg_test]
+    fn test_geo_every_type_the_specification_defines_is_written() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        // the wkt of each type in xy, and the coordinates to append for z, m and zm
+        let types = [
+            (
+                1,
+                "POINT(1 2)",
+                "POINT Z (1 2 3)",
+                "POINT M (1 2 4)",
+                "POINT ZM (1 2 3 4)",
+            ),
+            (
+                2,
+                "LINESTRING(0 0, 1 1)",
+                "LINESTRING Z (0 0 0, 1 1 1)",
+                "LINESTRING M (0 0 0, 1 1 1)",
+                "LINESTRING ZM (0 0 0 0, 1 1 1 1)",
+            ),
+            (
+                3,
+                "POLYGON((0 0, 0 1, 1 1, 0 0))",
+                "POLYGON Z ((0 0 0, 0 1 0, 1 1 0, 0 0 0))",
+                "POLYGON M ((0 0 0, 0 1 0, 1 1 0, 0 0 0))",
+                "POLYGON ZM ((0 0 0 0, 0 1 0 0, 1 1 0 0, 0 0 0 0))",
+            ),
+            (
+                4,
+                "MULTIPOINT(0 0, 1 1)",
+                "MULTIPOINT Z (0 0 0, 1 1 1)",
+                "MULTIPOINT M (0 0 0, 1 1 1)",
+                "MULTIPOINT ZM (0 0 0 0, 1 1 1 1)",
+            ),
+            (
+                5,
+                "MULTILINESTRING((0 0, 1 1))",
+                "MULTILINESTRING Z ((0 0 0, 1 1 1))",
+                "MULTILINESTRING M ((0 0 0, 1 1 1))",
+                "MULTILINESTRING ZM ((0 0 0 0, 1 1 1 1))",
+            ),
+            (
+                6,
+                "MULTIPOLYGON(((0 0, 0 1, 1 1, 0 0)))",
+                "MULTIPOLYGON Z (((0 0 0, 0 1 0, 1 1 0, 0 0 0)))",
+                "MULTIPOLYGON M (((0 0 0, 0 1 0, 1 1 0, 0 0 0)))",
+                "MULTIPOLYGON ZM (((0 0 0 0, 0 1 0 0, 1 1 0 0, 0 0 0 0)))",
+            ),
+            (
+                7,
+                "GEOMETRYCOLLECTION(POINT(1 2))",
+                "GEOMETRYCOLLECTION Z (POINT Z (1 2 3))",
+                "GEOMETRYCOLLECTION M (POINT M (1 2 4))",
+                "GEOMETRYCOLLECTION ZM (POINT ZM (1 2 3 4))",
+            ),
+        ];
+
+        for (code, xy, z, m, zm) in types {
+            for (dimension_offset, wkt) in [(0, xy), (1000, z), (2000, m), (3000, zm)] {
+                let copy_to_query = format!(
+                    "COPY (SELECT ST_GeomFromText('{wkt}') as a)
+                     TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+                );
+                Spi::run(&copy_to_query).unwrap_or_else(|e| panic!("{wkt} was refused: {e}"));
+
+                // the statistics name the code the specification gives the type, which says
+                // the walk read the dimensions of it and not only the type
+                assert_eq!(
+                    geospatial_types_text("a"),
+                    Some(format!("{{{}}}", code + dimension_offset)),
+                    "{wkt}"
+                );
+            }
         }
     }
 
