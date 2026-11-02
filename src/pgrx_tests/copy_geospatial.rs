@@ -1032,9 +1032,6 @@ mod tests {
         assert_eq!(srids, "4269,3857");
     }
 
-    // postgis 3.6.4 crashes the backend in GetSysCacheOid for any geography whose srid is not
-    // 4326 when it runs on pg19, so the test cannot run there
-    #[cfg(not(feature = "pg19"))]
     #[pg_test]
     fn test_geo_geography_with_projected_srid() {
         if postgis_missing() {
@@ -1074,8 +1071,6 @@ mod tests {
         assert_eq!(srid, 4269);
     }
 
-    // the 4269 geography value hits the same postgis 3.6.4 crash on pg19 as the test above
-    #[cfg(not(feature = "pg19"))]
     #[pg_test]
     fn test_geo_geography_without_typmod_is_lon_lat() {
         if postgis_missing() {
