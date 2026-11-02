@@ -481,7 +481,16 @@ mod tests {
         let test_container_name = std::env::var("AZURE_TEST_CONTAINER_NAME")
             .expect("AZURE_TEST_CONTAINER_NAME not found");
 
-        let connection_string = std::env::var("AZURE_STORAGE_CONNECTION_STRING").unwrap();
+        // the connection string is built here rather than read from
+        // AZURE_STORAGE_CONNECTION_STRING: that is the one value of the test env file written
+        // in quotes, and the Makefile's include keeps them, so what the environment carries
+        // under ci is a string no connection string parser accepts
+        let connection_string = format!(
+            "DefaultEndpointsProtocol=http;AccountName={};AccountKey={};BlobEndpoint={};",
+            std::env::var("AZURE_STORAGE_ACCOUNT").unwrap(),
+            std::env::var("AZURE_STORAGE_KEY").unwrap(),
+            std::env::var("AZURE_STORAGE_ENDPOINT").unwrap(),
+        );
 
         std::env::set_var("AZURE_STORAGE_ACCOUNT", "wrong_account");
         std::env::set_var("AZURE_STORAGE_KEY", "wrong_key");
