@@ -162,14 +162,56 @@ mod tests {
         );
         Spi::run(&copy_to_query).unwrap();
 
-        // json has no infinity, so the bounding box keys are present but null
+        // a coordinate that is not a finite number bounds nothing, so the column is written
+        // with the geometry types it has and with no bounding box at all
         assert_eq!(
             stats_geospatial_text("a"),
-            Some(
-                "{\"bbox\": {\"xmax\": null, \"xmin\": null, \"ymax\": null, \"ymin\": null}, \
-                 \"geospatial_types\": [1]}"
-                    .to_string()
-            )
+            Some("{\"bbox\": null, \"geospatial_types\": [1]}".to_string())
+        );
+    }
+
+    // a column of a finite geometry and a non finite one is the case a box can be written half
+    // of: the two bounds the finite geometry gave read as a box, and the two the non finite one
+    // gave are NaN. A reader intersects a query with such a box by comparing against the NaN,
+    // which is false for every query, so it skips a row group holding rows that answer it.
+    #[pg_test]
+    fn test_geo_a_non_finite_coordinate_takes_the_whole_box() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        let copy_to_query = format!(
+            "COPY (SELECT ST_MakePoint(5, 5) as a
+                   UNION ALL SELECT ST_MakePoint('NaN'::float8, 2))
+             TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to_query).unwrap();
+
+        assert_eq!(
+            stats_geospatial_text("a"),
+            Some("{\"bbox\": null, \"geospatial_types\": [1]}".to_string())
+        );
+    }
+
+    // the same for a geography column, whose box is accumulated by a bounder of our own
+    #[pg_test]
+    fn test_geo_a_non_finite_coordinate_takes_the_whole_geography_box() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        let copy_to_query = format!(
+            "COPY (SELECT ST_MakePoint(5, 5)::geography as a
+                   UNION ALL SELECT ST_SetSRID(ST_MakePoint('Infinity'::float8, 2), 4326)::geography)
+             TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        );
+        Spi::run(&copy_to_query).unwrap();
+
+        assert_eq!(
+            stats_geospatial_text("a"),
+            Some("{\"bbox\": null, \"geospatial_types\": [1]}".to_string())
         );
     }
 
