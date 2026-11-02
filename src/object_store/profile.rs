@@ -63,19 +63,24 @@ fn scheme_name(scheme: &ObjectStoreScheme) -> Option<&'static str> {
     }
 }
 
+// profile_name_is_a_name tells whether a profile name is one, which is what it is refused
+// for below.
+pub(crate) fn profile_name_is_a_name(profile: &str) -> bool {
+    !profile.is_empty()
+        && profile.len() <= MAX_PROFILE_NAME_LEN
+        && profile
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        && !profile.starts_with('.')
+        && !profile.contains("..")
+}
+
 // ensure_profile_name_is_a_name refuses a profile name that is not one. The name becomes a
 // part of the path of a gcs service account key and of the name of an azure config file's
 // section, so a name carrying a separator or a parent directory would name a file of the
 // server that the mapping never mentioned.
 fn ensure_profile_name_is_a_name(profile: &str) {
-    let is_a_name = profile.len() <= MAX_PROFILE_NAME_LEN
-        && profile
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
-        && !profile.starts_with('.')
-        && !profile.contains("..");
-
-    if !is_a_name {
+    if !profile_name_is_a_name(profile) {
         ereport!(
             PgLogLevel::ERROR,
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
