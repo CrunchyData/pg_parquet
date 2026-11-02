@@ -637,7 +637,21 @@ mod tests {
         let unremovable = "data_0.parquet";
         let unremovable_path = format!("{UNREMOVABLE_TEST_FOLDER_PATH}/{unremovable}");
         std::fs::remove_file(&unremovable_path).expect("the copy finished no first file");
-        std::fs::create_dir(&unremovable_path).expect("failed to take the place of the file");
+
+        // a file is staged next to the destination and renamed into place, so a rename the
+        // copy already had in flight puts the first file back after it was removed: the
+        // folder is put in its place again until it is the folder that is there, rather than
+        // once in a window the copy is free to write in
+        loop {
+            match std::fs::create_dir(&unremovable_path) {
+                Ok(()) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    std::fs::remove_file(&unremovable_path)
+                        .expect("failed to take the place of the file");
+                }
+                Err(e) => panic!("failed to take the place of the file: {e}"),
+            }
+        }
 
         let cancelled = Spi::get_one::<bool>(&format!("SELECT pg_cancel_backend({copy_pid})"))
             .unwrap()
