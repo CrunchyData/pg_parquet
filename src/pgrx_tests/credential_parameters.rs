@@ -441,4 +441,108 @@ mod tests {
             "an azure key with no account was read: {error}"
         );
     }
+
+    // ===================== the other two stores =====================
+
+    // the azure parameters are read the same way, which only a copy that reaches azurite
+    // with them while the environment names another account can show
+    #[pg_test]
+    #[cfg(not(rhel8))]
+    fn test_azure_credentials_in_parameters_are_used() {
+        let test_container_name = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let account_name = std::env::var("AZURE_STORAGE_ACCOUNT").unwrap();
+        let account_key = std::env::var("AZURE_STORAGE_KEY").unwrap();
+
+        // the environment is left naming an account that does not work, so a copy that
+        // reaches the container is one that read the parameters instead of it
+        std::env::set_var("AZURE_STORAGE_ACCOUNT", "wrong_account");
+        std::env::set_var("AZURE_STORAGE_KEY", "wrong_key");
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
+
+        allow_credentials_in_parameters();
+        Spi::run(&format!(
+            "SET pg_parquet.azure_storage_account TO '{account_name}';
+             SET pg_parquet.azure_storage_key TO '{account_key}';"
+        ))
+        .unwrap();
+
+        let uri = format!("az://{test_container_name}/pg_parquet_parameters_test.parquet");
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(uri);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // a connection string carries the rest of the credentials, so it is read on its own
+    #[pg_test]
+    #[cfg(not(rhel8))]
+    fn test_an_azure_connection_string_in_parameters_is_used() {
+        let test_container_name = std::env::var("AZURE_TEST_CONTAINER_NAME")
+            .expect("AZURE_TEST_CONTAINER_NAME not found");
+
+        let connection_string = std::env::var("AZURE_STORAGE_CONNECTION_STRING").unwrap();
+
+        std::env::set_var("AZURE_STORAGE_ACCOUNT", "wrong_account");
+        std::env::set_var("AZURE_STORAGE_KEY", "wrong_key");
+        std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
+
+        allow_credentials_in_parameters();
+        Spi::run(&format!(
+            "SET pg_parquet.azure_storage_connection_string TO '{connection_string}'"
+        ))
+        .unwrap();
+
+        let uri = format!("az://{test_container_name}/pg_parquet_parameters_test.parquet");
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(uri);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // and the gcs key, which is the whole of the credentials of that store
+    #[pg_test]
+    fn test_gcs_credentials_in_parameters_are_used() {
+        let test_bucket_name =
+            std::env::var("GOOGLE_TEST_BUCKET").expect("GOOGLE_TEST_BUCKET not found");
+
+        let service_account_key = std::env::var("GOOGLE_SERVICE_ACCOUNT_KEY").unwrap();
+
+        // the environment is left without a key, so only the parameters can answer
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_KEY");
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_PATH");
+
+        allow_credentials_in_parameters();
+        Spi::run(&format!(
+            "SET pg_parquet.gcs_service_account_key TO {}",
+            pgrx::spi::quote_literal(&service_account_key)
+        ))
+        .unwrap();
+
+        let uri = format!("gs://{test_bucket_name}/pg_parquet_parameters_test.parquet");
+        let test_table = TestTable::<i32>::new("int4".into()).with_uri(uri);
+        test_table.insert("INSERT INTO test_expected (a) VALUES (1), (2), (null);");
+        test_table.assert_expected_and_result_rows();
+    }
+
+    // a parameter set to nothing is a parameter that was not set, so it names no credential
+    // rather than an empty one
+    #[pg_test]
+    fn test_a_parameter_set_to_nothing_is_not_a_credential() {
+        let test_bucket_name = test_bucket();
+
+        allow_credentials_in_parameters();
+
+        // the empty string reads as unset, so the environment is what answers
+        Spi::run(
+            "SET pg_parquet.aws_access_key_id TO '';
+             SET pg_parquet.aws_secret_access_key TO '';",
+        )
+        .unwrap();
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 as a) TO \
+             's3://{test_bucket_name}/pg_parquet_parameters_test.parquet'"
+        ))
+        .unwrap();
+    }
 }
