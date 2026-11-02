@@ -331,4 +331,114 @@ mod tests {
         ))
         .unwrap();
     }
+
+    // ===================== the order the three are read in =====================
+
+    // the parameters, then the profile, then the environment: each level is proven by making
+    // the level below it one that does not work, so only the level above can be answering
+    #[pg_test]
+    fn test_the_order_the_credentials_are_read_in() {
+        use std::io::Write;
+
+        let test_bucket_name = test_bucket();
+        let uri = format!("s3://{test_bucket_name}/pg_parquet_order_test.parquet");
+
+        let access_key_id = std::env::var("AWS_ACCESS_KEY_ID").unwrap();
+        let secret_access_key = std::env::var("AWS_SECRET_ACCESS_KEY").unwrap();
+        let region = std::env::var("AWS_REGION").unwrap();
+        let endpoint = std::env::var("AWS_ENDPOINT_URL").unwrap();
+
+        // level three, the environment, is what works to begin with
+        Spi::run(&format!("COPY (SELECT 1 as a) TO '{uri}'")).unwrap();
+
+        // level two is a profile, whose credentials do not work, so a copy that reaches the
+        // store after naming it is a copy that read the environment instead of the profile
+        let profile = "pg_parquet_order_profile";
+        let config = format!(
+            "[profile {profile}]\n\
+             region={region}\n\
+             aws_access_key_id=AKIAIOSFODNN7EXAMPLE\n\
+             aws_secret_access_key=not_the_secret_of_the_environment\n\
+             endpoint_url={endpoint}\n"
+        );
+        let config_path = "/tmp/pg_parquet_order_aws_config";
+        std::env::set_var("AWS_CONFIG_FILE", config_path);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .create(true)
+            .open(config_path)
+            .unwrap()
+            .write_all(config.as_bytes())
+            .unwrap();
+
+        Spi::run(&format!("SET pg_parquet.profile_name TO '{profile}'")).unwrap();
+
+        let error = statement_error(&format!("COPY (SELECT 1 as a) TO '{uri}'"));
+        assert!(
+            error.contains("403") || error.contains("Forbidden"),
+            "the profile was not read ahead of the environment: {error}"
+        );
+
+        // level one is the parameters, which are read ahead of the profile that does not work
+        allow_credentials_in_parameters();
+        Spi::run(&format!(
+            "SET pg_parquet.aws_access_key_id TO '{access_key_id}';
+             SET pg_parquet.aws_secret_access_key TO '{secret_access_key}';"
+        ))
+        .unwrap();
+
+        Spi::run(&format!("COPY (SELECT 1 as a) TO '{uri}'")).unwrap();
+
+        // and resetting them goes back to the profile, which is still the one that fails
+        Spi::run("RESET pg_parquet.aws_access_key_id; RESET pg_parquet.aws_secret_access_key;")
+            .unwrap();
+
+        let error = statement_error(&format!("COPY (SELECT 1 as a) TO '{uri}'"));
+        assert!(
+            error.contains("403") || error.contains("Forbidden"),
+            "resetting the parameters did not go back to the profile: {error}"
+        );
+    }
+
+    // a set of parameters that names no identity is refused, rather than the rest of them
+    // being read from a profile or from the environment and the requests made as the server
+    #[pg_test]
+    fn test_an_incomplete_set_of_parameters_is_refused() {
+        let test_bucket_name = test_bucket();
+        let uri = format!("s3://{test_bucket_name}/pg_parquet_order_test.parquet");
+
+        allow_credentials_in_parameters();
+
+        // a secret with no key id
+        Spi::run("SET pg_parquet.aws_secret_access_key TO 'a_secret'").unwrap();
+        let error = statement_error(&format!("COPY (SELECT 1 as a) TO '{uri}'"));
+        assert!(
+            error.contains("pg_parquet.aws_access_key_id is not set"),
+            "a secret with no key id was read: {error}"
+        );
+
+        // a key id with no secret
+        Spi::run(
+            "RESET pg_parquet.aws_secret_access_key;
+             SET pg_parquet.aws_access_key_id TO 'a_key_id';",
+        )
+        .unwrap();
+        let error = statement_error(&format!("COPY (SELECT 1 as a) TO '{uri}'"));
+        assert!(
+            error.contains("pg_parquet.aws_secret_access_key is not set"),
+            "a key id with no secret was read: {error}"
+        );
+
+        // and an azure key with no account
+        Spi::run("RESET pg_parquet.aws_access_key_id").unwrap();
+        Spi::run("SET pg_parquet.azure_storage_key TO 'a_key'").unwrap();
+        let error = statement_error(
+            "COPY (SELECT 1 as a) TO 'az://testcontainer/pg_parquet_order_test.parquet'",
+        );
+        assert!(
+            error.contains("pg_parquet.azure_storage_account is not set"),
+            "an azure key with no account was read: {error}"
+        );
+    }
 }

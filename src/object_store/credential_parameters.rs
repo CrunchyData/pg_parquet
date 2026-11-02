@@ -1,7 +1,7 @@
 use std::ffi::{c_char, c_void, CStr, CString};
 
 use object_store::ObjectStoreScheme;
-use pgrx::{pg_guard, pg_sys, GucSetting};
+use pgrx::{ereport, pg_guard, pg_sys, GucSetting, PgLogLevel, PgSqlErrorCode};
 
 // ALLOW_CREDENTIALS_IN_PARAMETERS opens the parameters below, which a session puts the
 // credentials of an object store themselves into rather than naming a profile they are kept
@@ -65,14 +65,56 @@ pub(crate) fn parameter(setting: &GucSetting<Option<CString>>) -> Option<String>
 // store built from them answers the copy that was made with them and nothing after it.
 pub(crate) fn credentials_are_in_parameters(scheme: &ObjectStoreScheme) -> bool {
     match scheme {
-        ObjectStoreScheme::AmazonS3 => parameter(&AWS_ACCESS_KEY_ID).is_some(),
+        ObjectStoreScheme::AmazonS3 => {
+            let access_key_id = parameter(&AWS_ACCESS_KEY_ID);
+            let secret_access_key = parameter(&AWS_SECRET_ACCESS_KEY);
+            let session_token = parameter(&AWS_SESSION_TOKEN);
+
+            if access_key_id.is_none() && (secret_access_key.is_some() || session_token.is_some()) {
+                incomplete_parameters("pg_parquet.aws_access_key_id");
+            }
+
+            if access_key_id.is_some() && secret_access_key.is_none() {
+                incomplete_parameters("pg_parquet.aws_secret_access_key");
+            }
+
+            access_key_id.is_some()
+        }
         ObjectStoreScheme::MicrosoftAzure => {
-            parameter(&AZURE_STORAGE_CONNECTION_STRING).is_some()
-                || parameter(&AZURE_STORAGE_ACCOUNT).is_some()
+            let connection_string = parameter(&AZURE_STORAGE_CONNECTION_STRING);
+            let account = parameter(&AZURE_STORAGE_ACCOUNT);
+            let key = parameter(&AZURE_STORAGE_KEY);
+            let sas_token = parameter(&AZURE_STORAGE_SAS_TOKEN);
+
+            if connection_string.is_none()
+                && account.is_none()
+                && (key.is_some() || sas_token.is_some())
+            {
+                incomplete_parameters("pg_parquet.azure_storage_account");
+            }
+
+            connection_string.is_some() || account.is_some()
         }
         ObjectStoreScheme::GoogleCloudStorage => parameter(&GOOGLE_SERVICE_ACCOUNT_KEY).is_some(),
         _ => false,
     }
+}
+
+// incomplete_parameters refuses a set of parameters that names no identity the store can be
+// reached with. The one that is missing is what the rest of them would otherwise be read
+// without: a session that set a secret and no key id would reach the store as the server
+// rather than as itself, and be told nothing about it.
+fn incomplete_parameters(missing: &str) -> ! {
+    ereport!(
+        PgLogLevel::ERROR,
+        PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        format!("{missing} is not set, so the credentials in the parameters name no identity"),
+        "The parameters of a store are read together, and a session that set some of them is \
+         refused rather than having the rest of them read from a profile or from the \
+         environment of the server, which would make its requests as the server."
+    );
+
+    unreachable!("an incomplete set of credential parameters was read");
 }
 
 // check_credential_parameter refuses a credential the session would leave behind it. The
