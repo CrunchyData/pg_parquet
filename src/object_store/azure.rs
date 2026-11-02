@@ -6,10 +6,13 @@ use ini::Ini;
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use url::Url;
 
-use super::{client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration};
+use super::{
+    client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration,
+    profile::profile_file_path,
+};
 
 // AZURE_CONFIG_SECTION is the section of the azure config file the storage settings are
-// read from. A profile is a section named after it, as [storage:<profile>].
+// read from, in the file of the server and in the file of a profile alike.
 const AZURE_CONFIG_SECTION: &str = "storage";
 
 // create_azure_object_store creates a MicrosoftAzure object store with the given container name.
@@ -26,7 +29,7 @@ const AZURE_CONFIG_SECTION: &str = "storage";
 // - AZURE_ALLOW_HTTP (env var only, object_store specific)
 // - AZURE_<HTTP CLIENT OPTION>, e.g. AZURE_TIMEOUT (env var only, object_store specific)
 // A session that named a profile reads every one of the config parameters above from the
-// [storage:<profile>] section of the config file instead.
+// config file of that profile instead, which is a file named after it next to this one.
 pub(crate) fn create_azure_object_store(
     uri: &Url,
     profile: Option<&str>,
@@ -138,7 +141,7 @@ struct AzureStorageConfig {
 
 impl AzureStorageConfig {
     // load reads the azure config from the environment variables first and config files as fallback,
-    // or from the section of the profile the session named.
+    // or from the config file of the profile the session named.
     // There is no proper azure sdk config crate that can read the config files.
     // So, we need to read the config files manually from azure's ini config.
     // See https://learn.microsoft.com/en-us/cli/azure/azure-cli-configuration?view=azure-cli-latest
@@ -154,25 +157,29 @@ impl AzureStorageConfig {
                 .to_string(),
         );
 
+        // a profile is a config file of its own, next to the one of the server, rather than
+        // a section of it: azure's config file has a flat section per feature, which each
+        // map to one AZURE_<SECTION>_<NAME> variable, and the way azure itself keeps more
+        // than one set of credentials is a config directory per set (AZURE_CONFIG_DIR). A
+        // file per profile also carries the ordinary [storage] section, so the file of a
+        // profile is in the same format as the one the server reads.
+        let azure_config_file_path = match profile {
+            Some(profile) => profile_file_path(&azure_config_file_path, profile),
+            None => azure_config_file_path,
+        };
+
         let azure_config_content = Ini::load_from_file(&azure_config_file_path).ok();
 
-        // a profile is a section of the config file of its own, named after it, and the
-        // section every session shares is the one with no profile
-        let section_name = match profile {
-            Some(profile) => format!("{AZURE_CONFIG_SECTION}:{profile}"),
-            None => AZURE_CONFIG_SECTION.to_string(),
-        };
+        if profile.is_some() && azure_config_content.is_none() {
+            pgrx::error!(
+                "the azure config file \"{azure_config_file_path}\" of the profile cannot \
+                 be read, so the profile names no credentials"
+            );
+        }
 
         let section = azure_config_content
             .as_ref()
-            .and_then(|ini| ini.section(Some(section_name.as_str())));
-
-        if profile.is_some() && section.is_none() {
-            pgrx::error!(
-                "the azure config file \"{azure_config_file_path}\" has no \
-                 [{section_name}] section, so the profile names no credentials"
-            );
-        }
+            .and_then(|ini| ini.section(Some(AZURE_CONFIG_SECTION)));
 
         let from_section = |key: &str| {
             section
@@ -182,7 +189,7 @@ impl AzureStorageConfig {
 
         // a profile is read on its own rather than before the environment: the environment
         // is what every session of the server shares, so falling back to it would make a
-        // profile whose section is missing a key read the credentials of the server
+        // profile whose file is missing a key read the credentials of the server
         let from_env_or_section = |variable: &str, key: &str| match profile {
             Some(_) => from_section(key),
             None => std::env::var(variable).ok().or_else(|| from_section(key)),
@@ -205,8 +212,8 @@ impl AzureStorageConfig {
         let sas_token = from_env_or_section("AZURE_STORAGE_SAS_TOKEN", "sas_token");
 
         // the settings below are read from the environment for the session that named no
-        // profile, which is what they have always been read from, and from the section of
-        // the profile for a session that named one
+        // profile, which is what they have always been read from, and from the file of the
+        // profile for a session that named one
         let from_env_or_profile_section = |variable: &str, key: &str| match profile {
             Some(_) => from_section(key),
             None => std::env::var(variable).ok(),

@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
-use object_store::profile::{GCS_CREDENTIAL_DIRECTORY, PROFILE_NAME};
+use object_store::profile::PROFILE_NAME;
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
 use parquet_copy_hook::parallel_copy_to::{MAX_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS_LIMIT};
 use parquet_copy_hook::pg_compat::MarkGUCPrefixReserved;
@@ -126,23 +126,6 @@ pub extern "C-unwind" fn _PG_init() {
                 ),
                 &PROFILE_NAME,
                 GucContext::Userset,
-                GucFlags::default(),
-            );
-
-            GucRegistry::define_string_guc(
-                CStr::from_ptr("pg_parquet.gcs_credential_directory".as_pg_cstr()),
-                CStr::from_ptr(
-                    "Directory the service account key of a gcs profile is read from".as_pg_cstr(),
-                ),
-                CStr::from_ptr(
-                    "A gcs profile is read from <directory>/<profile>.json, since gcs has no \
-                     config file with a section per profile as s3 and azure have. Only a \
-                     superuser sets this, which is what keeps a session to the keys that \
-                     were put there."
-                        .as_pg_cstr(),
-                ),
-                &GCS_CREDENTIAL_DIRECTORY,
-                GucContext::Suset,
                 GucFlags::default(),
             );
 

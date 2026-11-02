@@ -4,7 +4,10 @@ mod tests {
 
     use pgrx::{pg_test, Spi};
 
-    use crate::pgrx_tests::common::{TestTable, LOCAL_TEST_FILE_PATH};
+    use crate::{
+        object_store::profile::profile_file_path,
+        pgrx_tests::common::{TestTable, LOCAL_TEST_FILE_PATH},
+    };
 
     const PROFILE: &str = "pg_parquet_profile_test";
 
@@ -373,23 +376,53 @@ mod tests {
         map_profiles("profile_scalar_role", r#"{"aws_profiles": "x"}"#);
     }
 
+    // the key of a gcs profile is a file next to the key the server reads, so a server
+    // whose own key is inline in GOOGLE_SERVICE_ACCOUNT_KEY names no directory to read a
+    // profile's key from
     #[pg_test]
-    #[should_panic(expected = "pg_parquet.gcs_credential_directory is not set")]
-    fn test_gcs_profile_needs_a_credential_directory() {
-        Spi::run(&format!(
-            "SET pg_parquet.gcs_credential_directory TO '';
-             SET pg_parquet.profile_name TO '{PROFILE}';"
-        ))
-        .unwrap();
+    #[should_panic(expected = "GOOGLE_SERVICE_ACCOUNT_PATH is not set")]
+    fn test_gcs_profile_needs_the_service_account_path() {
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_PATH");
+
+        Spi::run(&format!("SET pg_parquet.profile_name TO '{PROFILE}'")).unwrap();
 
         Spi::run("COPY (SELECT 1 as a) TO 'gs://testbucket/pg_parquet_profile_test.parquet'")
             .unwrap();
     }
 
+    // the file of a profile is named after it next to the one the server reads, keeping the
+    // extension of it, so a key file and an azure config file are both named the same way
     #[pg_test]
-    #[should_panic(expected = "has no [storage:pg_parquet_profile_test] section")]
-    fn test_azure_profile_without_a_section_is_refused() {
-        let azure_config_file_path = "/tmp/pg_parquet_profile_azure_config";
+    fn test_profile_file_is_named_next_to_the_configured_one() {
+        assert_eq!(
+            profile_file_path("/etc/pg_parquet/gcs/server.json", "analytics"),
+            "/etc/pg_parquet/gcs/analytics.json"
+        );
+
+        // an azure config file carries no extension, and neither does the profile's
+        assert_eq!(
+            profile_file_path("/etc/pg_parquet/azure/config", "analytics"),
+            "/etc/pg_parquet/azure/analytics"
+        );
+
+        // a profile holding a dot of its own keeps it, ahead of the extension
+        assert_eq!(
+            profile_file_path("/keys/server.json", "team.analytics"),
+            "/keys/team.analytics.json"
+        );
+
+        // a configured path that is a bare file name stays in the directory it named
+        assert_eq!(profile_file_path("config", "analytics"), "analytics");
+    }
+
+    // the config file of the server is not the config file of a profile, so a profile with
+    // no file of its own is refused rather than read from the server's
+    #[pg_test]
+    #[should_panic(expected = "of the profile cannot be read")]
+    fn test_azure_profile_without_a_config_file_is_refused() {
+        let azure_config_file_path = "/tmp/pg_parquet_profile_azure/config";
+        std::fs::create_dir_all("/tmp/pg_parquet_profile_azure").unwrap();
+        std::fs::remove_file(format!("/tmp/pg_parquet_profile_azure/{PROFILE}")).ok();
         std::env::set_var("AZURE_CONFIG_FILE", azure_config_file_path);
 
         let mut file = std::fs::OpenOptions::new()
@@ -410,7 +443,7 @@ mod tests {
 
     #[pg_test]
     #[cfg(not(rhel8))]
-    fn test_azure_profile_reads_its_own_section() {
+    fn test_azure_profile_reads_its_own_config_file() {
         let test_container_name: String = std::env::var("AZURE_TEST_CONTAINER_NAME")
             .expect("AZURE_TEST_CONTAINER_NAME not found");
 
@@ -422,28 +455,30 @@ mod tests {
         // the connection string of the environment would override the section
         std::env::remove_var("AZURE_STORAGE_CONNECTION_STRING");
 
-        let content = format!(
-            "[storage]\n\
-             account=wrong_account\n\
-             key=wrong_key\n\
-             [storage:{PROFILE}]\n\
-             account={account_name}\n\
-             key={account_key}\n\
-             endpoint={endpoint}\n\
-             allow_http={allow_http}\n"
-        );
+        std::fs::create_dir_all("/tmp/pg_parquet_profile_azure").unwrap();
 
-        let azure_config_file_path = "/tmp/pg_parquet_profile_azure_config";
+        // the config file of the server holds credentials that do not work, so the copy
+        // below only succeeds if the file of the profile is the one that was read
+        let azure_config_file_path = "/tmp/pg_parquet_profile_azure/config";
         std::env::set_var("AZURE_CONFIG_FILE", azure_config_file_path);
+        std::fs::write(
+            azure_config_file_path,
+            "[storage]\naccount=wrong_account\nkey=wrong_key\n",
+        )
+        .unwrap();
 
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .create(true)
-            .open(azure_config_file_path)
-            .unwrap();
-
-        file.write_all(content.as_bytes()).unwrap();
+        // and the file of the profile is a file of the same format named after it
+        std::fs::write(
+            format!("/tmp/pg_parquet_profile_azure/{PROFILE}"),
+            format!(
+                "[storage]\n\
+                 account={account_name}\n\
+                 key={account_key}\n\
+                 endpoint={endpoint}\n\
+                 allow_http={allow_http}\n"
+            ),
+        )
+        .unwrap();
 
         Spi::run(&format!("SET pg_parquet.profile_name TO '{PROFILE}'")).unwrap();
 

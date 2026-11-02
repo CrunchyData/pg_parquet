@@ -464,10 +464,12 @@ COPY products TO 's3://analytics-lake/products.parquet';
 A profile is a name and never a secret, so nothing that a session sets or that the mapping holds is a credential: the credentials themselves stay in the files the administrator keeps them in, which is what keeps them out of the server log, out of `pg_stat_activity`, out of `pg_stat_statements` and out of a dump. Where a profile is read from depends on the store:
 
 - `s3://`: the `[profile <name>]` section of `~/.aws/config` or `AWS_CONFIG_FILE`, read by the aws sdk the way `AWS_PROFILE` is read. Note that a profile using `credential_process` or `sso` is not read, since `pg_parquet` builds the sdk without those features,
-- `az://`: the `[storage:<name>]` section of `~/.azure/config` or `AZURE_CONFIG_FILE`, which takes every config parameter the `[storage]` section takes and `tenant_id`, `client_id`, `client_secret`, `federated_token_file`, `endpoint` and `allow_http` besides,
-- `gs://`: the service account key at `<pg_parquet.gcs_credential_directory>/<name>.json`, since gcs has no config file with a section per profile to read instead.
+- `az://`: a config file named after the profile next to `~/.azure/config` or `AZURE_CONFIG_FILE`, so `AZURE_CONFIG_FILE=/etc/pg_parquet/azure/config` makes the profile `analytics` the file `/etc/pg_parquet/azure/analytics`. That file is in the same format as the one the server reads, an ordinary `[storage]` section, and it takes every config parameter listed above plus `tenant_id`, `client_id`, `client_secret`, `federated_token_file`, `endpoint` and `allow_http`,
+- `gs://`: a service account key named after the profile next to the one `GOOGLE_SERVICE_ACCOUNT_PATH` names, so `GOOGLE_SERVICE_ACCOUNT_PATH=/etc/pg_parquet/gcs/server.json` makes the profile `analytics` the key `/etc/pg_parquet/gcs/analytics.json`. A server that reads its own key inline from `GOOGLE_SERVICE_ACCOUNT_KEY` names no directory for the keys of the profiles, so a `gs://` copy that names a profile is refused until the server reads its own key from a file.
 
-A profile is read on its own rather than before the environment: a profile whose section or key file is missing fails the copy instead of falling back to the credentials of the server, which would otherwise hand a session an identity it did not ask for. A local path and an `http(s)` endpoint are read with no credentials at all, so a profile does not apply to them and is ignored rather than refused.
+So for azure and gcs alike the rule is one: a profile is a file named after it next to the file the server was configured with, carrying the extension of that file. The directory is the server's own, which is what keeps a session to the credentials that were put there, and a profile is a name rather than a path, which is what keeps it to that directory.
+
+A profile is read on its own rather than before the environment: a profile whose file is missing fails the copy instead of falling back to the credentials of the server, which would otherwise hand a session an identity it did not ask for. A local path and an `http(s)` endpoint are read with no credentials at all, so a profile does not apply to them and is ignored rather than refused.
 
 Which profiles a role may name is a table that only a superuser and the `parquet_profile_manager` role may write:
 
@@ -482,10 +484,10 @@ A row is read for every role the session has the privileges of, so a profile map
 
 ##### End to end
 
-The administrator keeps the credentials in the config files the sdks already read, one profile per identity, and points the server at them:
+The administrator keeps the credentials where each sdk already reads them, one profile per identity:
 
 ```ini
-# /etc/pg_parquet/aws/config -- AWS_CONFIG_FILE
+# /etc/pg_parquet/aws/config -- AWS_CONFIG_FILE, one section per profile
 [profile analytics]
 region=us-east-1
 aws_access_key_id=...
@@ -498,19 +500,16 @@ aws_secret_access_key=...
 ```
 
 ```ini
-# /etc/pg_parquet/azure/config -- AZURE_CONFIG_FILE
-[storage:analytics]
+# /etc/pg_parquet/azure/analytics -- AZURE_CONFIG_FILE is .../azure/config, so this is
+# the profile "analytics", in the same format as the server's own file
+[storage]
 account=analyticslake
 key=...
 ```
 
 ```
-# /etc/pg_parquet/gcs/analytics.json -- a service account key, named after the profile
-```
-
-```conf
-# postgresql.conf
-pg_parquet.gcs_credential_directory = '/etc/pg_parquet/gcs'
+# /etc/pg_parquet/gcs/analytics.json -- GOOGLE_SERVICE_ACCOUNT_PATH is
+# .../gcs/server.json, so this is the service account key of the profile "analytics"
 ```
 
 Then, in the database, the mapping. Note the two shapes: `analytics_team` reaches all three clouds, `reporting_team` reaches one.
@@ -539,7 +538,7 @@ GRANT reporting_team TO bob;
 SET pg_parquet.profile_name TO 'analytics';
 
 COPY orders TO 's3://analytics-lake/orders.parquet';   -- [profile analytics] of the aws config
-COPY orders TO 'az://analytics-lake/orders.parquet';   -- [storage:analytics] of the azure config
+COPY orders TO 'az://analytics-lake/orders.parquet';   -- /etc/pg_parquet/azure/analytics
 COPY orders TO 'gs://analytics-lake/orders.parquet';   -- /etc/pg_parquet/gcs/analytics.json
 
 SELECT * FROM parquet.my_profiles;
@@ -565,7 +564,7 @@ RESET pg_parquet.profile_name;                         -- back to the server's o
 COPY orders TO 's3://shared-lake/orders.parquet';      -- COPY 1000
 ```
 
-Because one GUC names one profile, a session that reaches several clouds at once needs the **same profile name in each of them** — which is the administrator's choice in all three places, since the azure section name and the gcs key file name are picked when the credentials are written, and an aws profile can be aliased. A session whose clouds are named differently selects them one at a time.
+Because one GUC names one profile, a session that reaches several clouds at once needs the **same profile name in each of them** — which is the administrator's choice in all three places, since the azure and gcs files are named when the credentials are written and an aws profile can be aliased. A session whose clouds are named differently selects them one at a time.
 
 #### Http Client Options
 
@@ -614,7 +613,6 @@ A request that an object store is slow to answer is retried, which takes minutes
 The following GUC parameters are available:
 - `pg_parquet.enable_copy_hooks`: you can set this parameter to `on` or `off` to enable or disable the `pg_parquet` extension. The default value is `on`.
 - `pg_parquet.profile_name`: the profile the session's object store credentials are read from, as described under [Session Profiles](#session-profiles). The default is unset, which reads the credentials of the server's environment. Any role may set it, and `parquet.user_profile_mapping` is what says which profiles a role may name.
-- `pg_parquet.gcs_credential_directory`: the directory a `gs://` profile's service account key is read from, as `<directory>/<profile>.json`. Only a superuser may set it, which is what keeps a session to the keys that were put there. The default is unset, so a `gs://` copy that names a profile is refused until it is set.
 - `pg_parquet.max_parallel_workers`: the number of parallel workers a `COPY TO` or `COPY FROM` command may use. The default value is `0`, which keeps both of them single process. The workers come from the same pool as parallel query workers, so a request above `max_parallel_workers` is capped to it. A command that the pool cannot spare every worker it asked for runs with the ones it was given. A `COPY FROM` gains less from a large number of workers than a `COPY TO` does, because the workers only decode the row groups of the file while the leader inserts every row it hands out.
   - For `COPY TO`, each worker writes a range of the table's pages, and the ranges end up in the destination without being re-encoded. For an `s3://`, `az://` or `gs://` destination, every worker uploads the ranges it wrote as parts of the destination's own multipart upload and the backend only adds the file's footer, so each byte of the file is uploaded once, nothing is downloaded, and nothing of such a copy is written to local disk. A copy whose server crashes can leave an unfinished multipart upload behind, which the bucket's own rule for incomplete uploads is what removes. A part that is left behind this way holds the rows of the copy that wrote it, so a uri pattern that covers it skips it rather than reading those rows again, and reports it as a file the pattern does not read. The parts of that upload differ in size, which a store that requires all but the last part to be the same size, e.g. Cloudflare R2, rejects. The bytes of a range are uploaded as the range wrote them, header and footer included, so the destination holds a little under 1% of bytes nothing points at. For a local file, each worker writes a part file next to the destination instead, and the backend merges the parts into it. With `file_size_bytes` the destination is a folder of complete files, so each worker writes files of its own into it rather than parts of one file, and the file a worker is in the middle of is finished before its range ends, which leaves a few more and smaller files behind than a single process copy writes. The files of such a folder are numbered in the order the workers claim them, so the rows of the table are not in the order of the file names. Parallel `COPY TO` applies to a single non-temporary heap table copied to a plain local file, to a folder of files, or to one of those object stores; anything else, e.g. `COPY (SELECT ..) TO`, a `COPY TO PROGRAM` or `TO STDOUT`, or an `http://` uri, is copied by a single process. Note that each range writes its own row groups, so a parallel `COPY TO` ends up with more and smaller row groups than a single process one.
   - For `COPY FROM`, each worker decodes a subset of the row groups of the file and hands the rows to the backend that runs the command, which is the only one that writes them into the relation, in the order the file holds them. A uri with a wildcard stands for several files, whose row groups are one list the workers split between themselves the same way, each worker opening the file its next row group is in. Parallel `COPY FROM` applies to files, local, on an `s3://`, `az://` or `gs://` store, or at an `http(s)` endpoint that serves byte ranges, holding more than one row group together, read into a non-temporary heap table that has no row triggers and no attribute the command leaves to a default, an identity or a generation expression; anything else, e.g. a `COPY FROM PROGRAM`, is copied by a single process. Because only one process may write into the relation, the speedup is bounded by how fast that one process can insert, which the decoding of a few workers is usually enough to reach.
