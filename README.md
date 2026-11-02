@@ -576,7 +576,8 @@ A session can also put the credentials themselves into parameters, rather than n
 - `pg_stat_activity.query`, which a member of `pg_read_all_stats` reads for every session,
 - `pg_stat_statements`, if it is installed,
 - the error reports of the session, and whatever the client logs them into,
-- the client's own history, e.g. `~/.psql_history`.
+- the client's own history, e.g. `~/.psql_history`,
+- and the shared memory of a parallel copy: the workers make their requests with the credentials of the session that started them, which postgres carries to them by serializing the parameters of that session into the shared memory segment of the copy.
 
 Only a superuser opens them, since whether the credentials of the sessions of a server may be written into its log is the server's decision and not a session's:
 
