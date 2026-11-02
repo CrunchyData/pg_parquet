@@ -1,0 +1,210 @@
+use std::ffi::CString;
+
+use object_store::ObjectStoreScheme;
+use pgrx::{ereport, pg_sys, pg_sys::superuser, GucSetting, PgLogLevel, PgSqlErrorCode, Spi};
+
+// PROFILE_NAME names the credentials the session makes its object store requests with. It
+// is unset by default, which reads the environment of the server and the config files of
+// the cloud sdks, i.e. the one set of credentials every session of the server shares.
+//
+// Any role may set it on purpose. The name of a profile is not a secret, so a session is
+// free to say which one it wants, and parquet.user_profile_mapping, which only
+// parquet_profile_manager may write, is what says which ones it may have.
+pub(crate) static PROFILE_NAME: GucSetting<Option<CString>> =
+    GucSetting::<Option<CString>>::new(None);
+
+// a profile name becomes a part of a file name and of a config file's section name, so it
+// is as long as a Postgres identifier and made of what cannot be read as a path
+const MAX_PROFILE_NAME_LEN: usize = 63;
+
+// current_profile is the profile the session selected for the scheme of a uri, after
+// checking that the session is mapped to it. It is None for a session that selected none,
+// which is the credentials of the server's environment, and None for a store that has no
+// credentials for a profile to name, which a local path and an http(s) endpoint have not.
+pub(crate) fn current_profile(scheme: &ObjectStoreScheme) -> Option<String> {
+    let profile = guc_profile_name()?;
+
+    ensure_profile_name_is_a_name(&profile);
+
+    // a local path and an http(s) endpoint are read with no credentials at all, so there
+    // is no identity for a profile to pick between and nothing to refuse
+    let scheme_name = scheme_name(scheme)?;
+
+    ensure_session_is_mapped_to_profile(scheme_name, &profile);
+
+    Some(profile)
+}
+
+// guc_profile_name is the profile the session named, where unset and empty are both no
+// profile: a GUC that is reset reads as the empty string rather than as unset once it has
+// been set in the session.
+fn guc_profile_name() -> Option<String> {
+    let profile = PROFILE_NAME.get()?;
+
+    let profile = profile
+        .to_str()
+        .unwrap_or_else(|e| panic!("pg_parquet.profile_name is not valid utf-8: {e}"));
+
+    if profile.is_empty() {
+        return None;
+    }
+
+    Some(profile.to_string())
+}
+
+// scheme_name is the name the profiles of a scheme are mapped under, for a scheme whose
+// store is reached with credentials that a profile can name.
+fn scheme_name(scheme: &ObjectStoreScheme) -> Option<&'static str> {
+    match scheme {
+        ObjectStoreScheme::AmazonS3 => Some("s3"),
+        ObjectStoreScheme::MicrosoftAzure => Some("az"),
+        ObjectStoreScheme::GoogleCloudStorage => Some("gs"),
+        _ => None,
+    }
+}
+
+// profile_name_is_a_name tells whether a profile name is one, which is what it is refused
+// for below.
+pub(crate) fn profile_name_is_a_name(profile: &str) -> bool {
+    !profile.is_empty()
+        && profile.len() <= MAX_PROFILE_NAME_LEN
+        && profile
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        && !profile.starts_with('.')
+        && !profile.contains("..")
+}
+
+// ensure_profile_name_is_a_name refuses a profile name that is not one. The name becomes a
+// part of the path of a gcs service account key and of the name of an azure config file's
+// section, so a name carrying a separator or a parent directory would name a file of the
+// server that the mapping never mentioned.
+fn ensure_profile_name_is_a_name(profile: &str) {
+    if !profile_name_is_a_name(profile) {
+        ereport!(
+            PgLogLevel::ERROR,
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            format!("pg_parquet.profile_name \"{profile}\" is not a profile name"),
+            format!(
+                "A profile name is at most {MAX_PROFILE_NAME_LEN} ascii letters, digits, \
+                 underscores, dashes and dots, and it neither begins with a dot nor carries \
+                 two of them in a row, since the name is read as a part of a path."
+            ),
+        );
+    }
+}
+
+// ensure_session_is_mapped_to_profile refuses a profile the session is not mapped to, which
+// is what makes a GUC that any role may set the way to select one. The mapping is read on
+// every copy rather than when the GUC was set: a mapping that is taken away then stops the
+// next copy, and a GUC a role carries in pg_db_role_setting grants nothing by itself.
+fn ensure_session_is_mapped_to_profile(scheme_name: &str, profile: &str) {
+    // a superuser reads the credentials of every profile from the files of the server
+    if unsafe { superuser() } {
+        return;
+    }
+
+    // the workers of a parallel copy open stores of their own, with the profile and the
+    // user of the leader that already read the mapping for both, so the mapping is read
+    // once per copy rather than once per worker
+    if unsafe { pg_sys::ParallelWorkerNumber } >= 0 {
+        return;
+    }
+
+    let mapped = Spi::connect(|client| {
+        client
+            .select(
+                "SELECT parquet.profile_is_allowed($1, $2)",
+                Some(1),
+                &[scheme_name.into(), profile.into()],
+            )?
+            .first()
+            .get_one::<bool>()
+    })
+    .unwrap_or_else(|e| panic!("failed to read the profile mapping: {e}"))
+    .unwrap_or(false);
+
+    if !mapped {
+        ereport!(
+            PgLogLevel::ERROR,
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for profile \"{profile}\""),
+            format!(
+                "parquet.user_profile_mapping does not map the session to the profile for a \
+                 {scheme_name} store. Only roles with privileges of the \
+                 \"parquet_profile_manager\" role map a profile to a role."
+            ),
+        );
+    }
+}
+
+// profile_directory is the directory the credentials of the profiles of a store are kept
+// in: the directory the server names for them, and the directory of the file the server
+// reads its own credentials from when it names none. It is the server's own either way,
+// which is what keeps a session to the credentials that were put there.
+pub(crate) fn profile_directory(
+    directory_variable: &str,
+    configured_path: Option<&str>,
+) -> Option<String> {
+    if let Ok(directory) = std::env::var(directory_variable) {
+        if !directory.is_empty() {
+            return Some(directory.trim_end_matches('/').to_string());
+        }
+    }
+
+    let configured_path = std::path::Path::new(configured_path?);
+
+    Some(
+        configured_path
+            .parent()
+            .map_or_else(String::new, |parent| parent.to_string_lossy().to_string()),
+    )
+}
+
+// profile_file_path is the file a profile's credentials are read from, which is a file of
+// the directory above named after the profile. The profile is a name rather than a path,
+// which is what keeps it to that directory.
+pub(crate) fn profile_file_path(directory: &str, profile: &str, extension: Option<&str>) -> String {
+    let file_name = match extension {
+        Some(extension) => format!("{profile}.{extension}"),
+        None => profile.to_string(),
+    };
+
+    if directory.is_empty() {
+        return file_name;
+    }
+
+    format!("{directory}/{file_name}")
+}
+
+// gcs_service_account_path is the file a profile's gcs service account key is read from.
+// gcs has no config file with a section per profile as s3 and azure have, so the key of a
+// profile is a file of its own.
+pub(crate) fn gcs_service_account_path(profile: &str) -> String {
+    let configured_path = std::env::var("GOOGLE_SERVICE_ACCOUNT_PATH").ok();
+
+    let directory = profile_directory(
+        "GOOGLE_SERVICE_ACCOUNT_DIRECTORY",
+        configured_path.as_deref(),
+    );
+
+    match directory {
+        Some(directory) => profile_file_path(&directory, profile, Some("json")),
+        None => {
+            ereport!(
+                PgLogLevel::ERROR,
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!(
+                    "neither GOOGLE_SERVICE_ACCOUNT_DIRECTORY nor \
+                     GOOGLE_SERVICE_ACCOUNT_PATH is set, so the profile \"{profile}\" names \
+                     no service account key"
+                ),
+                "The key of a gcs profile is read from <directory>/<profile>.json, where the \
+                 directory is GOOGLE_SERVICE_ACCOUNT_DIRECTORY, or the directory of the key \
+                 GOOGLE_SERVICE_ACCOUNT_PATH names when that is unset."
+            );
+
+            unreachable!("a gcs profile was resolved without a service account directory");
+        }
+    }
+}

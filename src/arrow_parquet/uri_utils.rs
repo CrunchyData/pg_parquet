@@ -215,12 +215,11 @@ impl ParsedUriInfo {
         ))
     }
 
-    // the credentials a uri can carry before its host, "s3://key:secret@bucket/a.parquet",
-    // never reach an object store: the store is built from the scheme, the host and the port
-    // alone, and its credentials come from the environment, so such a uri is signed with the
-    // environment's credentials no matter what it carries. What the credentials in it do reach
-    // is every message that names the uri, the server log included, so a uri holding them is
-    // refused rather than copied into a log file.
+    // the credentials a uri can carry before its host never reach an object store: the store
+    // is built from the scheme, the host and the port alone, and its credentials come from the
+    // environment, so such a uri is signed with the environment's credentials no matter what it
+    // carries. What the credentials in it do reach is every message that names the uri, the
+    // server log included, so a uri holding them is refused rather than copied into a log file.
     fn try_reject_credentials(uri: &Url) -> Result<(), String> {
         if uri.username().is_empty() && uri.password().is_none() {
             return Ok(());

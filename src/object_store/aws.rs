@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::SystemTime};
 
-use aws_config::BehaviorVersion;
+use aws_config::{profile::ProfileFileCredentialsProvider, BehaviorVersion};
 use aws_credential_types::provider::ProvideCredentials;
 use object_store::aws::AmazonS3Builder;
 use url::Url;
@@ -24,7 +24,12 @@ use super::{client_options::load_client_options, object_store_cache::ObjectStore
 // - AWS_PROFILE (env var only)
 // - AWS_ALLOW_HTTP (env var only, object_store specific)
 // - AWS_<HTTP CLIENT OPTION>, e.g. AWS_TIMEOUT (env var only, object_store specific)
-pub(crate) fn create_s3_object_store(uri: &Url) -> ObjectStoreWithExpiration {
+// A session that named a profile reads the credentials of that profile from the config
+// files instead, rather than the AWS_PROFILE of the server's environment.
+pub(crate) fn create_s3_object_store(
+    uri: &Url,
+    profile: Option<&str>,
+) -> ObjectStoreWithExpiration {
     let bucket_name = parse_s3_bucket(uri).unwrap_or_else(|| {
         panic!("unsupported s3 uri: {uri}");
     });
@@ -33,7 +38,7 @@ pub(crate) fn create_s3_object_store(uri: &Url) -> ObjectStoreWithExpiration {
     // a fallback to the config files
     let mut aws_s3_builder = AmazonS3Builder::new().with_bucket_name(bucket_name);
 
-    let aws_s3_config = AwsS3Config::load();
+    let aws_s3_config = AwsS3Config::load(profile);
 
     // http client options, including allow http
     aws_s3_builder =
@@ -120,8 +125,9 @@ struct AwsS3Config {
 }
 
 impl AwsS3Config {
-    // load reads the s3 config from the environment variables first and config files as fallback.
-    fn load() -> Self {
+    // load reads the s3 config from the environment variables first and config files as fallback,
+    // or from the profile the session named.
+    fn load(profile: Option<&str>) -> Self {
         let allow_http = if let Ok(allow_http) = std::env::var("AWS_ALLOW_HTTP") {
             allow_http.parse().unwrap_or(false)
         } else {
@@ -129,8 +135,21 @@ impl AwsS3Config {
         };
 
         // first tries environment variables and then the config files
-        let sdk_config =
-            block_on(async { aws_config::defaults(BehaviorVersion::latest()).load().await });
+        let mut loader = aws_config::defaults(BehaviorVersion::latest());
+
+        if let Some(profile) = profile {
+            // the default chain reads the environment before the profile, so a profile that
+            // was named replaces the chain with the one provider that reads it: a server
+            // started with AWS_ACCESS_KEY_ID in its environment would otherwise make every
+            // session's requests with those credentials, whichever profile it named
+            loader = loader.profile_name(profile).credentials_provider(
+                ProfileFileCredentialsProvider::builder()
+                    .profile_name(profile)
+                    .build(),
+            );
+        }
+
+        let sdk_config = block_on(async { loader.load().await });
 
         let mut access_key_id = None;
         let mut secret_access_key = None;
