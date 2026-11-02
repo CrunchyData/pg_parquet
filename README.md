@@ -338,7 +338,7 @@ The object of a uri is named by the whole path of that uri, and a `#` or a `?` e
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
 > Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
 
-The credentials of an object store are read from the environment of the postgres process, as described below for each store, and never from the uri: a uri that carries credentials before its host, e.g. `s3://key:secret@bucket/file.parquet`, is rejected rather than signed with the credentials of the environment while its own are only written into the logs. A session can make its requests with credentials of its own instead, by naming a profile that the administrator mapped to its role, which is described under [Session Profiles](#session-profiles).
+The credentials of an object store are read from the environment of the postgres process, as described below for each store, and never from the uri: a uri that carries credentials before its host is rejected rather than signed with the credentials of the environment while its own are only written into the logs. A session can make its requests with credentials of its own instead, by naming a profile that the administrator mapped to its role, which is described under [Session Profiles](#session-profiles).
 
 #### S3 Storage
 
