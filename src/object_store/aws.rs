@@ -6,6 +6,10 @@ use object_store::aws::AmazonS3Builder;
 use url::Url;
 
 use crate::block_on;
+use crate::object_store::credential_parameters::{
+    parameter, AWS_ACCESS_KEY_ID, AWS_ENDPOINT_URL, AWS_REGION, AWS_SECRET_ACCESS_KEY,
+    AWS_SESSION_TOKEN,
+};
 
 use super::{client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration};
 
@@ -133,6 +137,21 @@ impl AwsS3Config {
         } else {
             false
         };
+
+        // the credentials the session put in the parameters are the ones it asked for, so
+        // they are read instead of the profile and of the environment both
+        if let Some(access_key_id) = parameter(&AWS_ACCESS_KEY_ID) {
+            return Self {
+                region: parameter(&AWS_REGION).or_else(|| std::env::var("AWS_REGION").ok()),
+                access_key_id: Some(access_key_id),
+                secret_access_key: parameter(&AWS_SECRET_ACCESS_KEY),
+                session_token: parameter(&AWS_SESSION_TOKEN),
+                expire_at: None,
+                endpoint_url: parameter(&AWS_ENDPOINT_URL)
+                    .or_else(|| std::env::var("AWS_ENDPOINT_URL").ok()),
+                allow_http,
+            };
+        }
 
         // first tries environment variables and then the config files
         let mut loader = aws_config::defaults(BehaviorVersion::latest());

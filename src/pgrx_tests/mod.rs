@@ -10,6 +10,8 @@ mod copy_progress;
 mod copy_stdin_out;
 mod copy_type_roundtrip;
 mod create_table_from;
+mod credential_parameters;
+mod credential_parameters_attack;
 mod gucs;
 mod interrupt;
 mod object_store;

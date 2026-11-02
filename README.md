@@ -338,7 +338,7 @@ The object of a uri is named by the whole path of that uri, and a `#` or a `?` e
 > To be able to write into a object store location, you need to grant `parquet_object_store_write` role to your current postgres user.
 > Similarly, to read from an object store location, you need to grant `parquet_object_store_read` role to your current postgres user.
 
-The credentials of an object store are read from the environment of the postgres process, as described below for each store, and never from the uri: a uri that carries credentials before its host is rejected rather than signed with the credentials of the environment while its own are only written into the logs. A session can make its requests with credentials of its own instead, by naming a profile that the administrator mapped to its role, which is described under [Session Profiles](#session-profiles).
+The credentials of an object store are read from the environment of the postgres process, as described below for each store, and never from the uri: a uri that carries credentials before its host is rejected rather than signed with the credentials of the environment while its own are only written into the logs. A session can make its requests with credentials of its own instead, by naming a profile that the administrator mapped to its role, which is described under [Session Profiles](#session-profiles), or by putting them in parameters of its own where the server allows that, which is described under [Credentials In Parameters](#credentials-in-parameters).
 
 #### S3 Storage
 
@@ -568,6 +568,50 @@ COPY orders TO 's3://shared-lake/orders.parquet';      -- COPY 1000
 
 Because one GUC names one profile, a session that reaches several clouds at once needs the **same profile name in each of them** — which is the administrator's choice in all three places, since the azure and gcs files are named when the credentials are written and an aws profile can be aliased. A session whose clouds are named differently selects them one at a time.
 
+#### Credentials In Parameters
+
+A session can also put the credentials themselves into parameters, rather than naming a profile they are kept under. **This is unsafe and off by default**, because a credential set this way travels through a SQL statement and so reaches every place a statement reaches:
+
+- the server log, under `log_statement = 'all'`, and under any setting of it when the statement fails, since `log_min_error_statement` defaults to `error` and writes the `STATEMENT:` line,
+- `pg_stat_activity.query`, which a member of `pg_read_all_stats` reads for every session,
+- `pg_stat_statements`, if it is installed,
+- the error reports of the session, and whatever the client logs them into,
+- the client's own history, e.g. `~/.psql_history`,
+- and the shared memory of a parallel copy: the workers make their requests with the credentials of the session that started them, which postgres carries to them by serializing the parameters of that session into the shared memory segment of the copy.
+
+Only a superuser opens them, since whether the credentials of the sessions of a server may be written into its log is the server's decision and not a session's:
+
+```sql
+-- in postgresql.conf, which is the way to open them for the sessions of the server
+pg_parquet.allow_credentials_in_parameters = on
+```
+
+```sql
+SET pg_parquet.aws_access_key_id TO '...';
+SET pg_parquet.aws_secret_access_key TO '...';
+COPY products TO 's3://a-bucket-of-ones-own/products.parquet';
+```
+
+The parameters are, by store:
+
+- `s3://`: `pg_parquet.aws_access_key_id`, `pg_parquet.aws_secret_access_key`, `pg_parquet.aws_session_token`, `pg_parquet.aws_region`, `pg_parquet.aws_endpoint_url`,
+- `az://`: `pg_parquet.azure_storage_account`, `pg_parquet.azure_storage_key`, `pg_parquet.azure_storage_sas_token`, `pg_parquet.azure_storage_connection_string`, `pg_parquet.azure_storage_endpoint`,
+- `gs://`: `pg_parquet.gcs_service_account_key`.
+
+They are read **ahead of** [a profile](#session-profiles) and of the environment both: a session that set `pg_parquet.aws_access_key_id` makes its `s3://` requests with what it set, whichever profile it named, and a credential that does not work fails the copy rather than falling back to the credentials of the server. Setting `pg_parquet.allow_credentials_in_parameters` back to `off` stops them being read at once, including in a session that already set them. A store built from them is not cached, so replacing a parameter replaces the identity the next copy is made with.
+
+What is done to keep a credential from outliving the session that set it:
+
+- a credential is refused from `ALTER ROLE ... SET` and `ALTER DATABASE ... SET`, whose settings are kept in `pg_db_role_setting` — a catalog **every role of the cluster may read** and `pg_dumpall` writes out,
+- and from `postgresql.conf` and `ALTER SYSTEM`, for the same reason: a parameter of the server is readable by every session of it,
+- and inside a security restricted operation, so a `SECURITY DEFINER` function cannot set one on a caller's behalf,
+- and the parameters holding a credential have no row in `pg_settings` and do not appear in `SHOW ALL`.
+
+> [!WARNING]
+> The last of those hides a credential, it does not keep it: `SHOW pg_parquet.aws_secret_access_key` and `current_setting('pg_parquet.aws_secret_access_key')` read it in full, from any session that set it. Nothing here makes a credential in a parameter safe from the log — only the places it is refused from are closed. A deployment that cannot have credentials in its log should leave this off and name [a profile](#session-profiles) instead.
+
+To keep the credential out of the server log while using these, a session needs `log_parameter_max_length_on_error = 0`, which is the default and which a session may set for itself, and the server needs `log_parameter_max_length = 0` if `log_statement` or `log_min_duration_statement` is on, which only a superuser may set. Both only help a credential that is sent as a bind parameter rather than written into the statement text.
+
 #### Http Client Options
 
 Each object storage client has its own http client, which can be configured via environment variables that are named after the storage prefix, e.g. `AWS_TIMEOUT` for S3 and `AZURE_TIMEOUT` for Azure Blob Storage. The supported options are shown below:
@@ -615,6 +659,7 @@ A request that an object store is slow to answer is retried, which takes minutes
 The following GUC parameters are available:
 - `pg_parquet.enable_copy_hooks`: you can set this parameter to `on` or `off` to enable or disable the `pg_parquet` extension. The default value is `on`.
 - `pg_parquet.profile_name`: the profile the session's object store credentials are read from, as described under [Session Profiles](#session-profiles). The default is unset, which reads the credentials of the server's environment. Any role may set it, and `parquet.user_profile_mapping` is what says which profiles a role may name.
+- `pg_parquet.allow_credentials_in_parameters`: you can set this parameter to `on` to let a session put the credentials of an object store into parameters of its own, as described under [Credentials In Parameters](#credentials-in-parameters). The default is `off`, and only a superuser may change it, since a credential set that way is written into the server log and read from `pg_stat_activity`. The credential parameters themselves are refused while this is off.
 - `pg_parquet.max_parallel_workers`: the number of parallel workers a `COPY TO` or `COPY FROM` command may use. The default value is `0`, which keeps both of them single process. The workers come from the same pool as parallel query workers, so a request above `max_parallel_workers` is capped to it. A command that the pool cannot spare every worker it asked for runs with the ones it was given. A `COPY FROM` gains less from a large number of workers than a `COPY TO` does, because the workers only decode the row groups of the file while the leader inserts every row it hands out.
   - For `COPY TO`, each worker writes a range of the table's pages, and the ranges end up in the destination without being re-encoded. For an `s3://`, `az://` or `gs://` destination, every worker uploads the ranges it wrote as parts of the destination's own multipart upload and the backend only adds the file's footer, so each byte of the file is uploaded once, nothing is downloaded, and nothing of such a copy is written to local disk. A copy whose server crashes can leave an unfinished multipart upload behind, which the bucket's own rule for incomplete uploads is what removes. A part that is left behind this way holds the rows of the copy that wrote it, so a uri pattern that covers it skips it rather than reading those rows again, and reports it as a file the pattern does not read. The parts of that upload differ in size, which a store that requires all but the last part to be the same size, e.g. Cloudflare R2, rejects. The bytes of a range are uploaded as the range wrote them, header and footer included, so the destination holds a little under 1% of bytes nothing points at. For a local file, each worker writes a part file next to the destination instead, and the backend merges the parts into it. With `file_size_bytes` the destination is a folder of complete files, so each worker writes files of its own into it rather than parts of one file, and the file a worker is in the middle of is finished before its range ends, which leaves a few more and smaller files behind than a single process copy writes. The files of such a folder are numbered in the order the workers claim them, so the rows of the table are not in the order of the file names. Parallel `COPY TO` applies to a single non-temporary heap table copied to a plain local file, to a folder of files, or to one of those object stores; anything else, e.g. `COPY (SELECT ..) TO`, a `COPY TO PROGRAM` or `TO STDOUT`, or an `http://` uri, is copied by a single process. Note that each range writes its own row groups, so a parallel `COPY TO` ends up with more and smaller row groups than a single process one.
   - For `COPY FROM`, each worker decodes a subset of the row groups of the file and hands the rows to the backend that runs the command, which is the only one that writes them into the relation, in the order the file holds them. A uri with a wildcard stands for several files, whose row groups are one list the workers split between themselves the same way, each worker opening the file its next row group is in. Parallel `COPY FROM` applies to files, local, on an `s3://`, `az://` or `gs://` store, or at an `http(s)` endpoint that serves byte ranges, holding more than one row group together, read into a non-temporary heap table that has no row triggers and no attribute the command leaves to a default, an identity or a generation expression; anything else, e.g. a `COPY FROM PROGRAM`, is copied by a single process. Because only one process may write into the relation, the speedup is bounded by how fast that one process can insert, which the decoding of a few workers is usually enough to reach.

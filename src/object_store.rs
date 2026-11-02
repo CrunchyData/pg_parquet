@@ -5,6 +5,7 @@ use crate::arrow_parquet::parquet_single_upload::SINGLE_UPLOAD_BUFFER_SIZE;
 pub(crate) mod aws;
 pub(crate) mod azure;
 pub(crate) mod client_options;
+pub(crate) mod credential_parameters;
 pub(crate) mod gcs;
 pub(crate) mod http;
 pub(crate) mod local_file;

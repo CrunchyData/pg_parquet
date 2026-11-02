@@ -4,6 +4,9 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use arrow_parquet::geospatial_stats::init_geospatial_stats_accumulator_factory;
+use object_store::credential_parameters::{
+    define_credential_parameters, ALLOW_CREDENTIALS_IN_PARAMETERS,
+};
 use object_store::profile::PROFILE_NAME;
 use parquet_copy_hook::hook::{init_parquet_copy_hook, ENABLE_PARQUET_COPY_HOOK};
 use parquet_copy_hook::parallel_copy_to::{MAX_PARALLEL_WORKERS, MAX_PARALLEL_WORKERS_LIMIT};
@@ -148,6 +151,32 @@ pub extern "C-unwind" fn _PG_init() {
                 GucContext::Userset,
                 GucFlags::default(),
             );
+        });
+    };
+
+    unsafe {
+        PgMemoryContexts::TopMemoryContext.switch_to(|_| {
+            GucRegistry::define_bool_guc(
+                CStr::from_ptr("pg_parquet.allow_credentials_in_parameters".as_pg_cstr()),
+                CStr::from_ptr(
+                    "Allow a session to put the credentials of an object store in parameters"
+                        .as_pg_cstr(),
+                ),
+                CStr::from_ptr(
+                    "A credential a session sets reaches the places a statement reaches: the \
+                     server log, pg_stat_activity, pg_stat_statements and the error reports of \
+                     the session. Only a superuser may turn this on, since whether the \
+                     credentials of the sessions of a server may be written into its log is the \
+                     server's decision. Off reads the credentials of a profile or of the \
+                     server's environment instead."
+                        .as_pg_cstr(),
+                ),
+                &ALLOW_CREDENTIALS_IN_PARAMETERS,
+                GucContext::Suset,
+                GucFlags::default(),
+            );
+
+            define_credential_parameters();
         });
     };
 

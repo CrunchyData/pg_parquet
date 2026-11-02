@@ -4,7 +4,9 @@ use object_store::gcp::GoogleCloudStorageBuilder;
 use url::Url;
 
 use super::{
-    client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration,
+    client_options::load_client_options,
+    credential_parameters::{parameter, GOOGLE_SERVICE_ACCOUNT_KEY},
+    object_store_cache::ObjectStoreWithExpiration,
     profile::gcs_service_account_path,
 };
 
@@ -84,6 +86,15 @@ impl GoogleStorageConfig {
     // server shares, so falling back to it would make a profile whose key is missing read
     // the credentials of the server rather than fail.
     fn load(profile: Option<&str>) -> Self {
+        // the key the session put in the parameters is the one it asked for, so it is read
+        // instead of the profile's key and of the environment's both
+        if let Some(service_account_key) = parameter(&GOOGLE_SERVICE_ACCOUNT_KEY) {
+            return Self {
+                service_account_key: Some(service_account_key),
+                service_account_path: None,
+            };
+        }
+
         if let Some(profile) = profile {
             return Self {
                 service_account_key: None,
