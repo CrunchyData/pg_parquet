@@ -8,6 +8,10 @@ use url::Url;
 
 use super::{
     client_options::load_client_options,
+    credential_parameters::{
+        parameter, AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_CONNECTION_STRING, AZURE_STORAGE_ENDPOINT,
+        AZURE_STORAGE_KEY, AZURE_STORAGE_SAS_TOKEN,
+    },
     object_store_cache::ObjectStoreWithExpiration,
     profile::{profile_directory, profile_file_path},
 };
@@ -148,6 +152,33 @@ impl AzureStorageConfig {
     // So, we need to read the config files manually from azure's ini config.
     // See https://learn.microsoft.com/en-us/cli/azure/azure-cli-configuration?view=azure-cli-latest
     fn load(profile: Option<&str>) -> Self {
+        // the credentials the session put in the parameters are the ones it asked for, so
+        // they are read instead of the profile's config file and of the environment both. A
+        // connection string carries the rest of them, so it is read on its own.
+        if let Some(connection_string) = parameter(&AZURE_STORAGE_CONNECTION_STRING) {
+            if let Ok(connection_string) = ConnectionString::new(&connection_string) {
+                return connection_string.into();
+            }
+        }
+
+        if let Some(account_name) = parameter(&AZURE_STORAGE_ACCOUNT) {
+            return AzureStorageConfig {
+                account_name: Some(account_name),
+                account_key: parameter(&AZURE_STORAGE_KEY),
+                sas_token: parameter(&AZURE_STORAGE_SAS_TOKEN),
+                tenant_id: None,
+                client_id: None,
+                client_secret: None,
+                federated_token_file: None,
+                endpoint: parameter(&AZURE_STORAGE_ENDPOINT)
+                    .or_else(|| std::env::var("AZURE_STORAGE_ENDPOINT").ok()),
+                allow_http: std::env::var("AZURE_ALLOW_HTTP")
+                    .ok()
+                    .map(|allow_http| allow_http.parse().unwrap_or(false))
+                    .unwrap_or(false),
+            };
+        }
+
         // ~/.azure/config
         let azure_config_file_path = std::env::var("AZURE_CONFIG_FILE").unwrap_or(
             home_dir()

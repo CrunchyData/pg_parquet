@@ -13,7 +13,8 @@ use url::Url;
 use crate::arrow_parquet::uri_utils::ParsedUriInfo;
 
 use super::{
-    aws::create_s3_object_store, azure::create_azure_object_store, gcs::create_gcs_object_store,
+    aws::create_s3_object_store, azure::create_azure_object_store,
+    credential_parameters::credentials_are_in_parameters, gcs::create_gcs_object_store,
     http::create_http_object_store, local_file::create_local_file_object_store,
     profile::current_profile,
 };
@@ -83,6 +84,15 @@ impl ObjectStoreCache {
         }
 
         let bucket = bucket.expect("bucket is None");
+
+        // a store built from the credentials the session put in the parameters is not cached:
+        // the parameters are the session's to change, so such a store answers the copy that
+        // was made with them and nothing after it
+        if credentials_are_in_parameters(&scheme) {
+            let profile = None;
+            let item = Self::create(scheme, &uri, copy_from, profile);
+            return (item, path);
+        }
 
         // the profile is read on every call rather than only when a store is created: it is
         // what authorizes the credentials the store was built with, so a session that is no
