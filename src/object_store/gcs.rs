@@ -13,9 +13,11 @@ use super::{
 // following environment variables:
 // - GOOGLE_SERVICE_ACCOUNT_KEY
 // - GOOGLE_SERVICE_ACCOUNT_PATH
+// - GOOGLE_SERVICE_ACCOUNT_DIRECTORY (env var only, the keys of the profiles)
 // - GOOGLE_<HTTP CLIENT OPTION>, e.g. GOOGLE_TIMEOUT (object_store specific)
 // A session that named a profile reads the service account key of that profile instead,
-// from the directory pg_parquet.gcs_credential_directory names.
+// which is a key named after it in the directory the server keeps the keys of the
+// profiles in.
 pub(crate) fn create_gcs_object_store(
     uri: &Url,
     profile: Option<&str>,

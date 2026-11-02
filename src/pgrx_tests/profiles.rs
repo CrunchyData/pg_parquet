@@ -5,7 +5,7 @@ mod tests {
     use pgrx::{pg_test, Spi};
 
     use crate::{
-        object_store::profile::profile_file_path,
+        object_store::profile::{profile_directory, profile_file_path},
         pgrx_tests::common::{TestTable, LOCAL_TEST_FILE_PATH},
     };
 
@@ -376,12 +376,13 @@ mod tests {
         map_profiles("profile_scalar_role", r#"{"aws_profiles": "x"}"#);
     }
 
-    // the key of a gcs profile is a file next to the key the server reads, so a server
-    // whose own key is inline in GOOGLE_SERVICE_ACCOUNT_KEY names no directory to read a
-    // profile's key from
+    // the keys of the gcs profiles live in the directory the server names for them, or in
+    // the directory of the key it reads its own credentials from, so a server that reads
+    // neither names no directory to read a profile's key from
     #[pg_test]
-    #[should_panic(expected = "GOOGLE_SERVICE_ACCOUNT_PATH is not set")]
-    fn test_gcs_profile_needs_the_service_account_path() {
+    #[should_panic(expected = "neither GOOGLE_SERVICE_ACCOUNT_DIRECTORY nor")]
+    fn test_gcs_profile_needs_a_directory_or_a_configured_key() {
+        std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_DIRECTORY");
         std::env::remove_var("GOOGLE_SERVICE_ACCOUNT_PATH");
 
         Spi::run(&format!("SET pg_parquet.profile_name TO '{PROFILE}'")).unwrap();
@@ -390,29 +391,104 @@ mod tests {
             .unwrap();
     }
 
-    // the file of a profile is named after it next to the one the server reads, keeping the
-    // extension of it, so a key file and an azure config file are both named the same way
+    // and the key of a gcs profile is named after it in the directory the server named
     #[pg_test]
-    fn test_profile_file_is_named_next_to_the_configured_one() {
+    #[should_panic(expected = "/tmp/pg_parquet_profile_gcs_dir/pg_parquet_profile_test.json")]
+    fn test_gcs_profile_key_comes_from_the_named_directory() {
+        std::env::set_var(
+            "GOOGLE_SERVICE_ACCOUNT_DIRECTORY",
+            "/tmp/pg_parquet_profile_gcs_dir",
+        );
+        std::fs::remove_dir_all("/tmp/pg_parquet_profile_gcs_dir").ok();
+
+        Spi::run(&format!("SET pg_parquet.profile_name TO '{PROFILE}'")).unwrap();
+
+        Spi::run("COPY (SELECT 1 as a) TO 'gs://testbucket/pg_parquet_profile_test.parquet'")
+            .unwrap();
+    }
+
+    // the directory the profiles of a store live in is the one the server names for them,
+    // and the directory of the file it reads its own credentials from when it names none
+    #[pg_test]
+    fn test_profile_directory_is_named_or_the_configured_ones() {
+        let variable = "PG_PARQUET_TEST_PROFILE_DIRECTORY";
+
+        std::env::remove_var(variable);
+
+        // with no directory of its own, the directory of the configured file
         assert_eq!(
-            profile_file_path("/etc/pg_parquet/gcs/server.json", "analytics"),
+            profile_directory(variable, Some("/etc/pg_parquet/gcs/server.json")).as_deref(),
+            Some("/etc/pg_parquet/gcs")
+        );
+
+        // and with neither, nothing at all
+        assert_eq!(profile_directory(variable, None), None);
+
+        std::env::set_var(variable, "/keys/profiles/");
+
+        // the directory that is named wins, and a trailing separator of it is not kept
+        assert_eq!(
+            profile_directory(variable, Some("/etc/pg_parquet/gcs/server.json")).as_deref(),
+            Some("/keys/profiles")
+        );
+
+        std::env::remove_var(variable);
+    }
+
+    // a profile's file is named after it in that directory, with the extension the
+    // credentials of the store carry
+    #[pg_test]
+    fn test_profile_file_is_named_after_the_profile() {
+        assert_eq!(
+            profile_file_path("/etc/pg_parquet/gcs", "analytics", Some("json")),
             "/etc/pg_parquet/gcs/analytics.json"
         );
 
         // an azure config file carries no extension, and neither does the profile's
         assert_eq!(
-            profile_file_path("/etc/pg_parquet/azure/config", "analytics"),
+            profile_file_path("/etc/pg_parquet/azure", "analytics", None),
             "/etc/pg_parquet/azure/analytics"
         );
 
         // a profile holding a dot of its own keeps it, ahead of the extension
         assert_eq!(
-            profile_file_path("/keys/server.json", "team.analytics"),
+            profile_file_path("/keys", "team.analytics", Some("json")),
             "/keys/team.analytics.json"
         );
 
-        // a configured path that is a bare file name stays in the directory it named
-        assert_eq!(profile_file_path("config", "analytics"), "analytics");
+        // a configured file that named no directory keeps the profile in the current one
+        assert_eq!(profile_file_path("", "analytics", None), "analytics");
+    }
+
+    // a server that names a directory for the config files of the profiles reads the
+    // profile from there rather than from beside its own config file
+    #[pg_test]
+    #[should_panic(expected = "/tmp/pg_parquet_profile_azure_dir/pg_parquet_profile_test")]
+    fn test_azure_profile_comes_from_the_named_directory() {
+        std::fs::create_dir_all("/tmp/pg_parquet_profile_azure").unwrap();
+        std::fs::write(
+            "/tmp/pg_parquet_profile_azure/config",
+            "[storage]\naccount=someaccount\nkey=somekey\n",
+        )
+        .unwrap();
+        // the profile's file exists next to the server's, which must not be the one read
+        std::fs::write(
+            format!("/tmp/pg_parquet_profile_azure/{PROFILE}"),
+            "[storage]\naccount=someaccount\nkey=somekey\n",
+        )
+        .unwrap();
+
+        std::env::set_var("AZURE_CONFIG_FILE", "/tmp/pg_parquet_profile_azure/config");
+        std::env::set_var(
+            "AZURE_CONFIG_DIRECTORY",
+            "/tmp/pg_parquet_profile_azure_dir",
+        );
+        std::fs::remove_dir_all("/tmp/pg_parquet_profile_azure_dir").ok();
+
+        Spi::run(&format!("SET pg_parquet.profile_name TO '{PROFILE}'")).unwrap();
+
+        Spi::run("COPY (SELECT 1 as a) TO 'az://testcontainer/pg_parquet_profile_test.parquet'")
+            .unwrap();
     }
 
     // the config file of the server is not the config file of a profile, so a profile with

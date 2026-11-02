@@ -7,8 +7,9 @@ use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 use url::Url;
 
 use super::{
-    client_options::load_client_options, object_store_cache::ObjectStoreWithExpiration,
-    profile::profile_file_path,
+    client_options::load_client_options,
+    object_store_cache::ObjectStoreWithExpiration,
+    profile::{profile_directory, profile_file_path},
 };
 
 // AZURE_CONFIG_SECTION is the section of the azure config file the storage settings are
@@ -25,6 +26,7 @@ const AZURE_CONFIG_SECTION: &str = "storage";
 // - AZURE_STORAGE_CONNECTION_STRING
 // - AZURE_STORAGE_SAS_TOKEN
 // - AZURE_CONFIG_FILE (env var only, object_store specific)
+// - AZURE_CONFIG_DIRECTORY (env var only, the config files of the profiles)
 // - AZURE_STORAGE_ENDPOINT (env var only, object_store specific)
 // - AZURE_ALLOW_HTTP (env var only, object_store specific)
 // - AZURE_<HTTP CLIENT OPTION>, e.g. AZURE_TIMEOUT (env var only, object_store specific)
@@ -157,14 +159,20 @@ impl AzureStorageConfig {
                 .to_string(),
         );
 
-        // a profile is a config file of its own, next to the one of the server, rather than
-        // a section of it: azure's config file has a flat section per feature, which each
-        // map to one AZURE_<SECTION>_<NAME> variable, and the way azure itself keeps more
-        // than one set of credentials is a config directory per set (AZURE_CONFIG_DIR). A
-        // file per profile also carries the ordinary [storage] section, so the file of a
-        // profile is in the same format as the one the server reads.
+        // a profile is a config file of its own rather than a section of the server's:
+        // azure's config file has a flat section per feature, which each map to one
+        // AZURE_<SECTION>_<NAME> variable, and the way azure itself keeps more than one set
+        // of credentials is a config directory per set (AZURE_CONFIG_DIR). A file per
+        // profile also carries the ordinary [storage] section, so the file of a profile is
+        // in the same format as the one the server reads.
         let azure_config_file_path = match profile {
-            Some(profile) => profile_file_path(&azure_config_file_path, profile),
+            Some(profile) => {
+                let directory =
+                    profile_directory("AZURE_CONFIG_DIRECTORY", Some(&azure_config_file_path))
+                        .expect("the azure config file names a directory");
+
+                profile_file_path(&directory, profile, None)
+            }
             None => azure_config_file_path,
         };
 

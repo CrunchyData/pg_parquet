@@ -402,6 +402,7 @@ Alternatively, you can use the following environment variables when starting pos
 - `AZURE_CLIENT_SECRET`: the client secret for client secret auth **(only via environment variables)**
 - `AZURE_STORAGE_ENDPOINT`: the endpoint **(only via environment variables)**
 - `AZURE_CONFIG_FILE`: an alternative location for the config file **(only via environment variables)**
+- `AZURE_CONFIG_DIRECTORY`: the directory the config files of the [session profiles](#session-profiles) are kept in **(only via environment variables)**
 - `AZURE_ALLOW_HTTP`: allows http endpoints **(only via environment variables)**
 - `AZURE_<HTTP CLIENT OPTION>`: an [http client option](#http-client-options), e.g. `AZURE_TIMEOUT` **(only via environment variables)**
 
@@ -447,6 +448,7 @@ $ cat ~/.config/gcloud/application_default_credentials.json
 Alternatively, you can use the following environment variables when starting postgres to configure the Google Cloud Storage client:
 - `GOOGLE_SERVICE_ACCOUNT_KEY`: json serialized service account key **(only via environment variables)**
 - `GOOGLE_SERVICE_ACCOUNT_PATH`: an alternative location for the config file **(only via environment variables)**
+- `GOOGLE_SERVICE_ACCOUNT_DIRECTORY`: the directory the service account keys of the [session profiles](#session-profiles) are kept in **(only via environment variables)**
 - `GOOGLE_<HTTP CLIENT OPTION>`: an [http client option](#http-client-options), e.g. `GOOGLE_TIMEOUT` **(only via environment variables)**
 
 Supported Google Cloud Storage uri formats are shown below:
@@ -464,10 +466,10 @@ COPY products TO 's3://analytics-lake/products.parquet';
 A profile is a name and never a secret, so nothing that a session sets or that the mapping holds is a credential: the credentials themselves stay in the files the administrator keeps them in, which is what keeps them out of the server log, out of `pg_stat_activity`, out of `pg_stat_statements` and out of a dump. Where a profile is read from depends on the store:
 
 - `s3://`: the `[profile <name>]` section of `~/.aws/config` or `AWS_CONFIG_FILE`, read by the aws sdk the way `AWS_PROFILE` is read. Note that a profile using `credential_process` or `sso` is not read, since `pg_parquet` builds the sdk without those features,
-- `az://`: a config file named after the profile next to `~/.azure/config` or `AZURE_CONFIG_FILE`, so `AZURE_CONFIG_FILE=/etc/pg_parquet/azure/config` makes the profile `analytics` the file `/etc/pg_parquet/azure/analytics`. That file is in the same format as the one the server reads, an ordinary `[storage]` section, and it takes every config parameter listed above plus `tenant_id`, `client_id`, `client_secret`, `federated_token_file`, `endpoint` and `allow_http`,
-- `gs://`: a service account key named after the profile next to the one `GOOGLE_SERVICE_ACCOUNT_PATH` names, so `GOOGLE_SERVICE_ACCOUNT_PATH=/etc/pg_parquet/gcs/server.json` makes the profile `analytics` the key `/etc/pg_parquet/gcs/analytics.json`. A server that reads its own key inline from `GOOGLE_SERVICE_ACCOUNT_KEY` names no directory for the keys of the profiles, so a `gs://` copy that names a profile is refused until the server reads its own key from a file.
+- `az://`: a config file named after the profile in `AZURE_CONFIG_DIRECTORY`, so `AZURE_CONFIG_DIRECTORY=/etc/pg_parquet/azure` makes the profile `analytics` the file `/etc/pg_parquet/azure/analytics`. That file is in the same format as the one the server reads, an ordinary `[storage]` section, and it takes every config parameter listed above plus `tenant_id`, `client_id`, `client_secret`, `federated_token_file`, `endpoint` and `allow_http`,
+- `gs://`: a service account key named after the profile in `GOOGLE_SERVICE_ACCOUNT_DIRECTORY`, so `GOOGLE_SERVICE_ACCOUNT_DIRECTORY=/etc/pg_parquet/gcs` makes the profile `analytics` the key `/etc/pg_parquet/gcs/analytics.json`.
 
-So for azure and gcs alike the rule is one: a profile is a file named after it next to the file the server was configured with, carrying the extension of that file. The directory is the server's own, which is what keeps a session to the credentials that were put there, and a profile is a name rather than a path, which is what keeps it to that directory.
+For azure and gcs alike the rule is one: a profile is a file named after it in the directory the server keeps the credentials of the profiles in. A server that names no such directory keeps them next to the credentials it reads its own from, i.e. in the directory of `AZURE_CONFIG_FILE` and of `GOOGLE_SERVICE_ACCOUNT_PATH`, so azure profiles work with no directory configured at all while a server whose own gcs key is inline in `GOOGLE_SERVICE_ACCOUNT_KEY` must name one. The directory is the server's own either way, which is what keeps a session to the credentials that were put there, and a profile is a name rather than a path, which is what keeps it to that directory.
 
 A profile is read on its own rather than before the environment: a profile whose file is missing fails the copy instead of falling back to the credentials of the server, which would otherwise hand a session an identity it did not ask for. A local path and an `http(s)` endpoint are read with no credentials at all, so a profile does not apply to them and is ignored rather than refused.
 
@@ -500,16 +502,16 @@ aws_secret_access_key=...
 ```
 
 ```ini
-# /etc/pg_parquet/azure/analytics -- AZURE_CONFIG_FILE is .../azure/config, so this is
-# the profile "analytics", in the same format as the server's own file
+# /etc/pg_parquet/azure/analytics -- AZURE_CONFIG_DIRECTORY is /etc/pg_parquet/azure, so
+# this is the profile "analytics", in the same format as the server's own config file
 [storage]
 account=analyticslake
 key=...
 ```
 
 ```
-# /etc/pg_parquet/gcs/analytics.json -- GOOGLE_SERVICE_ACCOUNT_PATH is
-# .../gcs/server.json, so this is the service account key of the profile "analytics"
+# /etc/pg_parquet/gcs/analytics.json -- GOOGLE_SERVICE_ACCOUNT_DIRECTORY is
+# /etc/pg_parquet/gcs, so this is the service account key of the profile "analytics"
 ```
 
 Then, in the database, the mapping. Note the two shapes: `analytics_team` reaches all three clouds, `reporting_team` reaches one.

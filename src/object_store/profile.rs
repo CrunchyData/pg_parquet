@@ -133,52 +133,73 @@ fn ensure_session_is_mapped_to_profile(scheme_name: &str, profile: &str) {
     }
 }
 
-// profile_file_path is the file a profile's credentials are read from, which is a file
-// named after the profile next to the one the server reads, with the extension of it:
-// GOOGLE_SERVICE_ACCOUNT_PATH=/etc/pg_parquet/gcs/server.json makes the profile
-// "analytics" /etc/pg_parquet/gcs/analytics.json, and an azure config file makes it a
-// config file of the same name. The directory is the one the server was configured with,
-// which is what keeps a session to the credentials that were put there, and the profile is
-// a name rather than a path, which is what keeps it to that directory.
-pub(crate) fn profile_file_path(configured_path: &str, profile: &str) -> String {
-    let configured_path = std::path::Path::new(configured_path);
-
-    let mut file_name = profile.to_string();
-
-    if let Some(extension) = configured_path.extension() {
-        file_name.push('.');
-        file_name.push_str(&extension.to_string_lossy());
+// profile_directory is the directory the credentials of the profiles of a store are kept
+// in: the directory the server names for them, and the directory of the file the server
+// reads its own credentials from when it names none. It is the server's own either way,
+// which is what keeps a session to the credentials that were put there.
+pub(crate) fn profile_directory(
+    directory_variable: &str,
+    configured_path: Option<&str>,
+) -> Option<String> {
+    if let Ok(directory) = std::env::var(directory_variable) {
+        if !directory.is_empty() {
+            return Some(directory.trim_end_matches('/').to_string());
+        }
     }
 
-    configured_path
-        .with_file_name(file_name)
-        .to_string_lossy()
-        .to_string()
+    let configured_path = std::path::Path::new(configured_path?);
+
+    Some(
+        configured_path
+            .parent()
+            .map_or_else(String::new, |parent| parent.to_string_lossy().to_string()),
+    )
+}
+
+// profile_file_path is the file a profile's credentials are read from, which is a file of
+// the directory above named after the profile. The profile is a name rather than a path,
+// which is what keeps it to that directory.
+pub(crate) fn profile_file_path(directory: &str, profile: &str, extension: Option<&str>) -> String {
+    let file_name = match extension {
+        Some(extension) => format!("{profile}.{extension}"),
+        None => profile.to_string(),
+    };
+
+    if directory.is_empty() {
+        return file_name;
+    }
+
+    format!("{directory}/{file_name}")
 }
 
 // gcs_service_account_path is the file a profile's gcs service account key is read from.
 // gcs has no config file with a section per profile as s3 and azure have, so the key of a
-// profile is a file next to the key the server was configured with.
+// profile is a file of its own.
 pub(crate) fn gcs_service_account_path(profile: &str) -> String {
-    match std::env::var("GOOGLE_SERVICE_ACCOUNT_PATH") {
-        Ok(configured_path) if !configured_path.is_empty() => {
-            profile_file_path(&configured_path, profile)
-        }
-        _ => {
+    let configured_path = std::env::var("GOOGLE_SERVICE_ACCOUNT_PATH").ok();
+
+    let directory = profile_directory(
+        "GOOGLE_SERVICE_ACCOUNT_DIRECTORY",
+        configured_path.as_deref(),
+    );
+
+    match directory {
+        Some(directory) => profile_file_path(&directory, profile, Some("json")),
+        None => {
             ereport!(
                 PgLogLevel::ERROR,
                 PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
                 format!(
-                    "GOOGLE_SERVICE_ACCOUNT_PATH is not set, so the profile \"{profile}\" \
-                     names no service account key"
+                    "neither GOOGLE_SERVICE_ACCOUNT_DIRECTORY nor \
+                     GOOGLE_SERVICE_ACCOUNT_PATH is set, so the profile \"{profile}\" names \
+                     no service account key"
                 ),
-                "The key of a gcs profile is read from a file named after it next to the key \
-                 GOOGLE_SERVICE_ACCOUNT_PATH names, so the server reads its own key from a \
-                 file rather than from GOOGLE_SERVICE_ACCOUNT_KEY for a session to be able \
-                 to name a profile."
+                "The key of a gcs profile is read from <directory>/<profile>.json, where the \
+                 directory is GOOGLE_SERVICE_ACCOUNT_DIRECTORY, or the directory of the key \
+                 GOOGLE_SERVICE_ACCOUNT_PATH names when that is unset."
             );
 
-            unreachable!("a gcs profile was resolved without a service account path");
+            unreachable!("a gcs profile was resolved without a service account directory");
         }
     }
 }
