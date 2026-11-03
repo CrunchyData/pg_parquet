@@ -1,17 +1,19 @@
 use std::{ffi::CString, ops::Deref};
 
+use crate::arrow_parquet::geospatial_stats::{wkb_geometry_type, wkb_is_boundable_and_finite};
 use arrow_schema::{extension::ExtensionType, Field};
 use once_cell::sync::OnceCell;
 use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType};
 use pgrx::{
     datum::UnboxDatum,
+    ereport,
     pg_sys::{
         get_extension_oid, makeString, Anum_pg_type_oid, AsPgCStr, Datum, GetSysCacheOid,
         InvalidOid, LookupFuncName, Oid, OidFunctionCall1Coll, OidFunctionCall2Coll,
         SysCacheIdentifier::TYPENAMENSP, BYTEAOID, INT4OID,
     },
     spi::{quote_identifier, quote_literal},
-    FromDatum, IntoDatum, PgList, Spi,
+    FromDatum, IntoDatum, PgList, PgLogLevel, PgSqlErrorCode, Spi,
 };
 use serde_json::Value;
 
@@ -468,6 +470,8 @@ impl FromDatum for Geometry {
             let wkb =
                 Vec::<u8>::from_datum(wkb_datum, is_null).expect("cannot convert datum to wkb");
 
+            ensure_wkb_is_in_the_specification(&wkb);
+
             // the write path only ever needs the WKB bytes
             Some(Self::new(wkb, None))
         }
@@ -491,9 +495,58 @@ unsafe impl UnboxDatum for Geometry {
         let is_null = false;
         let wkb = Vec::<u8>::from_datum(wkb_datum, is_null).expect("cannot convert datum to wkb");
 
+        ensure_wkb_is_in_the_specification(&wkb);
+
         // the write path only ever needs the WKB bytes
         Geometry::new(wkb, None)
     }
+}
+
+// ensure_wkb_is_in_the_specification refuses a geometry whose type the parquet geospatial
+// specification does not define. postgis has the curved types, and TIN, polyhedral surface and
+// triangle, which the GEOMETRY and GEOGRAPHY logical types promise nothing about: a reader of
+// the specification refuses the whole column one of them is in rather than the row, so a file
+// carrying one is a file another engine cannot read the geometries of at all.
+fn ensure_wkb_is_in_the_specification(wkb: &[u8]) {
+    // the second answer is whether every coordinate is finite, which the statistics care about
+    // and the geometry itself does not: a NaN is a coordinate the specification defines a type
+    // for, so it is written and left to the statistics to drop their box for
+    let (in_the_specification, _finite) = wkb_is_boundable_and_finite(wkb);
+
+    if in_the_specification {
+        return;
+    }
+
+    let type_name = wkb_geometry_type(wkb).map_or_else(
+        || "a geometry".to_string(),
+        |type_code| match type_code {
+            8 => "a circular string".to_string(),
+            9 => "a compound curve".to_string(),
+            10 => "a curve polygon".to_string(),
+            11 => "a multi curve".to_string(),
+            12 => "a multi surface".to_string(),
+            15 => "a polyhedral surface".to_string(),
+            16 => "a tin".to_string(),
+            17 => "a triangle".to_string(),
+            // the type of the geometry itself is one the specification defines, so what it
+            // holds is not
+            _ => {
+                "a geometry collection holding a type the specification does not define".to_string()
+            }
+        },
+    );
+
+    ereport!(
+        PgLogLevel::ERROR,
+        PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+        format!("cannot write {type_name} to a parquet geospatial column"),
+        "The GEOMETRY and GEOGRAPHY logical types are defined over the geometry types of the \
+         parquet geospatial specification, which the curved types and tin, polyhedral surface \
+         and triangle are not among, so a reader of the specification refuses the whole column \
+         one of them is written to. Write ST_CurveToLine of a curved geometry, or ST_Boundary \
+         or ST_Dump of a tin or a polyhedral surface, or carry the geometry in a bytea column, \
+         which is written with no geospatial logical type on it."
+    );
 }
 
 // Geography is a wrapper around a byte vector that represents a postgis geography in WKB format,
@@ -585,6 +638,8 @@ impl FromDatum for Geography {
             let wkb =
                 Vec::<u8>::from_datum(wkb_datum, is_null).expect("cannot convert datum to wkb");
 
+            ensure_wkb_is_in_the_specification(&wkb);
+
             // the write path only ever needs the WKB bytes
             Some(Self::new(wkb, None))
         }
@@ -607,6 +662,8 @@ unsafe impl UnboxDatum for Geography {
 
         let is_null = false;
         let wkb = Vec::<u8>::from_datum(wkb_datum, is_null).expect("cannot convert datum to wkb");
+
+        ensure_wkb_is_in_the_specification(&wkb);
 
         // the write path only ever needs the WKB bytes
         Geography::new(wkb, None)

@@ -189,7 +189,7 @@ fn wkb_has_edges(wkb: &[u8]) -> bool {
 }
 
 // the iso wkb geometry type of the payload, without the dimensions that its type code also carries
-fn wkb_geometry_type(wkb: &[u8]) -> Option<u32> {
+pub(crate) fn wkb_geometry_type(wkb: &[u8]) -> Option<u32> {
     let (byte_order, rest) = wkb.split_first()?;
 
     let little_endian = match byte_order {
@@ -207,7 +207,7 @@ fn wkb_geometry_type(wkb: &[u8]) -> Option<u32> {
 // and whether every coordinate in it is a finite number. A NaN or an infinity bounds nothing: a
 // box that carries one reads as a box a query does not intersect, so a reader that skips a row
 // group by it skips rows that are in there.
-fn wkb_is_boundable_and_finite(wkb: &[u8]) -> (bool, bool) {
+pub(crate) fn wkb_is_boundable_and_finite(wkb: &[u8]) -> (bool, bool) {
     let mut finite = true;
 
     let boundable = matches!(consume_geometry(wkb, 0, &mut finite), Some(rest) if rest.is_empty());
