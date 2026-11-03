@@ -119,6 +119,70 @@ fn reject_a_folder_over_an_object(uri: &str) {
     );
 }
 
+// reject_a_folder_that_already_holds_something refuses a folder destination with anything in it,
+// since the copy replaces what a previous one wrote there: it writes "data_0.parquet" onwards
+// over the files of the same name and removes the higher numbered ones a larger copy left, which
+// between them is the whole of what another copy put there. A single file destination is replaced
+// the way COPY TO has always replaced one, and is not this.
+pub(crate) fn reject_a_folder_that_already_holds_something(uri_info: &ParsedUriInfo, uri: &str) {
+    // each participant of a parallel copy renders the copy statement again and runs it through
+    // the same handler, so asking here would ask whether the folder holds the files the other
+    // participants are writing into it, which it does. The leader asks once, before it starts
+    // the parallel operation, which is the only moment the question is about another copy.
+    if unsafe { pgrx::pg_sys::IsInParallelMode() } {
+        return;
+    }
+
+    // the store is asked for as a reader, since asking for a writer would create the folder
+    // itself as a file
+    let copy_from = true;
+    let (store, folder_path) = get_or_create_object_store(uri_info, copy_from);
+
+    // the listing is waited for interruptibly, since it runs while the session is still there
+    // to send a cancel and the copy has written nothing yet
+    let first_entry = block_on(async {
+        let mut listing = store.list(Some(&folder_path));
+
+        // an object at the folder's own uri is not something the folder holds, and a store
+        // whose listing answers with it has its own error to give, which says so
+        while let Some(meta) = listing.next().await.transpose()? {
+            if meta.location != folder_path {
+                return Ok(Some(meta));
+            }
+        }
+
+        Ok::<_, object_store::Error>(None)
+    });
+
+    // only an answer that names something refuses the copy: a store that does not answer, which
+    // is what a credential that may write but not read gets, is no reason to refuse a copy that
+    // can write
+    let Ok(Some(occupant)) = first_entry else {
+        return;
+    };
+
+    // the name is given relative to the folder, since the location of it carries the folder's
+    // own path and reads as though the folder held itself
+    let occupant_name = occupant
+        .location
+        .prefix_match(&folder_path)
+        .map(|relative_path| {
+            relative_path
+                .map(|part| part.as_ref().to_string())
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .unwrap_or_else(|| occupant.location.to_string());
+
+    ereport!(
+        pgrx::PgLogLevel::ERROR,
+        pgrx::PgSqlErrorCode::ERRCODE_DUPLICATE_FILE,
+        format!("\"{uri}\" already holds \"{occupant_name}\""),
+        "A folder destination is written over the files of the copy that wrote it before, so \
+         pass \"overwrite true\" to replace what is in this one, or write into a uri of its own."
+    );
+}
+
 // remove_files_of_a_previous_copy removes what a previous copy left in the folder
 // destination, which are the files with an id that this copy did not write, so that the
 // folder holds the rows of the copy that wrote it last rather than those rows merged with

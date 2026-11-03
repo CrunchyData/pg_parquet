@@ -55,6 +55,7 @@ use crate::{
             copy_stmt_attribute_list, copy_stmt_has_relation, copy_stmt_lock_mode,
             copy_stmt_relation_oid, copy_to_stmt_compression, copy_to_stmt_compression_level,
             copy_to_stmt_explicit_row_group_size, copy_to_stmt_file_size_bytes,
+            copy_to_stmt_overwrite,
         },
         hook::process_copy_to_parquet,
         pg_compat::strVal,
@@ -1295,6 +1296,7 @@ fn render_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &ParsedUriInfo)
             "compression",
             "compression_level",
             "file_size_bytes",
+            "overwrite",
         ]
         .contains(&option_name.as_str())
         {
@@ -1324,6 +1326,13 @@ fn render_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &ParsedUriInfo)
             "file_size_bytes {}",
             quote_literal(&file_size_bytes.to_string())
         ));
+    }
+
+    // a participant is handed the option as it was given, so that the statement it runs is the
+    // one the copy was asked for. What the folder holds is a question the leader answered once
+    // already, before it started the parallel operation.
+    if copy_to_stmt_overwrite(p_stmt) {
+        rendered_options.push("overwrite true".to_string());
     }
 
     let compression = copy_to_stmt_compression(p_stmt, uri_info).to_string();

@@ -1142,7 +1142,8 @@ mod tests {
 
             Spi::run(&format!(
                 "COPY wide_table TO '{folder}'
-                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000,
+                       overwrite true);"
             ))
             .unwrap();
 
@@ -1202,7 +1203,8 @@ mod tests {
 
             Spi::run(&format!(
                 "COPY wide_table TO '{folder}'
-                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000,
+                       overwrite true);"
             ))
             .unwrap();
 
@@ -1268,7 +1270,7 @@ mod tests {
 
         Spi::run(&format!(
             "COPY wide_table TO '{folder}'
-             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000, overwrite true);"
         ))
         .unwrap();
 
@@ -1281,6 +1283,119 @@ mod tests {
                 "kept.parquet",
                 "nested/data_99.parquet"
             ]
+        );
+    }
+
+    // a folder destination that already holds something is refused, since the copy writes over
+    // the files of whoever wrote it and removes the ones it does not write over. "overwrite
+    // true" is how a copy says that is what it means to do.
+    #[pg_test]
+    fn test_copy_to_file_size_bytes_over_a_folder_needs_overwrite() {
+        let folder = "/tmp/pg_parquet_test_split_needs_overwrite";
+        let _folder = FileCleanup::new(folder);
+
+        create_wide_table();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 0;").unwrap();
+
+        let copy = format!(
+            "COPY wide_table TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)"
+        );
+
+        // a folder that is not there yet is written, and so is one that is there and empty:
+        // what refuses the copy is what the folder holds and not the folder itself
+        Spi::run(&format!("{copy};")).unwrap();
+
+        let files_of_the_first_copy = split_file_names(folder);
+        assert!(files_of_the_first_copy.len() > 1);
+
+        let error = failing_copy_to(&copy);
+
+        // the file the error names is whichever one the listing of the folder answered with
+        // first, which is a file of the previous copy and no particular one of them
+        assert!(
+            files_of_the_first_copy
+                .iter()
+                .any(|name| error == format!("\"{folder}\" already holds \"{name}\"")),
+            "the copy reported \"{error}\" instead"
+        );
+
+        // the copy that was refused did not touch what the folder holds
+        assert_eq!(split_file_names(folder), files_of_the_first_copy);
+        assert_eq!(split_folder_rows(folder), WIDE_TABLE_ROWS);
+
+        Spi::run(&format!(
+            "COPY wide_table TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000, overwrite true);"
+        ))
+        .unwrap();
+
+        assert_eq!(split_folder_rows(folder), WIDE_TABLE_ROWS);
+    }
+
+    // what the folder holds is anything at all, rather than the files a copy of its own would
+    // write, since those are what a read of the folder gives back together with the rows
+    #[pg_test]
+    fn test_copy_to_file_size_bytes_over_a_folder_of_strangers_needs_overwrite() {
+        let folder = "/tmp/pg_parquet_test_split_strangers";
+        let _folder = FileCleanup::new(folder);
+
+        create_wide_table();
+
+        Spi::run("SET pg_parquet.max_parallel_workers TO 0;").unwrap();
+
+        // an empty folder holds nothing, so the copy that writes it is not refused
+        std::fs::create_dir_all(folder).expect("failed to create the folder");
+
+        Spi::run(&format!(
+            "COPY wide_table TO '{folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+        ))
+        .unwrap();
+
+        // a file no copy wrote is still something the folder holds
+        let strangers_folder = "/tmp/pg_parquet_test_split_strangers_only";
+        let _strangers_folder = FileCleanup::new(strangers_folder);
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{strangers_folder}/stranger.parquet' WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let error = failing_copy_to(&format!(
+            "COPY wide_table TO '{strangers_folder}'
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)"
+        ));
+
+        assert!(
+            error.contains(&format!(
+                "\"{strangers_folder}\" already holds \"stranger.parquet\""
+            )),
+            "the copy reported \"{error}\" instead"
+        );
+
+        assert_eq!(
+            folder_file_names(strangers_folder),
+            vec!["stranger.parquet"]
+        );
+    }
+
+    // overwrite says the copy may replace a folder, and a single file destination is replaced
+    // whether it says so or not, so the option would say nothing there
+    #[pg_test]
+    fn test_overwrite_is_only_for_a_folder_destination() {
+        let _file = FileCleanup::new(LOCAL_TEST_FILE_PATH);
+
+        create_wide_table();
+
+        let error = failing_copy_to(&format!(
+            "COPY wide_table TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet, overwrite true)"
+        ));
+
+        assert!(
+            error.contains("overwrite is only supported for a folder destination"),
+            "the copy reported \"{error}\" instead"
         );
     }
 
@@ -1375,7 +1490,7 @@ mod tests {
         // folder is the previous copy, whole, which emptying it up front would have lost
         let failed_at_the_first_row = failing_copy_to(&format!(
             "COPY (SELECT fails_above(id, 0) AS id, name FROM wide_table) TO '{folder}'
-             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)"
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000, overwrite true)"
         ));
 
         assert_eq!(failed_at_the_first_row, "no row above 0 of this copy");
@@ -1386,7 +1501,7 @@ mod tests {
         // exactly those up
         let failed_halfway = failing_copy_to(&format!(
             "COPY (SELECT fails_above(id, {rows}) AS id, name FROM wide_table) TO '{folder}'
-             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)",
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000, overwrite true)",
             rows = WIDE_TABLE_ROWS / 2
         ));
 
@@ -1474,7 +1589,8 @@ mod tests {
 
             Spi::run(&format!(
                 "COPY wide_table TO '{folder}'
-                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000);"
+                 WITH (format parquet, file_size_bytes '1MB', row_group_size 1000,
+                       overwrite true);"
             ))
             .unwrap();
 
@@ -1597,7 +1713,7 @@ mod tests {
         // folder: the folder is the previous copy, whole
         let failed_inside_the_first_file = failing_copy_to(&format!(
             "COPY (SELECT fails_above(id, 1) AS id, name FROM wide_table) TO '{folder}'
-             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)"
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000, overwrite true)"
         ));
 
         assert_eq!(failed_inside_the_first_file, "no row above 1 of this copy");
@@ -1618,7 +1734,7 @@ mod tests {
         let failed_halfway = failing_copy_to(&format!(
             "COPY (SELECT fails_above(id, {rows}) AS id, name, amount, created_at, flag, payload
                    FROM wide_table) TO '{folder}'
-             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000)",
+             WITH (format parquet, file_size_bytes '1MB', row_group_size 1000, overwrite true)",
             rows = WIDE_TABLE_ROWS / 2
         ));
 
