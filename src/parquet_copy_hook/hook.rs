@@ -25,14 +25,14 @@ use super::{
     copy_progress::{end_copy_progress, start_copy_to_progress},
     copy_to::execute_copy_to_with_dest_receiver,
     copy_to_split_dest_receiver::{
-        folder_files_written, free_copy_to_parquet_split_dest_receiver,
+        folder_files_written, free_copy_to_parquet_split_dest_receiver, lock_folder_destination,
         remove_files_of_a_previous_copy,
     },
     copy_utils::{
         copy_to_stmt_bloom_filter, copy_to_stmt_bloom_filter_fpp, copy_to_stmt_compression,
         copy_to_stmt_dictionary, copy_to_stmt_field_ids, copy_to_stmt_file_size_bytes,
-        copy_to_stmt_parquet_version, has_option, validate_copy_from_options,
-        validate_copy_to_options,
+        copy_to_stmt_file_size_bytes_is_set, copy_to_stmt_parquet_version, has_option,
+        validate_copy_from_options, validate_copy_to_options,
     },
     create_table::{
         create_copy_from_parquet_stmt_for_table, create_stmt_get_uri,
@@ -78,6 +78,13 @@ pub(crate) fn process_copy_to_parquet(
 
     let copy_from = false;
     ensure_access_privilege_to_uri(&uri_info, copy_from);
+
+    // a folder destination is written by one copy at a time, and the lock is taken before the
+    // validation below asks the folder what it holds, so that no second copy slips between the
+    // answer and the files this one writes
+    if copy_to_stmt_file_size_bytes_is_set(p_stmt) {
+        lock_folder_destination(&uri_as_string(&uri_info.uri));
+    }
 
     validate_copy_to_options(p_stmt, &uri_info);
 

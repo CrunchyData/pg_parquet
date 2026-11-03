@@ -183,6 +183,60 @@ pub(crate) fn reject_a_folder_that_already_holds_something(uri_info: &ParsedUriI
     );
 }
 
+// the namespace half of the advisory lock key, so that the hash below shares the key space of
+// a database with whoever else takes an advisory lock in it rather than the whole of it
+pub(crate) const FOLDER_DESTINATION_LOCK_NAMESPACE: i32 = 0x7067_7064;
+
+// lock_folder_destination gives a folder destination to one copy at a time. Two copies into
+// one folder number their files the same way, so each writes over the other's files and each
+// removal pass takes the other's for a previous copy's and deletes them: both report the rows
+// they wrote and the folder is left holding one copy's rows, or a part of each.
+//
+// The second copy is refused rather than made to wait for the first. Waiting would serialize
+// them, which is correct, and would also mean a copy that waited its turn only to write over
+// the rows the copy before it just wrote, so there is nothing for it to wait for. It would also
+// let two copies that take two folders in opposite orders deadlock, which refusing cannot.
+//
+// The lock is on the transaction, which carries it through the removal pass at the end of the
+// copy, and it is taken before the folder is asked what it holds so that the answer is still
+// true when the copy acts on it. It holds within one postgres instance, which is all a lock of
+// its own can do: another instance, or anything else that writes the same folder, is outside it.
+pub(crate) fn lock_folder_destination(uri: &str) {
+    // a parallel copy takes the lock in the leader, before the participants render the
+    // statement again and run it through this same handler
+    if unsafe { pgrx::pg_sys::IsInParallelMode() } {
+        return;
+    }
+
+    let folder_hash =
+        unsafe { pgrx::pg_sys::hash_any(uri.as_ptr(), uri.len() as i32).value() as u32 as i32 };
+
+    // the same session asking twice is given it twice, so a transaction that copies a folder
+    // more than once is not refused by a lock of its own
+    let locked = unsafe {
+        pgrx::fcinfo::direct_function_call::<bool>(
+            pgrx::pg_sys::pg_try_advisory_xact_lock_int4,
+            &[
+                FOLDER_DESTINATION_LOCK_NAMESPACE.into_datum(),
+                folder_hash.into_datum(),
+            ],
+        )
+    };
+
+    if locked == Some(true) {
+        return;
+    }
+
+    ereport!(
+        pgrx::PgLogLevel::ERROR,
+        pgrx::PgSqlErrorCode::ERRCODE_LOCK_NOT_AVAILABLE,
+        format!("\"{uri}\" is being written by another copy"),
+        "A folder destination is written by one copy at a time, since two of them write over \
+         each other's files and remove what they take for a previous copy's. Wait for that copy \
+         to finish, or write into a uri of its own."
+    );
+}
+
 // remove_files_of_a_previous_copy removes what a previous copy left in the folder
 // destination, which are the files with an id that this copy did not write, so that the
 // folder holds the rows of the copy that wrote it last rather than those rows merged with

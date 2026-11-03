@@ -28,6 +28,7 @@ mod tests {
             get_or_create_multipart_store, get_or_create_object_store,
         },
         parquet_copy_hook::copy_cleanup::{abort_upload, PART_URI_INFIX},
+        parquet_copy_hook::copy_to_split_dest_receiver::FOLDER_DESTINATION_LOCK_NAMESPACE,
         pgrx_tests::common::{
             copy_session_output, create_interruptible_table, drop_interruptible_table,
             extension_exists, extension_version, geospatial_crs_by_column_of, test_pg_port,
@@ -1397,6 +1398,98 @@ mod tests {
             error.contains("overwrite is only supported for a folder destination"),
             "the copy reported \"{error}\" instead"
         );
+    }
+
+    // a folder destination is written by one copy at a time, since two of them number their
+    // files the same way and each removal pass takes the other's files for a previous copy's.
+    // The second copy is refused while the first holds the folder, rather than waiting for a
+    // turn to write over what the first one wrote.
+    #[pg_test]
+    fn test_copy_to_file_size_bytes_is_refused_while_another_copy_holds_the_folder() {
+        let folder = "/tmp/pg_parquet_test_split_one_at_a_time";
+        let own_folder = "/tmp/pg_parquet_test_split_one_at_a_time_own";
+        let _folder = FileCleanup::new(folder);
+        let _own_folder = FileCleanup::new(own_folder);
+
+        // the holder's table is created in a session of its own, so that the copy it runs can
+        // read a table this session has not read: a table this session reads is one it holds
+        // until the test is over, which the drop at the end would wait for while this session
+        // waits for the drop
+        let holder_table = "one_at_a_time_holder_table";
+        create_interruptible_table(holder_table);
+
+        // this session copies a table of its own, since what is under test is the folder and
+        // not the rows that go into it
+        create_wide_table();
+
+        let port = test_pg_port();
+
+        // the other session leaves its transaction open, so the lock it took stays held
+        let mut holder = Command::new("psql")
+            .args(["-h", "localhost", "-p", &port, "-d", "pgrx_tests", "-At"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to run psql");
+
+        let stdin = holder.stdin.as_mut().expect("psql took no input");
+        writeln!(stdin, "SET pg_parquet.max_parallel_workers TO 0;")
+            .and_then(|()| writeln!(stdin, "BEGIN;"))
+            .and_then(|()| {
+                writeln!(
+                    stdin,
+                    "COPY {holder_table} TO '{folder}'
+                     WITH (format parquet, file_size_bytes '1MB');"
+                )
+            })
+            .expect("failed to write the copy to psql");
+
+        // the lock itself says when the other copy has the folder, rather than a wait of a
+        // length guessed here
+        let mut folder_is_held = false;
+        for _ in 0..100 {
+            folder_is_held = Spi::get_one::<bool>(&format!(
+                "SELECT EXISTS (SELECT 1 FROM pg_locks
+                                WHERE locktype = 'advisory' AND granted
+                                  AND classid = {FOLDER_DESTINATION_LOCK_NAMESPACE})"
+            ))
+            .unwrap()
+            .unwrap_or(false);
+
+            if folder_is_held {
+                break;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        assert!(folder_is_held, "the other copy did not take the folder");
+
+        let error = failing_copy_to(&format!(
+            "COPY wide_table TO '{folder}' WITH (format parquet, file_size_bytes '1MB')"
+        ));
+
+        assert!(
+            error.contains(&format!("\"{folder}\" is being written by another copy")),
+            "the second copy reported \"{error}\" instead"
+        );
+
+        // a transaction that copies one folder more than once is not refused by its own lock,
+        // which the session asking twice is given twice. The second copy replaces what the
+        // first one wrote, which is the folder it already holds, so it says overwrite as any
+        // copy of a folder that holds something does.
+        Spi::run(&format!(
+            "COPY wide_table TO '{own_folder}' WITH (format parquet, file_size_bytes '1MB');
+             COPY wide_table TO '{own_folder}' WITH (format parquet, file_size_bytes '1MB',
+                                                     overwrite true);"
+        ))
+        .unwrap_or_else(|e| panic!("a session was refused a folder it already holds: {e}"));
+
+        // the holder is let go of before the table it read is dropped, and that table is one
+        // this session never read, so the drop waits for nothing this session holds
+        copy_session_output(holder);
+        drop_interruptible_table(holder_table);
     }
 
     // a folder destination whose uri already names an object is refused before the copy
