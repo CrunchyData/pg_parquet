@@ -1938,6 +1938,28 @@ mod tests {
         );
     }
 
+    // a fifo is refused before it is opened, since opening one to write waits for a reader and
+    // nothing interrupts that wait: the copy runs past its statement_timeout and the backend
+    // stays in the open. It is no destination either way, because the staged file is renamed
+    // onto it and leaves a file of the copy's own where the fifo was.
+    #[pg_test]
+    #[should_panic(expected = "is a fifo, which a parquet file cannot be written to")]
+    fn test_local_fifo_destination_is_refused() {
+        let fifo_path = "/tmp/pg_parquet_test_fifo_destination.parquet";
+        let _fifo_cleanup = FileCleanup::new(fifo_path);
+
+        let made = std::process::Command::new("mkfifo")
+            .arg(fifo_path)
+            .status()
+            .expect("failed to run mkfifo");
+        assert!(made.success(), "mkfifo did not make \"{fifo_path}\"");
+
+        Spi::run(&format!(
+            "COPY (SELECT 1 AS a) TO '{fifo_path}' WITH (format parquet);"
+        ))
+        .unwrap();
+    }
+
     // a write that fails names the path it failed on, which the os error alone does not say
     #[pg_test]
     #[should_panic(

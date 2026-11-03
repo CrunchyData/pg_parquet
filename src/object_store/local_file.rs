@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{os::unix::fs::FileTypeExt, sync::Arc};
 
 use object_store::local::LocalFileSystem;
 use url::Url;
@@ -32,6 +32,27 @@ pub(crate) fn create_local_file_object_store(
 
             panic!("failed to create the folder \"{}\": {e}", parent.display());
         });
+
+        // a fifo or a socket is asked about before it is opened, because opening one to write
+        // waits for something to read it and nothing interrupts that wait: the copy is not
+        // cancelled by a statement_timeout and the backend is left in the open. It is no
+        // destination either way, since the bytes are staged beside it and renamed onto it,
+        // which replaces it with a file of its own.
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            let file_type = metadata.file_type();
+
+            if !file_type.is_file() && !file_type.is_dir() {
+                let what = if file_type.is_fifo() {
+                    "a fifo"
+                } else if file_type.is_socket() {
+                    "a socket"
+                } else {
+                    "a device"
+                };
+
+                panic!("\"{path}\" is {what}, which a parquet file cannot be written to");
+            }
+        }
 
         // create the local file, and say so under its own name rather than the "<path>#1" that
         // object_store stages the bytes in. Truncating it here would be the copy giving up the
