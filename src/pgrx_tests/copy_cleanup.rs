@@ -17,6 +17,7 @@ mod tests {
     // purpose leaves the staged upload of a test that failed where the next test would find it
     const CONTROL_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test_cleanup_control.parquet";
     const FAILED_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test_cleanup_failed.parquet";
+    const REPLACED_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test_cleanup_replaced.parquet";
     const CANCELLED_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test_cleanup_cancelled.parquet";
     const TERMINATED_TEST_FILE_PATH: &str = "/tmp/pg_parquet_test_cleanup_terminated.parquet";
     const CONTROL_TEST_FOLDER_PATH: &str = "/tmp/pg_parquet_test_cleanup_control_folder";
@@ -336,6 +337,83 @@ mod tests {
         );
 
         assert_destination_is_empty(FAILED_TEST_FILE_PATH, "failed");
+    }
+
+    // a copy that fails has nothing to say about the rows that were already at its destination.
+    // object_store stages a local destination in a sibling file and renames it on at the end, so
+    // the rows in it go when that rename happens and not before: a copy that never reaches it
+    // leaves the file it was given to replace as it found it.
+    #[pg_test]
+    fn test_copy_to_keeps_a_destination_it_failed_to_replace() {
+        let _test_file = clean_destination(REPLACED_TEST_FILE_PATH);
+
+        let table = "replacing_copy_table";
+        create_failing_table(table);
+
+        // the destination holds a copy of its own first, which is what the failing copy below
+        // is given to replace
+        Spi::run(&format!(
+            "COPY (SELECT id, payload FROM {table} LIMIT 1000) TO '{REPLACED_TEST_FILE_PATH}'
+             WITH (format parquet);"
+        ))
+        .unwrap();
+
+        let replaced_size = std::fs::metadata(REPLACED_TEST_FILE_PATH)
+            .expect("the first copy wrote no destination")
+            .len();
+        assert!(replaced_size > 0, "the first copy wrote an empty file");
+
+        // the last row of the table carries a numeric the parquet schema cannot hold, so the
+        // copy fails at the end of the table, by which point it has staged most of it
+        Spi::run(&format!(
+            "ALTER TABLE {table} ADD COLUMN unwritable numeric;
+             INSERT INTO {table} (id, unwritable) VALUES (-1, repeat('9', 40)::numeric);"
+        ))
+        .unwrap();
+
+        Spi::run(&format!(
+            "CREATE FUNCTION replacing_copy_to() RETURNS text
+             LANGUAGE plpgsql AS $$
+             BEGIN
+                 BEGIN
+                     EXECUTE 'COPY {table} TO ''{REPLACED_TEST_FILE_PATH}''
+                              WITH (format parquet, row_group_size {INTERRUPTED_COPY_ROW_GROUP_SIZE})';
+
+                     RETURN 'no error';
+                 EXCEPTION WHEN others THEN
+                     RETURN SQLERRM;
+                 END;
+             END;
+             $$;"
+        ))
+        .unwrap();
+
+        let error = Spi::get_one::<String>("SELECT replacing_copy_to()")
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            error.contains("exceeds max allowed integral digits"),
+            "the copy reported \"{error}\" instead"
+        );
+
+        // the file the copy was given is the one the first copy left, down to its size, and it
+        // is still a parquet file rather than the start of one
+        assert_eq!(
+            std::fs::metadata(REPLACED_TEST_FILE_PATH)
+                .expect("the destination of the copy is not there at all")
+                .len(),
+            replaced_size
+        );
+
+        let rows_still_there = Spi::get_one::<i64>(&format!(
+            "SELECT count(*) FROM parquet.metadata('{REPLACED_TEST_FILE_PATH}')"
+        ))
+        .unwrap();
+        assert!(
+            rows_still_there.is_some_and(|row_groups| row_groups > 0),
+            "the destination reads back no row group"
+        );
     }
 
     // a cancel is the interruption a running copy is most likely to meet, and the cleanup of

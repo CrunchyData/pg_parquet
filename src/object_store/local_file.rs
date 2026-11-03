@@ -33,11 +33,14 @@ pub(crate) fn create_local_file_object_store(
             panic!("failed to create the folder \"{}\": {e}", parent.display());
         });
 
-        // create or overwrite the local file
+        // create the local file, and say so under its own name rather than the "<path>#1" that
+        // object_store stages the bytes in. Truncating it here would be the copy giving up the
+        // rows already in it before writing one of its own, and the staged file is renamed onto
+        // it at the end, so what is in it is what a copy that fails leaves behind.
         std::fs::OpenOptions::new()
             .write(true)
-            .truncate(true)
             .create(true)
+            .truncate(false)
             .open(&path)
             .unwrap_or_else(|e| panic!("failed to create the file \"{path}\": {e}"));
     }

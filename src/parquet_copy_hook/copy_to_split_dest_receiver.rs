@@ -218,7 +218,9 @@ const BYTES_PROGRESS_INTERVAL: i64 = 1024;
 // existence there, which is when the copy has that file to give up if it does not finish.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ChildFileMoment {
-    // a local file is created, and an existing one truncated, by opening it
+    // a local file is created by opening it, though an existing one keeps the rows it has
+    // until the staged file is renamed on, so this gives up a file a previous copy wrote at
+    // the same name as well as the one this copy created
     ChildStarted,
     // an object store holds no object of the file until the child has written its footer: the
     // bytes of it are in the writer's buffer or in an upload of its own until then, and the
