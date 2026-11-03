@@ -6,12 +6,12 @@ use pgrx::{
     ffi::c_char,
     is_a,
     pg_sys::{
-        addRangeTableEntryForRelation, defGetInt32, defGetInt64, defGetNumeric, defGetString,
-        get_namespace_name, get_rel_namespace, makeDefElem, makeString, make_parsestate,
-        quote_qualified_identifier, AccessShareLock, AsPgCStr, CopyStmt, CreateTemplateTupleDesc,
-        DefElem, List, NoLock, Node, NodeTag::T_CopyStmt, Oid, ParseNamespaceItem, ParseState,
-        PlannedStmt, QueryEnvironment, RangeVar, RangeVarGetRelidExtended, RowExclusiveLock,
-        TupleDescInitEntry,
+        addRangeTableEntryForRelation, defGetBoolean, defGetInt32, defGetInt64, defGetNumeric,
+        defGetString, get_namespace_name, get_rel_namespace, makeDefElem, makeString,
+        make_parsestate, quote_qualified_identifier, AccessShareLock, AsPgCStr, CopyStmt,
+        CreateTemplateTupleDesc, DefElem, List, NoLock, Node, NodeTag::T_CopyStmt, Oid,
+        ParseNamespaceItem, ParseState, PlannedStmt, QueryEnvironment, RangeVar,
+        RangeVarGetRelidExtended, RowExclusiveLock, TupleDescInitEntry,
     },
     PgBox, PgList, PgLogLevel, PgRelation, PgSqlErrorCode, PgTupleDesc,
 };
@@ -25,7 +25,7 @@ use crate::{
         match_by::MatchBy,
         parquet_version::ParquetVersion,
         parquet_writer::{DEFAULT_ROW_GROUP_SIZE, DEFAULT_ROW_GROUP_SIZE_BYTES},
-        uri_utils::ParsedUriInfo,
+        uri_utils::{uri_as_string, ParsedUriInfo},
     },
     pgrx_utils::extension_exists,
 };
@@ -38,7 +38,10 @@ use self::field_ids::FieldIds;
 const MIN_BLOOM_FILTER_FPP: f64 = 1e-62;
 
 use super::{
-    copy_to_split_dest_receiver::INVALID_FILE_SIZE_BYTES, hook::ENABLE_PARQUET_COPY_HOOK,
+    copy_to_split_dest_receiver::{
+        reject_a_folder_that_already_holds_something, INVALID_FILE_SIZE_BYTES,
+    },
+    hook::ENABLE_PARQUET_COPY_HOOK,
     pg_compat::strVal,
 };
 
@@ -58,6 +61,7 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
             "bloom_filter_fpp",
             "dictionary",
             "freeze",
+            "overwrite",
         ],
     );
 
@@ -100,7 +104,19 @@ pub(crate) fn validate_copy_to_options(p_stmt: &PgBox<PlannedStmt>, uri_info: &P
         if copy_stmt_program(p_stmt).is_some() {
             panic!("file_size_bytes is not supported for COPY TO PROGRAM.");
         }
+
+        // the files of this copy replace those of the one that wrote the folder before it, so a
+        // folder with anything in it is only written by a copy that says it means to
+        if !copy_to_stmt_overwrite(p_stmt) {
+            reject_a_folder_that_already_holds_something(uri_info, &uri_as_string(&uri_info.uri));
+        }
     } else {
+        // overwrite is what a copy says it may replace a folder with, and a single file
+        // destination is replaced whether it says so or not, so the option would do nothing
+        if copy_to_stmt_overwrite(p_stmt) {
+            panic!("overwrite is only supported for a folder destination, which file_size_bytes writes.");
+        }
+
         // a copy without file_size_bytes writes the single object its uri names, so the uri
         // has to name one. The destination of a folder copy is the folder rather than an
         // object in it, and the whole of a store is a folder a copy can fill.
@@ -453,6 +469,17 @@ pub(crate) fn copy_to_stmt_bloom_filter(p_stmt: &PgBox<PlannedStmt>) -> *const c
 
 pub(crate) fn copy_to_stmt_dictionary(p_stmt: &PgBox<PlannedStmt>) -> *const c_char {
     copy_to_stmt_column_selection(p_stmt, "dictionary", DEFAULT_DICTIONARY)
+}
+
+// whether the copy says it may replace what its folder destination already holds
+pub(crate) fn copy_to_stmt_overwrite(p_stmt: &PgBox<PlannedStmt>) -> bool {
+    let overwrite_option = copy_stmt_get_option(p_stmt, "overwrite");
+
+    if overwrite_option.is_null() {
+        return false;
+    }
+
+    unsafe { defGetBoolean(overwrite_option.as_ptr()) }
 }
 
 fn copy_to_stmt_column_selection(
