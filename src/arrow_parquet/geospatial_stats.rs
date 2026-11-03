@@ -11,9 +11,6 @@ use parquet::schema::types::ColumnDescPtr;
 use parquet_geospatial::bounding::GeometryBounder;
 use parquet_geospatial::interval::IntervalTrait;
 
-// the deepest geometry collection nesting that we walk while validating a wkb payload
-const MAX_WKB_NESTING_DEPTH: u32 = 64;
-
 // installs the accumulator factory that computes the geospatial statistics of the geometry and
 // geography columns. it must be called before any parquet writer is created.
 pub(crate) fn init_geospatial_stats_accumulator_factory() {
@@ -203,16 +200,11 @@ fn wkb_geometry_type(wkb: &[u8]) -> Option<u32> {
     Some(type_code % 1000)
 }
 
-// why a wkb payload is not one that parquet can bound. The two answers are not the same thing to
-// a caller that has to decide whether to refuse the geometry: only the first is a property of the
-// geometry itself, the second is a limit of this walk.
-enum WkbRejection {
-    // a geometry type that the parquet geospatial specification does not define, carried as the
-    // iso type code it appeared under
-    TypeOutsideTheSpecification(u32),
-    // nesting deeper than we walk, or bytes that are not iso wkb at all
-    NotWalkable,
-}
+// the deepest geometry collection nesting whose bounding box we compute. The bounder recurses
+// once per level and runs out of the backend's stack a few thousand levels in, while postgis
+// parses and round-trips that many happily, so a payload nested deeper than this is left
+// unbounded rather than handed to it.
+const MAX_WKB_NESTING_DEPTH: u32 = 64;
 
 // returns whether the whole wkb payload consists of the geometry types that parquet can bound,
 // and whether every coordinate in it is a finite number. A NaN or an infinity bounds nothing: a
@@ -221,44 +213,129 @@ enum WkbRejection {
 fn wkb_is_boundable_and_finite(wkb: &[u8]) -> (bool, bool) {
     let mut finite = true;
 
-    let boundable = matches!(consume_geometry(wkb, 0, &mut finite), Ok(rest) if rest.is_empty());
+    let boundable = matches!(consume_geometry(wkb, 0, &mut finite), Some(rest) if rest.is_empty());
 
     (boundable, finite)
 }
 
 // the iso type code of the first geometry in the payload whose type the parquet geospatial
 // specification does not define, or None if every type in it is one the specification defines.
-// Nesting deeper than we walk also answers None: the geometry is a legal one, and refusing it
-// over a limit of our own would be the worse answer by far.
+//
+// Every geometry in a payload is a header followed by its own coordinates, and a collection
+// holds its parts as the geometries that follow it, so reading one header after another to the
+// end of the bytes reaches all of them without following the nesting and without a depth to
+// give up at. A type the specification leaves out is therefore found wherever it is, including
+// behind a sibling nested deeper than the bounding walk goes, and no geometry is refused for
+// being nested deeply, since the nesting is never what this stops on.
 pub(crate) fn wkb_type_outside_the_specification(wkb: &[u8]) -> Option<u32> {
-    let mut finite = true;
+    // the bounding box is what a non-finite coordinate costs a geometry, and that is answered by
+    // the walk below rather than here
+    let mut finiteness_is_not_our_question = true;
+    let mut rest = wkb;
 
-    match consume_geometry(wkb, 0, &mut finite) {
-        Err(WkbRejection::TypeOutsideTheSpecification(type_code)) => Some(type_code),
+    while !rest.is_empty() {
+        let WkbHeader {
+            little_endian,
+            type_code,
+            coords_per_point,
+            rest: after_header,
+        } = consume_header(rest)?;
+
+        rest = match type_code % 1000 {
+            // point
+            1 => consume_points(
+                after_header,
+                little_endian,
+                coords_per_point,
+                1,
+                &mut finiteness_is_not_our_question,
+            )?,
+            // linestring
+            2 => consume_coord_sequence(
+                after_header,
+                little_endian,
+                coords_per_point,
+                &mut finiteness_is_not_our_question,
+            )?,
+            // polygon
+            3 => consume_rings(
+                after_header,
+                little_endian,
+                coords_per_point,
+                &mut finiteness_is_not_our_question,
+            )?,
+            // multipoint, multilinestring, multipolygon and geometrycollection, which are
+            // nothing here but the count of the geometries that follow them
+            4..=7 => consume_u32(after_header, little_endian)?.1,
+            // the curved types, and tin, polyhedral surface and triangle
+            _ => return Some(type_code),
+        };
+    }
+
+    None
+}
+
+// consumes one wkb geometry and returns the bytes that follow it, or None if the geometry is not
+// one that parquet can bound
+fn consume_geometry<'a>(wkb: &'a [u8], depth: u32, finite: &mut bool) -> Option<&'a [u8]> {
+    if depth > MAX_WKB_NESTING_DEPTH {
+        return None;
+    }
+
+    let WkbHeader {
+        little_endian,
+        type_code,
+        coords_per_point,
+        rest,
+    } = consume_header(wkb)?;
+
+    // see https://github.com/apache/parquet-format/blob/master/Geospatial.md for the type codes
+    match type_code % 1000 {
+        // point
+        1 => consume_points(rest, little_endian, coords_per_point, 1, finite),
+        // linestring
+        2 => consume_coord_sequence(rest, little_endian, coords_per_point, finite),
+        // polygon
+        3 => consume_rings(rest, little_endian, coords_per_point, finite),
+        // multipoint, multilinestring, multipolygon and geometrycollection
+        4..=7 => {
+            let (part_count, mut rest) = consume_u32(rest, little_endian)?;
+
+            for _ in 0..part_count {
+                rest = consume_geometry(rest, depth + 1, finite)?;
+            }
+
+            Some(rest)
+        }
         _ => None,
     }
 }
 
-// consumes one wkb geometry and returns the bytes that follow it, or why the geometry is not one
-// that parquet can bound
-fn consume_geometry<'a>(
-    wkb: &'a [u8],
-    depth: u32,
-    finite: &mut bool,
-) -> Result<&'a [u8], WkbRejection> {
-    if depth > MAX_WKB_NESTING_DEPTH {
-        return Err(WkbRejection::NotWalkable);
-    }
+// the head of one wkb geometry, and the bytes of it that follow. Reading it is the only part of
+// a walk that can meet bytes which are not iso wkb at all, so both walks read it from here.
+//
+// Each of the ways that can fail is unreachable from a geometry postgis gave us, which is the
+// only kind either walk is handed: postgis normalises what it is given, so a big endian payload
+// is a little endian one by the time it reaches us, and it rejects a type code and a length it
+// cannot read before we see the bytes at all. They are read rather than assumed anyway, because
+// what makes them unreachable is postgis and not the specification.
+struct WkbHeader<'a> {
+    little_endian: bool,
+    type_code: u32,
+    coords_per_point: usize,
+    rest: &'a [u8],
+}
 
-    let (byte_order, rest) = wkb.split_first().ok_or(WkbRejection::NotWalkable)?;
+fn consume_header(wkb: &[u8]) -> Option<WkbHeader<'_>> {
+    let (byte_order, rest) = wkb.split_first()?;
 
     let little_endian = match byte_order {
         0 => false,
         1 => true,
-        _ => return Err(WkbRejection::NotWalkable),
+        _ => return None,
     };
 
-    let (type_code, rest) = consume_u32(rest, little_endian).ok_or(WkbRejection::NotWalkable)?;
+    let (type_code, rest) = consume_u32(rest, little_endian)?;
 
     // an iso wkb type code is the geometry type plus 1000 per extra dimension. anything else,
     // e.g. the extended wkb flags that postgis writes for its own format, is rejected.
@@ -266,43 +343,30 @@ fn consume_geometry<'a>(
         0 => 2,
         1 | 2 => 3,
         3 => 4,
-        _ => return Err(WkbRejection::NotWalkable),
+        _ => return None,
     };
 
-    // see https://github.com/apache/parquet-format/blob/master/Geospatial.md for the type codes
-    match type_code % 1000 {
-        // point
-        1 => consume_points(rest, little_endian, coords_per_point, 1, finite)
-            .ok_or(WkbRejection::NotWalkable),
-        // linestring
-        2 => consume_coord_sequence(rest, little_endian, coords_per_point, finite)
-            .ok_or(WkbRejection::NotWalkable),
-        // polygon
-        3 => {
-            let (ring_count, mut rest) =
-                consume_u32(rest, little_endian).ok_or(WkbRejection::NotWalkable)?;
+    Some(WkbHeader {
+        little_endian,
+        type_code,
+        coords_per_point,
+        rest,
+    })
+}
 
-            for _ in 0..ring_count {
-                rest = consume_coord_sequence(rest, little_endian, coords_per_point, finite)
-                    .ok_or(WkbRejection::NotWalkable)?;
-            }
+fn consume_rings<'a>(
+    wkb: &'a [u8],
+    little_endian: bool,
+    coords_per_point: usize,
+    finite: &mut bool,
+) -> Option<&'a [u8]> {
+    let (ring_count, mut rest) = consume_u32(wkb, little_endian)?;
 
-            Ok(rest)
-        }
-        // multipoint, multilinestring, multipolygon and geometrycollection
-        4..=7 => {
-            let (part_count, mut rest) =
-                consume_u32(rest, little_endian).ok_or(WkbRejection::NotWalkable)?;
-
-            for _ in 0..part_count {
-                rest = consume_geometry(rest, depth + 1, finite)?;
-            }
-
-            Ok(rest)
-        }
-        // the curved types, and tin, polyhedral surface and triangle
-        _ => Err(WkbRejection::TypeOutsideTheSpecification(type_code)),
+    for _ in 0..ring_count {
+        rest = consume_coord_sequence(rest, little_endian, coords_per_point, finite)?;
     }
+
+    Some(rest)
 }
 
 fn consume_coord_sequence<'a>(
