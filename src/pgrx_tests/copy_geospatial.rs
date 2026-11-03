@@ -1594,18 +1594,25 @@ mod tests {
         }
     }
 
-    // the walk that finds a type outside the specification stops at a nesting depth of its own,
-    // and giving up is not the same answer as finding one: a collection nested deeper than that
-    // holds nothing but a point here, and refusing it would refuse a geometry the specification
-    // defines every type of, which earlier versions wrote.
+    // nesting is two questions, and they have different answers. The box is only computed down
+    // to the depth the bounder can be given, which postgis parses far past: 3000 levels crash
+    // the backend if the bounder is handed them, and that takes every test running with it. The
+    // types are read all the way down whatever the depth, so a geometry the specification does
+    // not define cannot hide behind a deeply nested sibling.
     #[pg_test]
-    fn test_geo_collection_nested_deeper_than_the_walk_is_written() {
+    fn test_geo_collection_nesting_is_bounded_to_a_depth_and_read_past_it() {
         if postgis_missing() {
             return;
         }
         create_postgis();
 
-        for depth in [64, 65, 200] {
+        for (depth, bounded) in [
+            (1, true),
+            (64, true),
+            (65, false),
+            (200, false),
+            (3000, false),
+        ] {
             let wkt = format!(
                 "{}POINT(1 2){}",
                 "GEOMETRYCOLLECTION(".repeat(depth),
@@ -1619,15 +1626,30 @@ mod tests {
             Spi::run(&copy_to_query)
                 .unwrap_or_else(|e| panic!("a collection nested {depth} deep was refused: {e}"));
 
-            // past its depth the walk cannot say the box is of the whole geometry, so it drops
-            // it, which is what it did before the refusal existed
-            let expected_bbox = if depth <= 64 {
-                Some("{\"xmax\": 1.0, \"xmin\": 1.0, \"ymax\": 2.0, \"ymin\": 2.0}".to_string())
-            } else {
-                None
-            };
+            let expected_bbox = bounded.then(|| {
+                "{\"xmax\": 1.0, \"xmin\": 1.0, \"ymax\": 2.0, \"ymin\": 2.0}".to_string()
+            });
             assert_eq!(bbox_text("a"), expected_bbox, "nested {depth} deep");
         }
+
+        // the type behind the deeply nested sibling is read and named, rather than left in a
+        // file that carries the GEOMETRY logical type over a geometry no reader of the
+        // specification can read, which is the whole of what the refusal is for
+        let deep_sibling = format!(
+            "GEOMETRYCOLLECTION({}POINT(1 2){}, CIRCULARSTRING(0 0, 1 1, 2 0))",
+            "GEOMETRYCOLLECTION(".repeat(70),
+            ")".repeat(70)
+        );
+
+        let error = copy_to_error(&format!(
+            "COPY (SELECT ST_GeomFromText('{deep_sibling}') as a)
+             TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+        ));
+
+        assert!(
+            error.contains("cannot write a circular string to a parquet geospatial column"),
+            "a curved type after a deeply nested sibling was refused with: {error}"
+        );
     }
 
     #[pg_test]
