@@ -1422,11 +1422,16 @@ mod tests {
                 "MULTISURFACE(CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0)))",
                 "a multi surface",
             ),
-            // a collection is named by what it holds, since its own type is one the
-            // specification does define
+            // a collection is named by what it holds, however deep it holds it, since its own
+            // type is one the specification does define
             (
                 "GEOMETRYCOLLECTION(TRIANGLE((0 0, 0 1, 1 1, 0 0)))",
-                "a geometry collection holding a type the specification does not define",
+                "a triangle",
+            ),
+            (
+                "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTIPOINT(9 9),
+                 GEOMETRYCOLLECTION(CIRCULARSTRING(0 0, 1 1, 2 0))))",
+                "a circular string",
             ),
         ];
 
@@ -1526,6 +1531,102 @@ mod tests {
                     "{wkt}"
                 );
             }
+        }
+    }
+
+    // every conversion the refusal names has to be one that is actually written afterwards, or
+    // the error sends the reader of it around a loop. ST_Dump of a tin and ST_Multi of a
+    // triangle are the two that look right and are not, so they are here as well.
+    #[pg_test]
+    fn test_geo_the_conversions_the_refusal_names_are_written() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        let conversions = [
+            "ST_CurveToLine('CIRCULARSTRING(0 0, 1 1, 2 0)')",
+            "ST_CurveToLine('COMPOUNDCURVE(CIRCULARSTRING(0 0, 1 1, 2 0), (2 0, 3 0))')",
+            "ST_CurveToLine('CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0))')",
+            "ST_CurveToLine('MULTICURVE((0 0, 1 1), CIRCULARSTRING(2 0, 3 1, 4 0))')",
+            "ST_CurveToLine('MULTISURFACE(CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0)))')",
+            "ST_Multi('TIN(((0 0, 0 1, 1 1, 0 0)), ((0 0, 1 1, 1 0, 0 0)))')",
+            "ST_Multi('POLYHEDRALSURFACE(((0 0, 0 1, 1 1, 1 0, 0 0)))')",
+            "ST_UnaryUnion('TRIANGLE((0 0, 0 1, 1 1, 0 0))')",
+        ];
+
+        for conversion in conversions {
+            let copy_to_query = format!(
+                "COPY (SELECT {conversion}::geometry as a)
+                 TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+            );
+            Spi::run(&copy_to_query)
+                .unwrap_or_else(|e| panic!("{conversion} is named by the refusal but failed: {e}"));
+        }
+
+        // ST_Multi of a tin keeps the faces it had, rather than dissolving them into one
+        let faces = Spi::get_one::<i32>(
+            "SELECT ST_NumGeometries(
+                 ST_Multi('TIN(((0 0, 0 1, 1 1, 0 0)), ((0 0, 1 1, 1 0, 0 0)))'::geometry))",
+        )
+        .unwrap();
+        assert_eq!(faces, Some(2));
+
+        // and the two conversions that are not a way out, which the refusal says so of
+        for (conversion, type_name) in [
+            ("ST_Multi('TRIANGLE((0 0, 0 1, 1 1, 0 0))')", "a tin"),
+            (
+                "(ST_Dump('TIN(((0 0, 0 1, 1 1, 0 0)))'::geometry)).geom",
+                "a triangle",
+            ),
+        ] {
+            let error = copy_to_error(&format!(
+                "COPY (SELECT {conversion}::geometry as a)
+                 TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+            ));
+
+            assert!(
+                error.contains(&format!(
+                    "cannot write {type_name} to a parquet geospatial column"
+                )),
+                "{conversion} was refused with: {error}"
+            );
+        }
+    }
+
+    // the walk that finds a type outside the specification stops at a nesting depth of its own,
+    // and giving up is not the same answer as finding one: a collection nested deeper than that
+    // holds nothing but a point here, and refusing it would refuse a geometry the specification
+    // defines every type of, which earlier versions wrote.
+    #[pg_test]
+    fn test_geo_collection_nested_deeper_than_the_walk_is_written() {
+        if postgis_missing() {
+            return;
+        }
+        create_postgis();
+
+        for depth in [64, 65, 200] {
+            let wkt = format!(
+                "{}POINT(1 2){}",
+                "GEOMETRYCOLLECTION(".repeat(depth),
+                ")".repeat(depth)
+            );
+
+            let copy_to_query = format!(
+                "COPY (SELECT ST_GeomFromText('{wkt}') as a)
+                 TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
+            );
+            Spi::run(&copy_to_query)
+                .unwrap_or_else(|e| panic!("a collection nested {depth} deep was refused: {e}"));
+
+            // past its depth the walk cannot say the box is of the whole geometry, so it drops
+            // it, which is what it did before the refusal existed
+            let expected_bbox = if depth <= 64 {
+                Some("{\"xmax\": 1.0, \"xmin\": 1.0, \"ymax\": 2.0, \"ymin\": 2.0}".to_string())
+            } else {
+                None
+            };
+            assert_eq!(bbox_text("a"), expected_bbox, "nested {depth} deep");
         }
     }
 

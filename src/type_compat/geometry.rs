@@ -1,6 +1,6 @@
 use std::{ffi::CString, ops::Deref};
 
-use crate::arrow_parquet::geospatial_stats::{wkb_geometry_type, wkb_is_boundable_and_finite};
+use crate::arrow_parquet::geospatial_stats::wkb_type_outside_the_specification;
 use arrow_schema::{extension::ExtensionType, Field};
 use once_cell::sync::OnceCell;
 use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType};
@@ -508,33 +508,27 @@ unsafe impl UnboxDatum for Geometry {
 // the specification refuses the whole column one of them is in rather than the row, so a file
 // carrying one is a file another engine cannot read the geometries of at all.
 fn ensure_wkb_is_in_the_specification(wkb: &[u8]) {
-    // the second answer is whether every coordinate is finite, which the statistics care about
-    // and the geometry itself does not: a NaN is a coordinate the specification defines a type
-    // for, so it is written and left to the statistics to drop their box for
-    let (in_the_specification, _finite) = wkb_is_boundable_and_finite(wkb);
-
-    if in_the_specification {
+    // a type the specification does not define is the only reason to refuse the geometry. The
+    // walk gives up for other reasons too, e.g. nesting deeper than it goes, and those are not
+    // the geometry's fault: it went into the file before we looked at its types at all, and a
+    // non-finite coordinate is a coordinate of a type the specification does define, so it is
+    // written and left to the statistics to drop their box for.
+    let Some(type_code) = wkb_type_outside_the_specification(wkb) else {
         return;
-    }
+    };
 
-    let type_name = wkb_geometry_type(wkb).map_or_else(
-        || "a geometry".to_string(),
-        |type_code| match type_code {
-            8 => "a circular string".to_string(),
-            9 => "a compound curve".to_string(),
-            10 => "a curve polygon".to_string(),
-            11 => "a multi curve".to_string(),
-            12 => "a multi surface".to_string(),
-            15 => "a polyhedral surface".to_string(),
-            16 => "a tin".to_string(),
-            17 => "a triangle".to_string(),
-            // the type of the geometry itself is one the specification defines, so what it
-            // holds is not
-            _ => {
-                "a geometry collection holding a type the specification does not define".to_string()
-            }
-        },
-    );
+    // the type code carries 1000 per extra dimension, which does not change what to call it
+    let type_name = match type_code % 1000 {
+        8 => "a circular string",
+        9 => "a compound curve",
+        10 => "a curve polygon",
+        11 => "a multi curve",
+        12 => "a multi surface",
+        15 => "a polyhedral surface",
+        16 => "a tin",
+        17 => "a triangle",
+        _ => "a geometry",
+    };
 
     ereport!(
         PgLogLevel::ERROR,
@@ -543,9 +537,10 @@ fn ensure_wkb_is_in_the_specification(wkb: &[u8]) {
         "The GEOMETRY and GEOGRAPHY logical types are defined over the geometry types of the \
          parquet geospatial specification, which the curved types and tin, polyhedral surface \
          and triangle are not among, so a reader of the specification refuses the whole column \
-         one of them is written to. Write ST_CurveToLine of a curved geometry, or ST_Boundary \
-         or ST_Dump of a tin or a polyhedral surface, or carry the geometry in a bytea column, \
-         which is written with no geospatial logical type on it."
+         one of them is written to. Write ST_CurveToLine of a curved geometry, ST_Multi of a \
+         tin or a polyhedral surface, which keeps every face as a multipolygon, or \
+         ST_UnaryUnion of a triangle. A bytea column holding ST_AsBinary of the geometry is \
+         the way to carry one as it is, and is written with no geospatial logical type on it."
     );
 }
 

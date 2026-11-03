@@ -651,7 +651,7 @@ DETAIL: The GEOMETRY and GEOGRAPHY logical types are defined over the geometry t
 
 A column is written with the `GEOMETRY` or `GEOGRAPHY` logical type, which promises the types the specification defines, and a reader of the specification refuses **the whole column** one of these is in rather than the row: a column of one `CIRCULARSTRING` among points would be unreadable to it entirely, the points included, while `pg_parquet` read the same file back without noticing. So the copy ends at the geometry rather than at the reader.
 
-To write these, convert them to a type the specification defines first. `ST_CurveToLine` replaces a curved geometry with linestrings and polygons, and `ST_Boundary` or `ST_Dump` reduce a `TIN` or a `POLYHEDRALSURFACE` to parts it defines. A `bytea` column is the other way to carry the original bytes, which is written with no geospatial logical type and leaves a reader to make of them what it can.
+To write these, convert them to a type the specification defines first. `ST_CurveToLine` replaces a curved geometry with linestrings and polygons, `ST_Multi` turns a `TIN` or a `POLYHEDRALSURFACE` into a `MULTIPOLYGON` that keeps every one of its faces, and `ST_UnaryUnion` turns a `TRIANGLE` into a `POLYGON`. Note that `ST_Dump` of a `TIN` gives `TRIANGLE`s, which are refused in their turn, and that `ST_Multi` of a `TRIANGLE` gives a `TIN`. A `bytea` column holding `ST_AsBinary` of the geometry is the other way to carry the original bytes, which is written with no geospatial logical type and leaves a reader to make of them what it can.
 
 ## Copy Options
 `pg_parquet` supports the following options in the `COPY TO` command:
