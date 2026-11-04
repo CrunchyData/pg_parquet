@@ -6,13 +6,14 @@ mod tests {
 
     use arrow::array::{
         ArrayRef, Decimal128Array, DictionaryArray, DurationMicrosecondArray, FixedSizeBinaryArray,
-        FixedSizeListBuilder, Int32Array, Int32Builder, LargeListBuilder, MapArray, RecordBatch,
-        StringArray, StringViewArray, StructArray, Time32SecondArray, UInt16Array, UInt32Array,
-        UInt64Array, UInt8Array,
+        FixedSizeListBuilder, Int32Array, Int32Builder, IntervalDayTimeArray, LargeListBuilder,
+        MapArray, RecordBatch, StringArray, StringViewArray, StructArray, Time32SecondArray,
+        UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::Int32Type;
-    use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+    use arrow::datatypes::IntervalDayTime;
+    use arrow_schema::{DataType, Field, Fields, IntervalUnit, Schema, TimeUnit};
     use pgrx::{
         composite_type,
         datum::{Date, Time, Timestamp, TimestampWithTimeZone},
@@ -21,8 +22,8 @@ mod tests {
             CurrentExtensionObject as pg_current_extension_object, InvalidOid, Oid, BOOLARRAYOID,
             BOOLOID, BYTEAARRAYOID, BYTEAOID, DATEARRAYOID, DATEOID, FLOAT4ARRAYOID, FLOAT4OID,
             FLOAT8ARRAYOID, FLOAT8OID, INT2ARRAYOID, INT2OID, INT4ARRAYOID, INT4OID, INT8ARRAYOID,
-            INT8OID, JSONARRAYOID, JSONOID, NUMERICARRAYOID, NUMERICOID, TEXTARRAYOID, TEXTOID,
-            TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID,
+            INT8OID, INTERVALOID, JSONARRAYOID, JSONOID, NUMERICARRAYOID, NUMERICOID, TEXTARRAYOID,
+            TEXTOID, TIMEARRAYOID, TIMEOID, TIMESTAMPARRAYOID, TIMESTAMPOID, TIMESTAMPTZARRAYOID,
             TIMESTAMPTZOID, UUIDOID,
         },
         pg_test,
@@ -956,11 +957,12 @@ mod tests {
         assert_eq!(value, Some(true));
     }
 
+    // a duration is a count of one unit of time, which is the time span an interval holds, so
+    // a column inferred from one is an interval
     #[pg_test]
-    #[should_panic(expected = "cannot infer a Postgres type for the parquet field \"a\"")]
-    fn test_create_table_unsupported_arrow_type() {
+    fn test_create_table_duration_is_an_interval() {
         // the tests run concurrently, so each of them needs its own file
-        let test_file = test_file("create_table_unsupported_arrow_type");
+        let test_file = test_file("create_table_duration_is_an_interval");
         let schema = Arc::new(Schema::new(vec![Field::new(
             "a",
             DataType::Duration(TimeUnit::Microsecond),
@@ -969,7 +971,40 @@ mod tests {
 
         let batch = RecordBatch::try_new(
             schema.clone(),
-            vec![Arc::new(DurationMicrosecondArray::from(vec![1])) as ArrayRef],
+            vec![Arc::new(DurationMicrosecondArray::from(vec![1_500_000])) as ArrayRef],
+        )
+        .unwrap();
+        write_record_batch_to_parquet_file(&test_file, schema, batch);
+
+        let create_table =
+            format!("CREATE TABLE test_table () WITH (definition_from = '{test_file}')");
+        Spi::run(&create_table).unwrap();
+
+        ensure_table_attribute_type("test_table", "a", INTERVALOID, -1);
+
+        let copy_from = format!("COPY test_table FROM '{test_file}'");
+        Spi::run(&copy_from).unwrap();
+
+        let read_back = Spi::get_one::<String>("SELECT a::text FROM test_table").unwrap();
+        assert_eq!(read_back.as_deref(), Some("00:00:01.5"));
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "cannot infer a Postgres type for the parquet field \"a\"")]
+    fn test_create_table_unsupported_arrow_type() {
+        // the tests run concurrently, so each of them needs its own file
+        let test_file = test_file("create_table_unsupported_arrow_type");
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Interval(IntervalUnit::DayTime),
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(IntervalDayTimeArray::from(vec![IntervalDayTime::new(1, 2)])) as ArrayRef,
+            ],
         )
         .unwrap();
         write_record_batch_to_parquet_file(&test_file, schema, batch);

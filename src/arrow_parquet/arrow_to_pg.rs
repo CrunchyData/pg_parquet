@@ -1,13 +1,14 @@
 use arrow::array::{
     Array, ArrayData, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
-    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    ListArray, MapArray, StringArray, StructArray, Time64MicrosecondArray,
+    DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+    DurationSecondArray, FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array,
+    Int64Array, ListArray, MapArray, StringArray, StructArray, Time64MicrosecondArray,
     TimestampMicrosecondArray, UInt32Array,
 };
 use arrow_schema::{DataType, TimeUnit};
 use context::ArrowToPgAttributeContext;
 use pgrx::{
-    datum::{Date, Timestamp, TimestampWithTimeZone},
+    datum::{Date, Interval, Timestamp, TimestampWithTimeZone},
     pg_sys::{Datum, Oid, CHAROID, TEXTOID, TIMEOID, UUIDOID},
     prelude::PgHeapTuple,
     AllocatedByRust, AnyNumeric, IntoDatum, Uuid,
@@ -40,6 +41,7 @@ pub(crate) mod geometry;
 pub(crate) mod int2;
 pub(crate) mod int4;
 pub(crate) mod int8;
+pub(crate) mod interval;
 pub(crate) mod map;
 pub(crate) mod numeric;
 pub(crate) mod oid;
@@ -77,6 +79,90 @@ macro_rules! to_pg_datum {
     }};
 }
 
+// the duration arrays differ only in the unit their count is in, so the unit picks the array
+// the values are read from
+fn to_pg_duration_datum(
+    unit: TimeUnit,
+    primitive_array: ArrayData,
+    attribute_context: &ArrowToPgAttributeContext,
+) -> Option<Datum> {
+    match unit {
+        TimeUnit::Second => {
+            to_pg_datum!(
+                DurationSecondArray,
+                Interval,
+                primitive_array,
+                attribute_context
+            )
+        }
+        TimeUnit::Millisecond => {
+            to_pg_datum!(
+                DurationMillisecondArray,
+                Interval,
+                primitive_array,
+                attribute_context
+            )
+        }
+        TimeUnit::Microsecond => {
+            to_pg_datum!(
+                DurationMicrosecondArray,
+                Interval,
+                primitive_array,
+                attribute_context
+            )
+        }
+        TimeUnit::Nanosecond => {
+            to_pg_datum!(
+                DurationNanosecondArray,
+                Interval,
+                primitive_array,
+                attribute_context
+            )
+        }
+    }
+}
+
+fn to_pg_duration_list_datum(
+    unit: TimeUnit,
+    list_array: ArrayData,
+    element_context: &ArrowToPgAttributeContext,
+) -> Option<Datum> {
+    match unit {
+        TimeUnit::Second => {
+            to_pg_datum!(
+                DurationSecondArray,
+                Vec<Option<Interval>>,
+                list_array,
+                element_context
+            )
+        }
+        TimeUnit::Millisecond => {
+            to_pg_datum!(
+                DurationMillisecondArray,
+                Vec<Option<Interval>>,
+                list_array,
+                element_context
+            )
+        }
+        TimeUnit::Microsecond => {
+            to_pg_datum!(
+                DurationMicrosecondArray,
+                Vec<Option<Interval>>,
+                list_array,
+                element_context
+            )
+        }
+        TimeUnit::Nanosecond => {
+            to_pg_datum!(
+                DurationNanosecondArray,
+                Vec<Option<Interval>>,
+                list_array,
+                element_context
+            )
+        }
+    }
+}
+
 fn to_pg_nonarray_datum(
     primitive_array: ArrayData,
     attribute_context: &ArrowToPgAttributeContext,
@@ -112,6 +198,8 @@ fn to_pg_nonarray_datum(
         DataType::Boolean => {
             to_pg_datum!(BooleanArray, bool, primitive_array, attribute_context)
         }
+        // a time span that another writer put in the file, which pg_parquet writes as text
+        DataType::Duration(unit) => to_pg_duration_datum(*unit, primitive_array, attribute_context),
         DataType::Utf8 => {
             if attribute_context.typoid() == CHAROID {
                 to_pg_datum!(StringArray, i8, primitive_array, attribute_context)
@@ -244,6 +332,7 @@ fn to_pg_array_datum(
         DataType::UInt32 => {
             to_pg_datum!(UInt32Array, Vec<Option<Oid>>, list_array, element_context)
         }
+        DataType::Duration(unit) => to_pg_duration_list_datum(*unit, list_array, element_context),
         #[cfg(not(pre_pg19))]
         DataType::UInt64 => {
             to_pg_datum!(

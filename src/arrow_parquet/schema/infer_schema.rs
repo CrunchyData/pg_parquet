@@ -10,7 +10,7 @@ use pgrx::{
         AcceptInvalidationMessages, AsPgCStr, ColumnDef, CommandCounterIncrement,
         CurrentExtensionObject as pg_current_extension_object, GetDatabaseEncoding,
         GetDatabaseEncodingName, InvalidOid, MaxHeapAttributeNumber, Oid, INT4OID, INT8OID,
-        NUMERICOID, UUIDOID,
+        INTERVALOID, NUMERICOID, UUIDOID,
     },
     spi::{quote_identifier, quote_literal, quote_qualified_identifier},
     PgList, PgSqlErrorCode, Spi,
@@ -314,6 +314,10 @@ fn get_or_create_pg_type_from_arrow_type(field: &FieldRef, field_path: &str) -> 
         // a 16 byte fixed binary is loaded into a uuid column even when the file does not
         // carry the arrow.uuid extension name. Any other width falls back to "bytea"
         DataType::FixedSizeBinary(16) => (UUIDOID, -1),
+        // a duration is a count of one unit of time, which is the time span an interval holds.
+        // The cast check stands it in for the bigint it physically is, so the type is named
+        // here rather than taken from there.
+        DataType::Duration(_) => (INTERVALOID, -1),
         _ => {
             let (typoid, typmod) = pg_type_for_arrow_primitive_field(field);
 
