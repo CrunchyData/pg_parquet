@@ -1773,6 +1773,39 @@ mod tests {
         Spi::run(&copy_from).unwrap();
     }
 
+    // the constraint of a domain over an array is on the array itself, and it is checked the
+    // same way, so a list that does not satisfy it is refused
+    #[pg_test]
+    #[should_panic(expected = "value for domain longarr violates check constraint")]
+    fn test_domain_over_array_check_constraint() {
+        Spi::run("CREATE DOMAIN longarr AS int[] CHECK (array_length(value, 1) > 1);").unwrap();
+        Spi::run("CREATE TABLE domain_table (la longarr);").unwrap();
+
+        let copy_to = format!("COPY (SELECT array[9] AS la) TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+    }
+
+    // a domain can also sit inside a composite type, where the struct the column is read as
+    // carries it, and its constraint is checked there too
+    #[pg_test]
+    #[should_panic(expected = "value for domain posint violates check constraint")]
+    fn test_domain_inside_composite_check_constraint() {
+        Spi::run("CREATE DOMAIN posint AS int CHECK (value > 0);").unwrap();
+        Spi::run("CREATE TYPE holder AS (p posint, t text);").unwrap();
+        Spi::run("CREATE TYPE plain_holder AS (p int, t text);").unwrap();
+        Spi::run("CREATE TABLE domain_table (h holder);").unwrap();
+
+        let copy_to =
+            format!("COPY (SELECT row(-1, 'x')::plain_holder AS h) TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+    }
+
     // a domain over an array is written as that list, so a column of one can read a file that
     // any other writer produced, which the text of the whole array could not
     #[pg_test]
