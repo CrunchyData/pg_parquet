@@ -349,6 +349,11 @@ pub(crate) fn copy_stmt_is_std_inout(p_stmt: &PgBox<PlannedStmt>) -> bool {
     copy_stmt.filename.is_null() && !copy_stmt.is_program
 }
 
+// whether the copy names a file size, which is what makes its destination a folder
+pub(crate) fn copy_to_stmt_file_size_bytes_is_set(p_stmt: &PgBox<PlannedStmt>) -> bool {
+    !copy_stmt_get_option(p_stmt, "file_size_bytes").is_null()
+}
+
 pub(crate) fn copy_to_stmt_file_size_bytes(p_stmt: &PgBox<PlannedStmt>) -> i64 {
     let file_size_bytes_option = copy_stmt_get_option(p_stmt, "file_size_bytes");
 
