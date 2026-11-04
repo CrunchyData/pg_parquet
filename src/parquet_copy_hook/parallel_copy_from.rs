@@ -814,8 +814,8 @@ fn parallel_copy_from_is_eligible(
 // Those constraints are evaluated by the leader too, but they are reached through the type
 // cache rather than through the relation, so a type that holds a domain is left to the single
 // process path whether that domain carries a volatile constraint or not. The domain can be the
-// type itself, or it can sit inside an array, a composite or a range, each of which reaches
-// the receive function of the type it holds, which is the domain's own.
+// type itself, or it can sit inside an array, a composite or a range, and the constraints of
+// any of those are checked when the row goes into the column.
 fn type_contains_domain(typoid: Oid) -> bool {
     let typtype = unsafe { pg_sys::get_typtype(typoid) };
 

@@ -16,7 +16,7 @@ use std::sync::Arc;
 use crate::{
     pgrx_utils::{
         array_element_typoid, collect_attributes_for, domain_array_base_elem_type, is_array_type,
-        is_composite_type, tuple_desc, AnyArrayDatum, CollectAttributesFor,
+        is_composite_type, resolve_domain_type, tuple_desc, AnyArrayDatum, CollectAttributesFor,
     },
     type_compat::{
         fallback_to_text::{reset_fallback_to_text_context, FallbackToText},

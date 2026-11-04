@@ -1714,6 +1714,129 @@ mod tests {
         assert!(stats_geospatial_is_null);
     }
 
+    // A domain is its base type plus constraints, so it is written as that base type rather
+    // than as the text of the value, which is what every other reader of the file expects.
+    #[pg_test]
+    fn test_domain_over_scalar() {
+        Spi::run("CREATE DOMAIN posint AS int CHECK (value > 0);").unwrap();
+        Spi::run("CREATE TABLE domain_table (p posint, pa posint[]);").unwrap();
+        Spi::run("INSERT INTO domain_table VALUES (5, array[1, 2]::posint[]);").unwrap();
+
+        let copy_to = format!("COPY domain_table TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        let type_name_of = |column: &str| {
+            Spi::get_one::<String>(&format!(
+                "SELECT type_name FROM parquet.schema('{LOCAL_TEST_FILE_PATH}')
+                 WHERE name = '{column}' LIMIT 1"
+            ))
+            .unwrap()
+        };
+        assert_eq!(type_name_of("p").as_deref(), Some("INT32"));
+        assert_eq!(type_name_of("element").as_deref(), Some("INT32"));
+
+        Spi::run("TRUNCATE domain_table;").unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+
+        let result =
+            Spi::get_one::<String>("SELECT p::text || ' ' || pa::text FROM domain_table;").unwrap();
+        assert_eq!(result.as_deref(), Some("5 {1,2}"));
+    }
+
+    // the constraint is checked when the row goes into the column, which is what keeps it
+    // enforced now that the value no longer goes through the input function of the domain
+    #[pg_test]
+    #[should_panic(expected = "value for domain posint violates check constraint")]
+    fn test_domain_over_scalar_check_constraint() {
+        Spi::run("CREATE DOMAIN posint AS int CHECK (value > 0);").unwrap();
+        Spi::run("CREATE TABLE domain_table (p posint);").unwrap();
+
+        let copy_to = format!("COPY (SELECT -1 AS p) TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "value for domain posint violates check constraint")]
+    fn test_domain_array_element_check_constraint() {
+        Spi::run("CREATE DOMAIN posint AS int CHECK (value > 0);").unwrap();
+        Spi::run("CREATE TABLE domain_table (pa posint[]);").unwrap();
+
+        let copy_to = format!("COPY (SELECT array[-1, 2] AS pa) TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+    }
+
+    // a domain over an array is written as that list, so a column of one can read a file that
+    // any other writer produced, which the text of the whole array could not
+    #[pg_test]
+    fn test_domain_over_array() {
+        Spi::run("CREATE DOMAIN intarr AS int[];").unwrap();
+        Spi::run("CREATE TABLE domain_table (ia intarr);").unwrap();
+        Spi::run("INSERT INTO domain_table VALUES ('{1,2}');").unwrap();
+
+        let copy_to = format!("COPY domain_table TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        let element_type = Spi::get_one::<String>(&format!(
+            "SELECT type_name FROM parquet.schema('{LOCAL_TEST_FILE_PATH}')
+             WHERE name = 'element' LIMIT 1"
+        ))
+        .unwrap();
+        assert_eq!(element_type.as_deref(), Some("INT32"));
+
+        Spi::run("TRUNCATE domain_table;").unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<String>("SELECT ia::text FROM domain_table;").unwrap();
+        assert_eq!(result.as_deref(), Some("{1,2}"));
+
+        // a list that another writer produced reads into the column as well
+        Spi::run("TRUNCATE domain_table;").unwrap();
+        let copy_to_list = format!("COPY (SELECT array[3, 4] AS ia) TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to_list).unwrap();
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<String>("SELECT ia::text FROM domain_table;").unwrap();
+        assert_eq!(result.as_deref(), Some("{3,4}"));
+    }
+
+    // A column of a domain has no type modifier of its own, the domain holds it, so the
+    // modifier has to be taken from the domain: a numeric(10,2) that was read as an unbounded
+    // numeric would be written as a far wider decimal than the column can hold.
+    #[pg_test]
+    fn test_domain_carries_its_type_modifier() {
+        Spi::run("CREATE DOMAIN price AS numeric(10,2);").unwrap();
+        Spi::run("CREATE TABLE domain_table (p price);").unwrap();
+        Spi::run("INSERT INTO domain_table VALUES (1.25);").unwrap();
+
+        let copy_to = format!("COPY domain_table TO '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_to).unwrap();
+
+        let precision_and_scale = Spi::get_one::<String>(&format!(
+            "SELECT precision || ',' || scale FROM parquet.schema('{LOCAL_TEST_FILE_PATH}')
+             WHERE name = 'p'"
+        ))
+        .unwrap();
+        assert_eq!(precision_and_scale.as_deref(), Some("10,2"));
+
+        Spi::run("TRUNCATE domain_table;").unwrap();
+
+        let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");
+        Spi::run(&copy_from).unwrap();
+
+        let result = Spi::get_one::<String>("SELECT p::text FROM domain_table;").unwrap();
+        assert_eq!(result.as_deref(), Some("1.25"));
+    }
+
     #[pg_test]
     fn test_domain_over_composite() {
         Spi::run("CREATE TYPE dc_base AS (a int, b text);").unwrap();
@@ -1727,17 +1850,19 @@ mod tests {
         let copy_to = format!("COPY domain_table TO '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to).unwrap();
 
-        // a domain over a composite type is a row type to PostgreSQL, but pg_parquet writes any
-        // domain as text
-        let logical_type_of = |column: &str| {
+        // a domain is written as the type it stands for, so a domain over a composite type is
+        // a struct of that composite's fields rather than the text of the whole value
+        let type_name_of = |column: &str| {
             Spi::get_one::<String>(&format!(
-                "SELECT logical_type FROM parquet.schema('{LOCAL_TEST_FILE_PATH}')
-                 WHERE name = '{column}'"
+                "SELECT type_name FROM parquet.schema('{LOCAL_TEST_FILE_PATH}')
+                 WHERE name = '{column}' LIMIT 1"
             ))
             .unwrap()
         };
-        assert_eq!(logical_type_of("dc").as_deref(), Some("STRING"));
-        assert_eq!(logical_type_of("element").as_deref(), Some("STRING"));
+        // a struct has no primitive type of its own, and its fields carry theirs
+        assert_eq!(type_name_of("dc"), None);
+        assert_eq!(type_name_of("a").as_deref(), Some("INT32"));
+        assert_eq!(type_name_of("b").as_deref(), Some("BYTE_ARRAY"));
 
         Spi::run("TRUNCATE domain_table;").unwrap();
 
@@ -1757,9 +1882,13 @@ mod tests {
         Spi::run("CREATE DOMAIN dcomp AS dc_base CHECK ((value).a > 0);").unwrap();
         Spi::run("CREATE TABLE domain_table (dc dcomp);").unwrap();
 
-        // the text goes into the column through the input function of the domain, which is what
-        // checks the constraint
-        let copy_to = format!("COPY (SELECT '(-1,x)' AS dc) TO '{LOCAL_TEST_FILE_PATH}';");
+        // the domain is written as its composite type now, so the file holds a struct, and the
+        // constraint is checked when the row goes into the column rather than by an input
+        // function
+        Spi::run("CREATE TABLE source_table (dc dc_base);").unwrap();
+        Spi::run("INSERT INTO source_table VALUES (row(-1, 'x')::dc_base);").unwrap();
+
+        let copy_to = format!("COPY source_table TO '{LOCAL_TEST_FILE_PATH}';");
         Spi::run(&copy_to).unwrap();
 
         let copy_from = format!("COPY domain_table FROM '{LOCAL_TEST_FILE_PATH}';");

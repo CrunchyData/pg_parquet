@@ -19,7 +19,7 @@ use crate::{
     arrow_parquet::match_by::{column_index_by_name, MatchBy},
     pgrx_utils::{
         array_element_typoid, collect_attributes_for, domain_array_base_elem_type,
-        is_generated_attribute, truncate_identifier_like_postgres, tuple_desc,
+        is_generated_attribute, resolve_domain_type, truncate_identifier_like_postgres, tuple_desc,
         CollectAttributesFor,
     },
     type_compat::pg_arrow_type_conversions::{
@@ -363,8 +363,9 @@ fn coercion_target(
         | (DataType::LargeList(from_field), DataType::List(to_field))
         | (DataType::ListView(from_field), DataType::List(to_field))
         | (DataType::LargeListView(from_field), DataType::List(to_field)) => {
-            let element_oid = array_element_typoid(to_typoid);
-            let element_typmod = to_typmod;
+            // the element can be a domain of its own, which is read as its base type too
+            let (element_oid, element_typmod) =
+                resolve_domain_type(array_element_typoid(to_typoid), to_typmod);
 
             let target_type =
                 coercion_target(from_field, to_field, element_oid, element_typmod, match_by)?;
