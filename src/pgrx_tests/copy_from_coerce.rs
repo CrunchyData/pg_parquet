@@ -2866,26 +2866,81 @@ mod tests {
         use arrow::array::ListArray;
         use arrow::buffer::OffsetBuffer;
 
-        let element = Field::new("element", DataType::Duration(TimeUnit::Second), true);
+        for (unit, values, expected) in [
+            (TimeUnit::Second, vec![60i64, 120], "{00:01:00,00:02:00}"),
+            (
+                TimeUnit::Millisecond,
+                vec![1_500, 2_500],
+                "{00:00:01.5,00:00:02.5}",
+            ),
+            (
+                TimeUnit::Microsecond,
+                vec![1, 2],
+                "{00:00:00.000001,00:00:00.000002}",
+            ),
+            // the microsecond is the finest a postgres interval keeps
+            (
+                TimeUnit::Nanosecond,
+                vec![1_500, 2_500],
+                "{00:00:00.000001,00:00:00.000002}",
+            ),
+        ] {
+            let element = Field::new("element", DataType::Duration(unit), true);
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "d",
+                DataType::List(Arc::new(element.clone())),
+                true,
+            )]));
+
+            let count = values.len() as i32;
+            let element_values: ArrayRef = match unit {
+                TimeUnit::Second => Arc::new(DurationSecondArray::from(values)),
+                TimeUnit::Millisecond => Arc::new(DurationMillisecondArray::from(values)),
+                TimeUnit::Microsecond => Arc::new(DurationMicrosecondArray::from(values)),
+                TimeUnit::Nanosecond => Arc::new(DurationNanosecondArray::from(values)),
+            };
+
+            let offsets = OffsetBuffer::new(vec![0, count].into());
+            let list = Arc::new(ListArray::new(
+                Arc::new(element),
+                offsets,
+                element_values,
+                None,
+            ));
+
+            let batch = RecordBatch::try_new(schema.clone(), vec![list]).unwrap();
+            write_record_batch_to_parquet(schema, batch);
+
+            Spi::run("DROP TABLE IF EXISTS test_table; CREATE TABLE test_table (d interval[])")
+                .unwrap();
+            let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+            Spi::run(&copy_from).unwrap();
+
+            let read_back = Spi::get_one::<String>("SELECT d::text FROM test_table").unwrap();
+            assert_eq!(read_back.as_deref(), Some(expected), "{unit:?}");
+        }
+
+        Spi::run("DROP TABLE test_table").unwrap();
+    }
+
+    // a duration whose count of seconds is more microseconds than an interval can hold is
+    // refused rather than wrapped around
+    #[pg_test]
+    #[should_panic(expected = "out of range for PostgreSQL \"interval\" type")]
+    fn test_read_duration_out_of_range() {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "d",
-            DataType::List(Arc::new(element.clone())),
+            DataType::Duration(TimeUnit::Second),
             true,
         )]));
 
-        let values = Arc::new(DurationSecondArray::from(vec![60i64, 120]));
-        let offsets = OffsetBuffer::new(vec![0, 2].into());
-        let list = Arc::new(ListArray::new(Arc::new(element), offsets, values, None));
-
-        let batch = RecordBatch::try_new(schema.clone(), vec![list]).unwrap();
+        let d = Arc::new(DurationSecondArray::from(vec![i64::MAX]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![d]).unwrap();
         write_record_batch_to_parquet(schema, batch);
 
-        Spi::run("CREATE TABLE test_table (d interval[])").unwrap();
+        Spi::run("CREATE TABLE test_table (d interval)").unwrap();
+
         let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
-
-        let read_back = Spi::get_one::<String>("SELECT d::text FROM test_table").unwrap();
-        assert_eq!(read_back.as_deref(), Some("{00:01:00,00:02:00}"));
-        Spi::run("DROP TABLE test_table").unwrap();
     }
 }
