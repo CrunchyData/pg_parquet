@@ -182,18 +182,6 @@ pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64, timezone: &str) -> Timest
         .unwrap_or_else(|_| error_out_of_range_temporal("timestamptz", i64_timestamptz))
 }
 
-pub(crate) fn time_to_i64(time: Time) -> i64 {
-    let time_as_bytes: Vec<u8> = unsafe {
-        direct_function_call(pg_sys::time_send, &[time.into_datum()])
-            .expect("cannot convert time to bytes")
-    };
-    i64::from_be_bytes(
-        time_as_bytes[0..8]
-            .try_into()
-            .unwrap_or_else(|e| panic!("{}", e)),
-    )
-}
-
 pub(crate) fn i64_to_time(i64_time: i64) -> Time {
     i64_time
         .try_into()

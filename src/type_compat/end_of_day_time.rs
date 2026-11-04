@@ -13,11 +13,9 @@ const MICROSECONDS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
 // FromDatum takes the microseconds modulo a day, and TimeWithTimeZone's conversion to the
 // microseconds at UTC goes through postgres's own timetz operators, which land on the start of
 // the day again. These two read the datum as postgres stores it instead, so a copy writes the
-// microseconds the row holds and reads back the value it wrote.
-//
-// A time array keeps the end of the day on its own, since pgrx unboxes an element of one
-// through Time's TryFrom, which takes a whole day. A timetz array does not, so both the scalar
-// and the array of timetz are read through EndOfDayTimeTz.
+// microseconds the row holds and reads back the value it wrote. Both directions of the copy
+// and both the scalar and the array of either type go through these, so there is one way the
+// microseconds of a time of day are carried.
 
 // EndOfDayTime is a time of day in microseconds, as the time datum holds it.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]

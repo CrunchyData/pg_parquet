@@ -2,7 +2,7 @@ use arrow::array::{ArrayRef, Decimal128Array};
 use context::PgToArrowAttributeContext;
 use pgrx::{
     check_for_interrupts,
-    datum::{Date, Time, Timestamp, TimestampWithTimeZone, UnboxDatum},
+    datum::{Date, Timestamp, TimestampWithTimeZone, UnboxDatum},
     heap_tuple::PgHeapTuple,
     pg_sys::{
         Datum, Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID,
@@ -310,7 +310,7 @@ fn to_arrow_list_array(
         }
         BOOLOID => to_arrow_list_array!(pgrx::Array<bool>, datums, element_context),
         DATEOID => to_arrow_list_array!(pgrx::Array<Date>, datums, element_context),
-        TIMEOID => to_arrow_list_array!(pgrx::Array<Time>, datums, element_context),
+        TIMEOID => to_arrow_list_array!(pgrx::Array<EndOfDayTime>, datums, element_context),
         TIMETZOID => {
             to_arrow_list_array!(pgrx::Array<EndOfDayTimeTz>, datums, element_context)
         }

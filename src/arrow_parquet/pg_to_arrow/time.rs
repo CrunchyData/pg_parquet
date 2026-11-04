@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, ListArray, Time64MicrosecondArray};
-use pgrx::datum::Time;
 
 use crate::{
     arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray},
-    type_compat::{end_of_day_time::EndOfDayTime, pg_arrow_type_conversions::time_to_i64},
+    type_compat::end_of_day_time::EndOfDayTime,
 };
 
 use super::PgToArrowAttributeContext;
@@ -23,7 +22,7 @@ impl PgTypeToArrowArray<EndOfDayTime> for Vec<Option<EndOfDayTime>> {
 }
 
 // Time[]
-impl PgTypeToArrowArray<Time> for Vec<Option<Vec<Option<Time>>>> {
+impl PgTypeToArrowArray<EndOfDayTime> for Vec<Option<Vec<Option<EndOfDayTime>>>> {
     fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
@@ -32,7 +31,7 @@ impl PgTypeToArrowArray<Time> for Vec<Option<Vec<Option<Time>>>> {
             .into_iter()
             .flatten()
             .flatten()
-            .map(|time| time.map(time_to_i64))
+            .map(|time| time.map(|time| time.0))
             .collect::<Vec<_>>();
 
         let time_array = Time64MicrosecondArray::from(pg_array);

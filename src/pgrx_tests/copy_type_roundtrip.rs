@@ -1,12 +1,16 @@
 #[pgrx::pg_schema]
 mod tests {
+    use std::sync::Arc;
     use std::vec;
+
+    use arrow::array::{RecordBatch, Time64MicrosecondArray};
+    use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
         extension_exists, extension_version, geospatial_crs_by_column,
-        timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult, TestTable,
-        LOCAL_TEST_FILE_PATH,
+        timetz_array_to_utc_time_array, timetz_to_utc_time, write_record_batch_to_parquet,
+        TestResult, TestTable, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::fallback_to_text::FallbackToText;
     use crate::type_compat::geometry::{Geography, Geometry};
@@ -878,6 +882,45 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(read_back, "22:00:00+00 {22:00:00+00,05:00:00+00}");
+    }
+
+    // writes a file holding a single time of day in microseconds, which COPY TO cannot write
+    // once the value is no time of day, so another writer stands in for it
+    fn write_microseconds_of_the_day_to_file(microseconds: i64) {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        )]));
+
+        let a = Arc::new(Time64MicrosecondArray::from(vec![microseconds]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![a]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+    }
+
+    // a day of microseconds is the end of the day, so the first value that is no time of day is
+    // the one after it
+    const MICROSECONDS_PAST_THE_DAY: i64 = 24 * 60 * 60 * 1_000_000 + 1;
+
+    #[pg_test]
+    #[should_panic(expected = "is out of range for PostgreSQL \"time\" type")]
+    fn test_time_past_the_end_of_the_day_in_file() {
+        write_microseconds_of_the_day_to_file(MICROSECONDS_PAST_THE_DAY);
+
+        Spi::run("CREATE TABLE test_result (a time)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "is out of range for PostgreSQL \"timetz\" type")]
+    fn test_timetz_past_the_end_of_the_day_in_file() {
+        write_microseconds_of_the_day_to_file(MICROSECONDS_PAST_THE_DAY);
+
+        Spi::run("CREATE TABLE test_result (a timetz)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
     }
 
     #[pg_test]
