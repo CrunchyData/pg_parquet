@@ -7,7 +7,7 @@ use arrow::array::{
 use arrow_schema::{DataType, TimeUnit};
 use context::ArrowToPgAttributeContext;
 use pgrx::{
-    datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
+    datum::{Date, Time, Timestamp, TimestampWithTimeZone},
     pg_sys::{Datum, Oid, CHAROID, TEXTOID, TIMEOID, UUIDOID},
     prelude::PgHeapTuple,
     AllocatedByRust, AnyNumeric, IntoDatum, Uuid,
@@ -19,6 +19,7 @@ use crate::{
         is_composite_type, tuple_desc, CollectAttributesFor,
     },
     type_compat::{
+        end_of_day_time::EndOfDayTimeTz,
         fallback_to_text::{reset_fallback_to_text_context, FallbackToText},
         geometry::{is_postgis_geography_type, is_postgis_geometry_type, Geography, Geometry},
         map::{is_map_type, reset_map_type_context, Map},
@@ -169,7 +170,7 @@ fn to_pg_nonarray_datum(
             } else {
                 to_pg_datum!(
                     Time64MicrosecondArray,
-                    TimeWithTimeZone,
+                    EndOfDayTimeTz,
                     primitive_array,
                     attribute_context
                 )
@@ -330,7 +331,7 @@ fn to_pg_array_datum(
             } else {
                 to_pg_datum!(
                     Time64MicrosecondArray,
-                    Vec<Option<TimeWithTimeZone>>,
+                    Vec<Option<EndOfDayTimeTz>>,
                     list_array,
                     element_context
                 )

@@ -1,21 +1,20 @@
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, ListArray, Time64MicrosecondArray};
-use pgrx::datum::TimeWithTimeZone;
 
 use crate::{
     arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray},
-    type_compat::pg_arrow_type_conversions::timetz_to_i64,
+    type_compat::end_of_day_time::EndOfDayTimeTz,
 };
 
 use super::PgToArrowAttributeContext;
 
 // TimeTz
-impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
+impl PgTypeToArrowArray<EndOfDayTimeTz> for Vec<Option<EndOfDayTimeTz>> {
     fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
         let timetzs = self
             .into_iter()
-            .map(|timetz| timetz.map(timetz_to_i64))
+            .map(|timetz| timetz.map(|timetz| timetz.0))
             .collect::<Vec<_>>();
         let timetz_array = Time64MicrosecondArray::from(timetzs);
         Arc::new(timetz_array)
@@ -23,7 +22,7 @@ impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<TimeWithTimeZone>> {
 }
 
 // TimeTz[]
-impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<Vec<Option<TimeWithTimeZone>>>> {
+impl PgTypeToArrowArray<EndOfDayTimeTz> for Vec<Option<Vec<Option<EndOfDayTimeTz>>>> {
     fn to_arrow_array(self, element_context: &PgToArrowAttributeContext) -> ArrayRef {
         let (offsets, nulls) = arrow_array_offsets(&self);
 
@@ -32,7 +31,7 @@ impl PgTypeToArrowArray<TimeWithTimeZone> for Vec<Option<Vec<Option<TimeWithTime
             .into_iter()
             .flatten()
             .flatten()
-            .map(|timetz| timetz.map(timetz_to_i64))
+            .map(|timetz| timetz.map(|timetz| timetz.0))
             .collect::<Vec<_>>();
 
         let timetz_array = Time64MicrosecondArray::from(pg_array);

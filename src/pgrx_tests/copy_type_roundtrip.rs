@@ -778,6 +778,108 @@ mod tests {
         normalized_test_result.assert();
     }
 
+    // postgres lets a time of day reach the end of the day, which it writes as "24:00:00". The
+    // rows are compared as text since pgrx's Time and TimeWithTimeZone take the microseconds
+    // modulo a day when they read a datum, which would turn the end of the day into the start
+    // of it in the test itself.
+    #[pg_test]
+    fn test_time_end_of_day() {
+        Spi::run(
+            "CREATE TABLE test_expected (a time, b time[]);
+             INSERT INTO test_expected VALUES
+                ('24:00:00', array['24:00:00','00:00:00',null]::time[]),
+                ('00:00:00', array['24:00:00']::time[]),
+                (null, null);",
+        )
+        .unwrap();
+
+        let copy_to = format!("COPY test_expected TO '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_to).unwrap();
+
+        Spi::run("CREATE TABLE test_result (LIKE test_expected)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let differing_rows = Spi::get_one::<i64>(
+            "SELECT count(*) FROM (
+                 SELECT a::text, b::text FROM test_expected
+                 EXCEPT ALL
+                 SELECT a::text, b::text FROM test_result
+             ) q",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(differing_rows, 0);
+
+        let end_of_day = Spi::get_one::<String>(
+            "SELECT a::text || ' ' || b::text FROM test_result WHERE a = '24:00:00'",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(end_of_day, "24:00:00 {24:00:00,00:00:00,NULL}");
+    }
+
+    #[pg_test]
+    fn test_timetz_end_of_day() {
+        Spi::run(
+            "CREATE TABLE test_expected (a timetz, b timetz[]);
+             INSERT INTO test_expected VALUES
+                ('24:00:00+00', array['24:00:00+00','00:00:00+00',null]::timetz[]),
+                ('00:00:00+00', array['24:00:00+00']::timetz[]),
+                (null, null);",
+        )
+        .unwrap();
+
+        let copy_to = format!("COPY test_expected TO '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_to).unwrap();
+
+        Spi::run("CREATE TABLE test_result (LIKE test_expected)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let differing_rows = Spi::get_one::<i64>(
+            "SELECT count(*) FROM (
+                 SELECT a::text, b::text FROM test_expected
+                 EXCEPT ALL
+                 SELECT a::text, b::text FROM test_result
+             ) q",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(differing_rows, 0);
+
+        let end_of_day = Spi::get_one::<String>(
+            "SELECT a::text || ' ' || b::text FROM test_result WHERE a = '24:00:00+00'",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(end_of_day, "24:00:00+00 {24:00:00+00,00:00:00+00,NULL}");
+    }
+
+    // a timetz west of UTC is the day before at UTC, and the day a time belongs to is no part of
+    // a time of day, so the end of the day in such a zone is the time it is of the same day.
+    #[pg_test]
+    fn test_timetz_end_of_day_in_another_zone() {
+        Spi::run(
+            "CREATE TABLE test_expected (a timetz, b timetz[]);
+             INSERT INTO test_expected VALUES
+                ('24:00:00+02', array['24:00:00+02','24:00:00-05']::timetz[]);",
+        )
+        .unwrap();
+
+        let copy_to = format!("COPY test_expected TO '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_to).unwrap();
+
+        Spi::run("CREATE TABLE test_result (LIKE test_expected)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let read_back = Spi::get_one::<String>("SELECT a::text || ' ' || b::text FROM test_result")
+            .unwrap()
+            .unwrap();
+        assert_eq!(read_back, "22:00:00+00 {22:00:00+00,05:00:00+00}");
+    }
+
     #[pg_test]
     fn test_timestamp() {
         let test_table = TestTable::<Timestamp>::new("timestamp".into());

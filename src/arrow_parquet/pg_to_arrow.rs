@@ -2,7 +2,7 @@ use arrow::array::{ArrayRef, Decimal128Array};
 use context::PgToArrowAttributeContext;
 use pgrx::{
     check_for_interrupts,
-    datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone, UnboxDatum},
+    datum::{Date, Time, Timestamp, TimestampWithTimeZone, UnboxDatum},
     heap_tuple::PgHeapTuple,
     pg_sys::{
         Datum, Oid, BOOLOID, BYTEAOID, CHAROID, DATEOID, FLOAT4OID, FLOAT8OID, INT2OID, INT4OID,
@@ -29,6 +29,7 @@ use crate::{
     },
 };
 
+use crate::type_compat::end_of_day_time::{EndOfDayTime, EndOfDayTimeTz};
 #[cfg(not(pre_pg19))]
 use crate::type_compat::oid8::Oid8;
 
@@ -173,8 +174,8 @@ fn to_arrow_primitive_array(
         }
         BOOLOID => to_arrow_primitive_array!(bool, datums, attribute_context),
         DATEOID => to_arrow_primitive_array!(Date, datums, attribute_context),
-        TIMEOID => to_arrow_primitive_array!(Time, datums, attribute_context),
-        TIMETZOID => to_arrow_primitive_array!(TimeWithTimeZone, datums, attribute_context),
+        TIMEOID => to_arrow_primitive_array!(EndOfDayTime, datums, attribute_context),
+        TIMETZOID => to_arrow_primitive_array!(EndOfDayTimeTz, datums, attribute_context),
         TIMESTAMPOID => to_arrow_primitive_array!(Timestamp, datums, attribute_context),
         TIMESTAMPTZOID => {
             to_arrow_primitive_array!(TimestampWithTimeZone, datums, attribute_context)
@@ -311,7 +312,7 @@ fn to_arrow_list_array(
         DATEOID => to_arrow_list_array!(pgrx::Array<Date>, datums, element_context),
         TIMEOID => to_arrow_list_array!(pgrx::Array<Time>, datums, element_context),
         TIMETZOID => {
-            to_arrow_list_array!(pgrx::Array<TimeWithTimeZone>, datums, element_context)
+            to_arrow_list_array!(pgrx::Array<EndOfDayTimeTz>, datums, element_context)
         }
         TIMESTAMPOID => {
             to_arrow_list_array!(pgrx::Array<Timestamp>, datums, element_context)

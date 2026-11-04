@@ -5,17 +5,17 @@ use pgrx::datum::Time;
 
 use crate::{
     arrow_parquet::{arrow_utils::arrow_array_offsets, pg_to_arrow::PgTypeToArrowArray},
-    type_compat::pg_arrow_type_conversions::time_to_i64,
+    type_compat::{end_of_day_time::EndOfDayTime, pg_arrow_type_conversions::time_to_i64},
 };
 
 use super::PgToArrowAttributeContext;
 
 // Time
-impl PgTypeToArrowArray<Time> for Vec<Option<Time>> {
+impl PgTypeToArrowArray<EndOfDayTime> for Vec<Option<EndOfDayTime>> {
     fn to_arrow_array(self, _context: &PgToArrowAttributeContext) -> ArrayRef {
         let times = self
             .into_iter()
-            .map(|time| time.map(time_to_i64))
+            .map(|time| time.map(|time| time.0))
             .collect::<Vec<_>>();
         let time_array = Time64MicrosecondArray::from(times);
         Arc::new(time_array)

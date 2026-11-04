@@ -9,7 +9,7 @@ mod tests {
         write_record_batch_to_parquet, write_record_batch_to_parquet_file, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::pg_arrow_type_conversions::{
-        date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
+        date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64,
     };
     use arrow::array::{
         ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -258,7 +258,9 @@ mod tests {
 
         let timetz = TimeWithTimeZone::with_timezone(13, 0, 0.0, "UTC").unwrap();
 
-        let x = Arc::new(Time64MicrosecondArray::from(vec![timetz_to_i64(timetz)]));
+        let x = Arc::new(Time64MicrosecondArray::from(vec![time_to_i64(
+            timetz.to_utc(),
+        )]));
 
         let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
         write_record_batch_to_parquet(schema, batch);
