@@ -14,6 +14,8 @@ use pgrx::{
     FromDatum, IntoDatum, PgList, PgTupleDesc,
 };
 
+use crate::type_compat::map::is_map_type;
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CollectAttributesFor {
     CopyFrom,
@@ -52,7 +54,17 @@ pub(crate) fn collect_attributes_for(
         }
         attributes_set.insert(name);
 
-        attributes.push(attribute.to_owned());
+        // a domain attribute is collected as its base type, so that every conversion below
+        // dispatches on the type the value is written and read as rather than ending in the
+        // text fallback. The attribute is a copy, and a domain has the layout of its base
+        // type, so rewriting the type it reports is all there is to it.
+        let mut attribute = attribute.to_owned();
+        let (resolved_typoid, resolved_typmod) =
+            resolve_domain_type(attribute.type_oid().value(), attribute.type_mod());
+        attribute.atttypid = resolved_typoid;
+        attribute.atttypmod = resolved_typmod;
+
+        attributes.push(attribute);
     }
 
     attributes
@@ -114,6 +126,27 @@ pub(crate) fn is_domain_of_array_type(typoid: Oid) -> bool {
 pub(crate) fn array_element_typoid(array_typoid: Oid) -> Oid {
     debug_assert!(is_array_type(array_typoid));
     unsafe { get_element_type(array_typoid) }
+}
+
+// resolve_domain_type gives the type a domain stands for, which is the type a value of it is
+// written and read as. A domain is its base type plus constraints and its datum is the base
+// type's datum, so only the type the conversion dispatches on changes. The type modifier comes
+// from the domain rather than from the column, since a column of a domain has none of its own:
+// a domain over numeric(10,2) is written as that decimal and not as an unbounded numeric.
+//
+// A crunchy_map is a domain over an array as well, and it is written as a map rather than as
+// that array, so it is left as it is.
+pub(crate) fn resolve_domain_type(typoid: Oid, typmod: i32) -> (Oid, i32) {
+    if is_map_type(typoid) {
+        return (typoid, typmod);
+    }
+
+    // getBaseTypeAndTypmod returns the type it was given, and leaves the type modifier alone,
+    // for anything that is not a domain
+    let mut resolved_typmod = typmod;
+    let resolved_typoid = unsafe { getBaseTypeAndTypmod(typoid, &mut resolved_typmod) };
+
+    (resolved_typoid, resolved_typmod)
 }
 
 pub(crate) fn array_typoid(element_typoid: Oid) -> Oid {

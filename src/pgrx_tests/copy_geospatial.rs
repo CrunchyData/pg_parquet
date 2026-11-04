@@ -1312,10 +1312,25 @@ mod tests {
         );
         Spi::run(&copy_to_query).unwrap();
 
-        // a domain over geometry is not the geometry type itself, so it falls back to text
-        // instead of being written as a geospatial column
-        assert_eq!(logical_type_of("a"), Some("STRING".to_string()));
-        assert_eq!(stats_geospatial_text("a"), None);
+        // a domain is written as the type it stands for, so a domain over geometry is a
+        // geospatial column, with the crs of the type modifier the domain carries
+        assert_eq!(logical_type_of("a"), Some("GEOMETRY".to_string()));
+        assert!(stats_geospatial_text("a").is_some());
+        // 4326 is the lon/lat crs the parquet geospatial types already mean, so it is the one
+        // crs that is not written out
+        assert_eq!(geospatial_crs_by_column().get("a"), Some(&None));
+
+        // and it reads back as the geometry it was, with its srid
+        Spi::run("DROP TABLE IF EXISTS geom_domain_table; CREATE TABLE geom_domain_table (a geom_domain);").unwrap();
+        let copy_from_query =
+            format!("COPY geom_domain_table FROM '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);");
+        Spi::run(&copy_from_query).unwrap();
+
+        let read_back = Spi::get_one::<String>(
+            "SELECT ST_AsText(a) || ' srid=' || ST_SRID(a) FROM geom_domain_table",
+        )
+        .unwrap();
+        assert_eq!(read_back.as_deref(), Some("POINT(1 2) srid=4326"));
     }
 
     #[pg_test]

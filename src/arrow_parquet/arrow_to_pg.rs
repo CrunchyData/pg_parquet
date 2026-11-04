@@ -16,7 +16,7 @@ use pgrx::{
 use crate::{
     pgrx_utils::{
         array_element_typoid, collect_attributes_for, domain_array_base_elem_type, is_array_type,
-        is_composite_type, tuple_desc, CollectAttributesFor,
+        is_composite_type, resolve_domain_type, tuple_desc, CollectAttributesFor,
     },
     type_compat::{
         end_of_day_time::{EndOfDayTime, EndOfDayTimeTz},

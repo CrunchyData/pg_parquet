@@ -23,7 +23,7 @@ use crate::{
     arrow_parquet::field_ids::{FieldIds, ROOT_FIELD_ID_KEY},
     pgrx_utils::{
         array_element_typoid, collect_attributes_for, domain_array_base_elem_type, is_array_type,
-        is_composite_type, tuple_desc, CollectAttributesFor,
+        is_composite_type, resolve_domain_type, tuple_desc, CollectAttributesFor,
     },
     type_compat::{
         geometry::{
@@ -197,10 +197,12 @@ pub(crate) fn parse_arrow_schema_from_attributes(
                 &mut field_id_mapping_context,
             )
         } else if is_array_type(attribute_typoid) {
-            let attribute_element_typoid = array_element_typoid(attribute_typoid);
+            // the element can be a domain of its own, which is written as its base type too
+            let (attribute_element_typoid, attribute_element_typmod) =
+                resolve_domain_type(array_element_typoid(attribute_typoid), attribute_typmod);
             parse_list_schema(
                 attribute_element_typoid,
-                attribute_typmod,
+                attribute_element_typmod,
                 attribute_name,
                 &mut field_id_mapping_context,
             )
@@ -261,10 +263,11 @@ fn parse_struct_schema(
                 field_id_mapping_context,
             )
         } else if is_array_type(attribute_oid) {
-            let attribute_element_typoid = array_element_typoid(attribute_oid);
+            let (attribute_element_typoid, attribute_element_typmod) =
+                resolve_domain_type(array_element_typoid(attribute_oid), attribute_typmod);
             parse_list_schema(
                 attribute_element_typoid,
-                attribute_typmod,
+                attribute_element_typmod,
                 attribute_name,
                 field_id_mapping_context,
             )

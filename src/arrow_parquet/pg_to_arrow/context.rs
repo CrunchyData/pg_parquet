@@ -9,7 +9,8 @@ use pgrx::{
 use super::{
     array_element_typoid, collect_attributes_for, domain_array_base_elem_type,
     extract_precision_and_scale_from_numeric_typmod, is_array_type, is_composite_type, is_map_type,
-    is_postgis_geography_type, is_postgis_geometry_type, tuple_desc, CollectAttributesFor,
+    is_postgis_geography_type, is_postgis_geometry_type, resolve_domain_type, tuple_desc,
+    CollectAttributesFor,
 };
 
 // PgToArrowAttributeContext contains the information needed to convert a PostgreSQL attribute
@@ -128,8 +129,9 @@ impl PgToArrowAttributeTypeContext {
     }
 
     fn new_array(attnum: i16, typoid: Oid, typmod: i32, field: FieldRef) -> Self {
-        let element_typoid = array_element_typoid(typoid);
-        let element_typmod = typmod;
+        // the element can be a domain of its own, which is written as its base type too
+        let (element_typoid, element_typmod) =
+            resolve_domain_type(array_element_typoid(typoid), typmod);
 
         let element_field = match field.data_type() {
             arrow::datatypes::DataType::List(field) => field.clone(),

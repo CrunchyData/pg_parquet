@@ -14,7 +14,7 @@ use crate::type_compat::{
 use super::{
     array_element_typoid, collect_attributes_for, domain_array_base_elem_type, is_array_type,
     is_composite_type, is_map_type, is_postgis_geography_type, is_postgis_geometry_type,
-    tuple_desc, CollectAttributesFor,
+    resolve_domain_type, tuple_desc, CollectAttributesFor,
 };
 
 // ArrowToPgAttributeContext contains the information needed to convert an Arrow array
@@ -181,8 +181,9 @@ impl ArrowToPgAttributeTypeContext {
     }
 
     fn new_array(typoid: Oid, typmod: i32, data_type: &DataType) -> Self {
-        let element_typoid = array_element_typoid(typoid);
-        let element_typmod = typmod;
+        // the element can be a domain of its own, which is read as its base type too
+        let (element_typoid, element_typmod) =
+            resolve_domain_type(array_element_typoid(typoid), typmod);
 
         let element_field = match data_type {
             DataType::List(field) => field.clone(),
