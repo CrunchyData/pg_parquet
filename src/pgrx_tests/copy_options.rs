@@ -720,6 +720,40 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic(expected = "negative field id -5 in \"field_ids\"")]
+    fn test_negative_id_in_field_ids() {
+        let setup_commands = "create table test_table(a int, b text);";
+        Spi::run(setup_commands).unwrap();
+
+        let explicit_field_ids = "{\"a\": -5}";
+
+        let copy_to_parquet = format!(
+            "copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids '{explicit_field_ids}');"
+        );
+        Spi::run(&copy_to_parquet).unwrap();
+    }
+
+    // the ids "auto" gives out start at zero, so the refusal above is of a negative id and not
+    // of a falsy one
+    #[pg_test]
+    fn test_auto_field_ids_start_at_zero() {
+        let setup_commands = "create table test_table(a int, b text);";
+        Spi::run(setup_commands).unwrap();
+
+        let copy_to_parquet =
+            format!("copy test_table to '{LOCAL_TEST_FILE_PATH}' with (field_ids 'auto');");
+        Spi::run(&copy_to_parquet).unwrap();
+
+        let first_field_id = Spi::get_one::<i32>(&format!(
+            "SELECT min(field_id) FROM parquet.schema('{LOCAL_TEST_FILE_PATH}')
+             WHERE field_id IS NOT NULL"
+        ))
+        .unwrap();
+
+        assert_eq!(first_field_id, Some(0));
+    }
+
+    #[pg_test]
     #[should_panic(expected = "duplicate field id 14 in \"field_ids\"")]
     fn test_duplicate_id_in_field_ids() {
         let setup_commands = "create table test_table(a int, b text);";
