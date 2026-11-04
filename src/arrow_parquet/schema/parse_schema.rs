@@ -119,6 +119,12 @@ impl FieldIdMappingContext {
         };
 
         if let Some(field_id) = field_id {
+            // the ids of a schema are counted up from zero, which is what a reader matching a
+            // column by its id looks for, so a negative one is an id nothing is written under
+            if field_id < 0 {
+                panic!("negative field id {field_id} in \"field_ids\"");
+            }
+
             // check for duplicate field id
             if self.assigned_field_ids.contains(&field_id) {
                 panic!("duplicate field id {field_id} in \"field_ids\"");
