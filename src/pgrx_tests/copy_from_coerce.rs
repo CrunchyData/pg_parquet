@@ -2859,4 +2859,33 @@ mod tests {
         let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
         Spi::run(&copy_from).unwrap();
     }
+    // a list of durations is read into an interval array the same way, which is the element of
+    // the list going through the conversion of its own
+    #[pg_test]
+    fn test_read_duration_list_into_interval_array() {
+        use arrow::array::ListArray;
+        use arrow::buffer::OffsetBuffer;
+
+        let element = Field::new("element", DataType::Duration(TimeUnit::Second), true);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::List(Arc::new(element.clone())),
+            true,
+        )]));
+
+        let values = Arc::new(DurationSecondArray::from(vec![60i64, 120]));
+        let offsets = OffsetBuffer::new(vec![0, 2].into());
+        let list = Arc::new(ListArray::new(Arc::new(element), offsets, values, None));
+
+        let batch = RecordBatch::try_new(schema.clone(), vec![list]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        Spi::run("CREATE TABLE test_table (d interval[])").unwrap();
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let read_back = Spi::get_one::<String>("SELECT d::text FROM test_table").unwrap();
+        assert_eq!(read_back.as_deref(), Some("{00:01:00,00:02:00}"));
+        Spi::run("DROP TABLE test_table").unwrap();
+    }
 }
