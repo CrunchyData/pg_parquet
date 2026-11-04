@@ -9,8 +9,8 @@ use pgrx::{
         can_coerce_type,
         CoercionContext::{self, COERCION_EXPLICIT},
         FormData_pg_attribute, InvalidOid, Oid, BOOLOID, BYTEAOID, DATEOID, FLOAT4OID, FLOAT8OID,
-        INT2OID, INT4OID, INT8OID, JSONOID, NUMERICOID, TEXTOID, TIMEOID, TIMESTAMPOID,
-        TIMESTAMPTZOID, UUIDOID,
+        INT2OID, INT4OID, INT8OID, INTERVALOID, JSONOID, NUMERICOID, TEXTOID, TIMEOID,
+        TIMESTAMPOID, TIMESTAMPTZOID, UUIDOID,
     },
     PgLogLevel, PgSqlErrorCode, PgTupleDesc,
 };
@@ -121,6 +121,8 @@ pub(crate) fn ensure_file_schema_match_tupledesc_schema(
             match_by,
         )
         .unwrap_or_else(|| {
+            error_if_parquet_interval(from_type, field_name, file_uri);
+
             panic!(
                 "type mismatch for column \"{field_name}\" between table and parquet file.\n\n\
                  table has \"{to_type}\"\n\nparquet file has \"{from_type}\"\n\n\
@@ -401,6 +403,13 @@ fn coercion_target(
                 *sorted,
             ))
         }
+        // A time span that another writer put in the file is read into an interval column by
+        // pg_parquet itself. arrow-cast has no cast from either of its forms to the text an
+        // interval column is written as, so the file's own type is the target and the value is
+        // converted where it is built.
+        (DataType::Duration(_), _) if to_typoid == INTERVALOID => {
+            Some(from_field.data_type().clone())
+        }
         _ => {
             // check if arrow-cast can cast the types
             if !can_cast_types(from_field.data_type(), to_type) {
@@ -425,6 +434,30 @@ fn coercion_target(
             )
         }
     }
+}
+
+// error_if_parquet_interval reports a parquet INTERVAL column as the unsupported type it is
+// rather than as a type mismatch. Such a column is 12 bytes holding the months, the days and
+// the milliseconds of a time span, which is postgres's own interval, but those bytes cannot be
+// reached: parquet-rs hands the column over as an arrow interval, the only one it can read
+// keeps the days and the milliseconds alone, and a schema hint asking for the bytes is ignored.
+// Reading the column would silently drop the months, so it is refused instead.
+fn error_if_parquet_interval(from_type: &DataType, field_name: &str, file_uri: &str) {
+    if !matches!(from_type, DataType::Interval(_)) {
+        return;
+    }
+
+    ereport!(
+        PgLogLevel::ERROR,
+        PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+        format!("column \"{field_name}\" of the parquet file is an INTERVAL, which pg_parquet cannot read"),
+        format!(
+            "An INTERVAL column holds the months, the days and the milliseconds of a time span, \
+             and the months of it cannot be read back through Arrow. Ask the writer of the file \
+             for the column as a BIGINT of one unit of time, which is read into an interval, or \
+             as a string. The file is \"{file_uri}\"."
+        )
+    );
 }
 
 // unbounded_numeric_target returns the type to read into an unbounded "numeric" column when the
@@ -545,6 +578,9 @@ pub(crate) fn pg_type_for_arrow_primitive_field(field: &FieldRef) -> (Oid, i32) 
             }
         }
         DataType::Binary | DataType::LargeBinary | DataType::BinaryView => (BYTEAOID, -1),
+        // a duration is physically the bigint of its count, which is what it stands in for
+        // during the cast check, and what makes it readable as a bigint
+        DataType::Duration(_) => (INT8OID, -1),
         DataType::FixedSizeBinary(16)
             if field
                 .try_extension_type::<arrow_schema::extension::Uuid>()

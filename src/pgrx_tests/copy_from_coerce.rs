@@ -6,7 +6,8 @@ mod tests {
 
     use crate::pgrx_tests::common::{
         extension_exists, int96_timestamp, write_int96_timestamps_to_parquet,
-        write_record_batch_to_parquet, write_record_batch_to_parquet_file, LOCAL_TEST_FILE_PATH,
+        write_parquet_intervals_to_parquet, write_record_batch_to_parquet,
+        write_record_batch_to_parquet_file, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::pg_arrow_type_conversions::{
         date_to_i32, timestamp_to_i64, timestamptz_to_i64,
@@ -14,8 +15,9 @@ mod tests {
     use arrow::array::{
         ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
         Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray,
-        FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array, Int16Array,
-        Int32Array, Int8Array, LargeBinaryArray, LargeListArray, LargeListViewArray,
+        DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+        DurationSecondArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
+        Int16Array, Int32Array, Int8Array, LargeBinaryArray, LargeListArray, LargeListViewArray,
         LargeStringArray, ListArray, ListViewArray, MapArray, NullArray, RecordBatch, StringArray,
         StringViewArray, StructArray, Time32MillisecondArray, Time64MicrosecondArray,
         TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array,
@@ -2770,5 +2772,91 @@ mod tests {
         assert_eq!(rounded("y").as_deref(), Some("10,-10,0,2,2,0"));
         assert_eq!(rounded("z[1]").as_deref(), Some("10,-10,0,2,2,0"));
         assert_eq!(rounded("w").as_deref(), Some("10,-10,0,2,2,0"));
+    }
+
+    // pandas and pyarrow write a time span as an arrow duration, which is a BIGINT of one unit
+    // of time with the arrow schema recorded beside it. A duration carries no months, so all of
+    // it converts into the microseconds of a postgres interval.
+    #[pg_test]
+    fn test_read_duration_into_interval() {
+        for (unit, value, expected) in [
+            (TimeUnit::Second, 90i64, "00:01:30"),
+            (TimeUnit::Millisecond, 1_500, "00:00:01.5"),
+            (TimeUnit::Microsecond, 1, "00:00:00.000001"),
+            // the microsecond is the finest a postgres interval keeps, so a nanosecond count
+            // is rounded to it
+            (TimeUnit::Nanosecond, 1_500, "00:00:00.000001"),
+            (TimeUnit::Second, -90, "-00:01:30"),
+        ] {
+            let schema = Arc::new(Schema::new(vec![Field::new(
+                "d",
+                DataType::Duration(unit),
+                true,
+            )]));
+
+            let d: ArrayRef = match unit {
+                TimeUnit::Second => Arc::new(DurationSecondArray::from(vec![value])),
+                TimeUnit::Millisecond => Arc::new(DurationMillisecondArray::from(vec![value])),
+                TimeUnit::Microsecond => Arc::new(DurationMicrosecondArray::from(vec![value])),
+                TimeUnit::Nanosecond => Arc::new(DurationNanosecondArray::from(vec![value])),
+            };
+
+            let batch = RecordBatch::try_new(schema.clone(), vec![d]).unwrap();
+            write_record_batch_to_parquet(schema, batch);
+
+            Spi::run("DROP TABLE IF EXISTS test_table; CREATE TABLE test_table (d interval)")
+                .unwrap();
+
+            let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+            Spi::run(&copy_from).unwrap();
+
+            let read_back = Spi::get_one::<String>("SELECT d::text FROM test_table").unwrap();
+            assert_eq!(read_back.as_deref(), Some(expected), "{unit:?} {value}");
+        }
+
+        Spi::run("DROP TABLE test_table").unwrap();
+    }
+
+    // a duration is physically a BIGINT, and it is still readable as one
+    #[pg_test]
+    fn test_read_duration_into_bigint() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Duration(TimeUnit::Microsecond),
+            true,
+        )]));
+
+        let d = Arc::new(DurationMicrosecondArray::from(vec![42i64]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![d]).unwrap();
+        write_record_batch_to_parquet(schema, batch);
+
+        Spi::run("CREATE TABLE test_table (d bigint)").unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let read_back = Spi::get_one::<i64>("SELECT d FROM test_table").unwrap();
+        assert_eq!(read_back, Some(42));
+
+        Spi::run("DROP TABLE test_table").unwrap();
+    }
+
+    // A parquet INTERVAL is 12 bytes holding the months, the days and the milliseconds of a
+    // time span, which is what DuckDB writes. The months of it cannot be read back through
+    // Arrow, so the column is refused as the type it is rather than read without its months.
+    #[pg_test]
+    #[should_panic(expected = "is an INTERVAL, which pg_parquet cannot read")]
+    fn test_read_parquet_interval_is_refused() {
+        let message_type = "message schema {
+            REQUIRED FIXED_LEN_BYTE_ARRAY (12) iv (INTERVAL);
+        }";
+
+        let one_year_in_months = 12;
+        write_parquet_intervals_to_parquet(message_type, &[(one_year_in_months, 3, 4_000)], &[1]);
+
+        Spi::run("CREATE TABLE test_table (iv interval)").unwrap();
+
+        let copy_from = format!("COPY test_table FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
     }
 }
