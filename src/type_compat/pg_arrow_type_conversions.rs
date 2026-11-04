@@ -3,7 +3,7 @@ use std::ffi::CStr;
 
 use arrow::datatypes::{Decimal128Type, DecimalType};
 use pgrx::{
-    datum::{Date, Interval, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
+    datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
     direct_function_call, ereport,
     pg_sys::{self, AsPgCStr},
     AnyNumeric, IntoDatum, Numeric,
@@ -182,55 +182,10 @@ pub(crate) fn i64_to_timestamptz(i64_timestamptz: i64, timezone: &str) -> Timest
         .unwrap_or_else(|_| error_out_of_range_temporal("timestamptz", i64_timestamptz))
 }
 
-pub(crate) fn time_to_i64(time: Time) -> i64 {
-    let time_as_bytes: Vec<u8> = unsafe {
-        direct_function_call(pg_sys::time_send, &[time.into_datum()])
-            .expect("cannot convert time to bytes")
-    };
-    i64::from_be_bytes(
-        time_as_bytes[0..8]
-            .try_into()
-            .unwrap_or_else(|e| panic!("{}", e)),
-    )
-}
-
 pub(crate) fn i64_to_time(i64_time: i64) -> Time {
     i64_time
         .try_into()
         .unwrap_or_else(|_| error_out_of_range_temporal("time", i64_time))
-}
-
-pub(crate) fn timetz_to_i64(timetz: TimeWithTimeZone) -> i64 {
-    let timezone_as_secs: AnyNumeric = unsafe {
-        direct_function_call(
-            pg_sys::extract_timetz,
-            &["timezone".into_datum(), timetz.into_datum()],
-        )
-    }
-    .expect("cannot extract timezone from timetz");
-
-    let timezone_as_secs: f64 = timezone_as_secs
-        .try_into()
-        .unwrap_or_else(|e| panic!("{}", e));
-
-    let timezone_as_interval = Interval::from_seconds(timezone_as_secs);
-    let adjusted_timetz: TimeWithTimeZone = unsafe {
-        direct_function_call(
-            pg_sys::timetz_mi_interval,
-            &[timetz.into_datum(), timezone_as_interval.into_datum()],
-        )
-        .expect("cannot adjust PG timetz to Unix timetz")
-    };
-
-    let adjusted_timetz_as_bytes: Vec<u8> = unsafe {
-        direct_function_call(pg_sys::timetz_send, &[adjusted_timetz.into_datum()])
-            .expect("cannot convert timetz to bytes")
-    };
-    i64::from_be_bytes(
-        adjusted_timetz_as_bytes[0..8]
-            .try_into()
-            .unwrap_or_else(|e| panic!("{}", e)),
-    )
 }
 
 pub(crate) fn i64_to_timetz(i64_timetz: i64) -> TimeWithTimeZone {

@@ -9,7 +9,7 @@ mod tests {
         write_record_batch_to_parquet, write_record_batch_to_parquet_file, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::pg_arrow_type_conversions::{
-        date_to_i32, time_to_i64, timestamp_to_i64, timestamptz_to_i64, timetz_to_i64,
+        date_to_i32, timestamp_to_i64, timestamptz_to_i64,
     };
     use arrow::array::{
         ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -29,6 +29,10 @@ mod tests {
         datum::{Date, Time, TimeWithTimeZone, Timestamp, TimestampWithTimeZone},
         Spi,
     };
+
+    // the microseconds of the day at 13:00:00, which is the time of day the coercions between
+    // time and timetz are written at
+    const MICROSECONDS_AT_13: i64 = 13 * 60 * 60 * 1_000_000;
 
     #[pg_test]
     fn test_coerce_primitive_types() {
@@ -226,7 +230,7 @@ mod tests {
 
         let time = Time::new(13, 0, 0.0).unwrap();
 
-        let x = Arc::new(Time64MicrosecondArray::from(vec![time_to_i64(time)]));
+        let x = Arc::new(Time64MicrosecondArray::from(vec![MICROSECONDS_AT_13]));
 
         let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
         write_record_batch_to_parquet(schema, batch);
@@ -258,7 +262,7 @@ mod tests {
 
         let timetz = TimeWithTimeZone::with_timezone(13, 0, 0.0, "UTC").unwrap();
 
-        let x = Arc::new(Time64MicrosecondArray::from(vec![timetz_to_i64(timetz)]));
+        let x = Arc::new(Time64MicrosecondArray::from(vec![MICROSECONDS_AT_13]));
 
         let batch = RecordBatch::try_new(schema.clone(), vec![x]).unwrap();
         write_record_batch_to_parquet(schema, batch);

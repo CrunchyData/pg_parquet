@@ -1,12 +1,16 @@
 #[pgrx::pg_schema]
 mod tests {
+    use std::sync::Arc;
     use std::vec;
+
+    use arrow::array::{RecordBatch, Time64MicrosecondArray};
+    use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
     use crate::pgrx_tests::common::{
         assert_double, assert_float, assert_int_text_map, assert_json, assert_jsonb,
         extension_exists, extension_version, geospatial_crs_by_column,
-        timetz_array_to_utc_time_array, timetz_to_utc_time, TestResult, TestTable,
-        LOCAL_TEST_FILE_PATH,
+        timetz_array_to_utc_time_array, timetz_to_utc_time, write_record_batch_to_parquet,
+        TestResult, TestTable, LOCAL_TEST_FILE_PATH,
     };
     use crate::type_compat::fallback_to_text::FallbackToText;
     use crate::type_compat::geometry::{Geography, Geometry};
@@ -776,6 +780,147 @@ mod tests {
         let normalized_test_result = TestResult { expected, result };
 
         normalized_test_result.assert();
+    }
+
+    // postgres lets a time of day reach the end of the day, which it writes as "24:00:00". The
+    // rows are compared as text since pgrx's Time and TimeWithTimeZone take the microseconds
+    // modulo a day when they read a datum, which would turn the end of the day into the start
+    // of it in the test itself.
+    #[pg_test]
+    fn test_time_end_of_day() {
+        Spi::run(
+            "CREATE TABLE test_expected (a time, b time[]);
+             INSERT INTO test_expected VALUES
+                ('24:00:00', array['24:00:00','00:00:00',null]::time[]),
+                ('00:00:00', array['24:00:00']::time[]),
+                (null, null);",
+        )
+        .unwrap();
+
+        let copy_to = format!("COPY test_expected TO '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_to).unwrap();
+
+        Spi::run("CREATE TABLE test_result (LIKE test_expected)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let differing_rows = Spi::get_one::<i64>(
+            "SELECT count(*) FROM (
+                 SELECT a::text, b::text FROM test_expected
+                 EXCEPT ALL
+                 SELECT a::text, b::text FROM test_result
+             ) q",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(differing_rows, 0);
+
+        let end_of_day = Spi::get_one::<String>(
+            "SELECT a::text || ' ' || b::text FROM test_result WHERE a = '24:00:00'",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(end_of_day, "24:00:00 {24:00:00,00:00:00,NULL}");
+    }
+
+    #[pg_test]
+    fn test_timetz_end_of_day() {
+        Spi::run(
+            "CREATE TABLE test_expected (a timetz, b timetz[]);
+             INSERT INTO test_expected VALUES
+                ('24:00:00+00', array['24:00:00+00','00:00:00+00',null]::timetz[]),
+                ('00:00:00+00', array['24:00:00+00']::timetz[]),
+                (null, null);",
+        )
+        .unwrap();
+
+        let copy_to = format!("COPY test_expected TO '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_to).unwrap();
+
+        Spi::run("CREATE TABLE test_result (LIKE test_expected)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let differing_rows = Spi::get_one::<i64>(
+            "SELECT count(*) FROM (
+                 SELECT a::text, b::text FROM test_expected
+                 EXCEPT ALL
+                 SELECT a::text, b::text FROM test_result
+             ) q",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(differing_rows, 0);
+
+        let end_of_day = Spi::get_one::<String>(
+            "SELECT a::text || ' ' || b::text FROM test_result WHERE a = '24:00:00+00'",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(end_of_day, "24:00:00+00 {24:00:00+00,00:00:00+00,NULL}");
+    }
+
+    // a timetz west of UTC is the day before at UTC, and the day a time belongs to is no part of
+    // a time of day, so the end of the day in such a zone is the time it is of the same day.
+    #[pg_test]
+    fn test_timetz_end_of_day_in_another_zone() {
+        Spi::run(
+            "CREATE TABLE test_expected (a timetz, b timetz[]);
+             INSERT INTO test_expected VALUES
+                ('24:00:00+02', array['24:00:00+02','24:00:00-05']::timetz[]);",
+        )
+        .unwrap();
+
+        let copy_to = format!("COPY test_expected TO '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_to).unwrap();
+
+        Spi::run("CREATE TABLE test_result (LIKE test_expected)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+
+        let read_back = Spi::get_one::<String>("SELECT a::text || ' ' || b::text FROM test_result")
+            .unwrap()
+            .unwrap();
+        assert_eq!(read_back, "22:00:00+00 {22:00:00+00,05:00:00+00}");
+    }
+
+    // writes a file holding a single time of day in microseconds, which COPY TO cannot write
+    // once the value is no time of day, so another writer stands in for it
+    fn write_microseconds_of_the_day_to_file(microseconds: i64) {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Time64(TimeUnit::Microsecond),
+            true,
+        )]));
+
+        let a = Arc::new(Time64MicrosecondArray::from(vec![microseconds]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![a]).unwrap();
+
+        write_record_batch_to_parquet(schema, batch);
+    }
+
+    // a day of microseconds is the end of the day, so the first value that is no time of day is
+    // the one after it
+    const MICROSECONDS_PAST_THE_DAY: i64 = 24 * 60 * 60 * 1_000_000 + 1;
+
+    #[pg_test]
+    #[should_panic(expected = "is out of range for PostgreSQL \"time\" type")]
+    fn test_time_past_the_end_of_the_day_in_file() {
+        write_microseconds_of_the_day_to_file(MICROSECONDS_PAST_THE_DAY);
+
+        Spi::run("CREATE TABLE test_result (a time)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
+    }
+
+    #[pg_test]
+    #[should_panic(expected = "is out of range for PostgreSQL \"timetz\" type")]
+    fn test_timetz_past_the_end_of_the_day_in_file() {
+        write_microseconds_of_the_day_to_file(MICROSECONDS_PAST_THE_DAY);
+
+        Spi::run("CREATE TABLE test_result (a timetz)").unwrap();
+        let copy_from = format!("COPY test_result FROM '{LOCAL_TEST_FILE_PATH}'");
+        Spi::run(&copy_from).unwrap();
     }
 
     #[pg_test]

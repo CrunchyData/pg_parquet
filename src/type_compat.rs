@@ -1,3 +1,4 @@
+pub(crate) mod end_of_day_time;
 pub(crate) mod fallback_to_text;
 pub(crate) mod geometry;
 pub(crate) mod map;
