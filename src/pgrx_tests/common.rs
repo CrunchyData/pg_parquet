@@ -65,8 +65,14 @@ pub(crate) fn test_pg_port() -> String {
 // psql runs the given commands in a session of its own and returns what they printed, for
 // the commands a test needs outside of its own transaction
 pub(crate) fn psql(port: &str, commands: &[&str]) -> String {
+    psql_in_database("pgrx_tests", port, commands)
+}
+
+// psql_in_database is psql against a database other than the one the tests run in, for a test
+// that needs a database of its own rather than the one every other test shares
+pub(crate) fn psql_in_database(database: &str, port: &str, commands: &[&str]) -> String {
     let mut psql = Command::new("psql");
-    psql.args(["-h", "localhost", "-p", port, "-d", "pgrx_tests", "-At"]);
+    psql.args(["-h", "localhost", "-p", port, "-d", database, "-At"]);
 
     for command in commands {
         psql.args(["-c", command]);

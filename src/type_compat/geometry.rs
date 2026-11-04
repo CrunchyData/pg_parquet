@@ -17,6 +17,16 @@ use pgrx::{
 };
 use serde_json::Value;
 
+// read_one runs one of the lookups below, every one of which only reads. pgrx's Spi::get_one
+// goes through the mutable path, which tells postgres the transaction is about to write by
+// asking it for a transaction id, and a parallel worker cannot be given one. These lookups are
+// made by the startup of every copy, so a parallel COPY TO cannot run without this: it fails
+// with "cannot assign transaction IDs during a parallel operation" unless the transaction
+// happens to have written something already and so to hold an id.
+fn read_one<T: FromDatum + IntoDatum>(query: &str) -> Result<Option<T>, pgrx::spi::SpiError> {
+    Spi::connect(|client| client.select(query, Some(1), &[])?.first().get_one::<T>())
+}
+
 // postgis uses 0 for the geometries whose coordinate reference system is not known
 const UNKNOWN_SRID: i32 = 0;
 
@@ -137,7 +147,7 @@ fn crs_for_srid(srid: i32) -> Option<String> {
                  and position(':' in auth_name) = 0 and lower(auth_name) <> 'srid')"
     );
 
-    let authority_crs = Spi::get_one::<String>(&query)
+    let authority_crs = read_one::<String>(&query)
         .unwrap_or_else(|e| panic!("failed to get the crs of srid {srid}: {e}"));
 
     Some(authority_crs.unwrap_or_else(|| format!("srid:{srid}")))
@@ -212,7 +222,7 @@ fn srid_for_authority(auth_name: &str, auth_srid: i32) -> Option<i32> {
                  limit 1)"
     );
 
-    Spi::get_one::<i32>(&query)
+    read_one::<i32>(&query)
         .unwrap_or_else(|e| panic!("failed to get the srid of crs {auth_name}:{auth_srid}: {e}"))
         .filter(|srid| *srid != UNKNOWN_SRID)
 }
@@ -317,7 +327,7 @@ impl PostgisContext {
     }
 
     fn extension_schema_oid() -> Oid {
-        Spi::get_one("SELECT extnamespace FROM pg_extension WHERE extname = 'postgis'")
+        read_one("SELECT extnamespace FROM pg_extension WHERE extname = 'postgis'")
             .expect("failed to get postgis extension schema")
             .expect("postgis extension schema not found")
     }
@@ -325,7 +335,7 @@ impl PostgisContext {
     fn schema_name(schema_oid: Oid) -> String {
         let query = format!("SELECT nspname::text FROM pg_namespace WHERE oid = {schema_oid}");
 
-        Spi::get_one::<String>(&query)
+        read_one::<String>(&query)
             .expect("failed to get the name of the postgis extension schema")
             .expect("postgis extension schema not found")
     }

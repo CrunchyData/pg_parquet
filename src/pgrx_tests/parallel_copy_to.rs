@@ -31,8 +31,9 @@ mod tests {
         parquet_copy_hook::copy_to_split_dest_receiver::FOLDER_DESTINATION_LOCK_NAMESPACE,
         pgrx_tests::common::{
             copy_session_output, create_interruptible_table, drop_interruptible_table,
-            extension_exists, extension_version, geospatial_crs_by_column_of, test_pg_port,
-            FileCleanup, COPY_START_TIMEOUT, INTERRUPTED_TABLE_ROWS, LOCAL_TEST_FILE_PATH,
+            extension_exists, extension_version, geospatial_crs_by_column_of, psql,
+            psql_in_database, test_pg_port, FileCleanup, COPY_START_TIMEOUT,
+            INTERRUPTED_TABLE_ROWS, LOCAL_TEST_FILE_PATH,
         },
         PG_BACKEND_TOKIO_RUNTIME,
     };
@@ -968,6 +969,83 @@ mod tests {
                 .unwrap(),
             1000
         );
+    }
+
+    // A copy looks the postgis extension up when it starts, and that lookup asked postgres for
+    // a transaction id, which a parallel worker cannot be given: a parallel COPY TO failed with
+    // "cannot assign transaction IDs during a parallel operation". A transaction that has
+    // already written holds an id, and the lookup is answered out of the one it holds, which is
+    // why no other test here catches it: pgrx runs a test inside a transaction that created and
+    // filled its table. The copy under test runs in a database and a session of its own so that
+    // postgis is installed, as it has to be for the lookup to read anything, and the
+    // transaction the copy runs in has written nothing.
+    #[pg_test]
+    fn test_parallel_copy_to_without_a_transaction_id() {
+        if !extension_exists("postgis") {
+            return;
+        }
+
+        let file = "/tmp/pg_parquet_test_parallel_no_transaction_id.parquet";
+        let _file = FileCleanup::new(file);
+
+        let database = "pg_parquet_no_transaction_id";
+        let port = test_pg_port();
+
+        // the database is left behind rather than dropped, since DROP DATABASE waits for
+        // every backend to take a procsignal barrier and this one is blocked on psql, so it
+        // would wait for itself. The test instance is thrown away with its data directory.
+        let exists = psql(
+            &port,
+            &[&format!(
+                "SELECT count(*) FROM pg_database WHERE datname = '{database}'"
+            )],
+        );
+
+        if exists.trim() == "0" {
+            psql(&port, &[&format!("CREATE DATABASE {database}")]);
+        }
+
+        // the table is wide enough for the copy to be split into ctid ranges, which is what
+        // puts the workers that cannot be given a transaction id to work
+        psql_in_database(
+            database,
+            &port,
+            &[&format!(
+                "CREATE EXTENSION IF NOT EXISTS pg_parquet;
+                 CREATE EXTENSION IF NOT EXISTS postgis;
+                 DROP TABLE IF EXISTS no_transaction_id_table;
+                 DROP TABLE IF EXISTS no_transaction_id_result;
+                 CREATE TABLE no_transaction_id_table (id bigint, payload text);
+                 INSERT INTO no_transaction_id_table
+                 SELECT g, md5(random()::text) || md5(random()::text) ||
+                           md5(random()::text) || md5(random()::text)
+                 FROM generate_series(1, {INTERRUPTED_TABLE_ROWS}) g;"
+            )],
+        );
+
+        // the copy is the first thing its transaction does, so the transaction holds no id
+        psql_in_database(
+            database,
+            &port,
+            &[&format!(
+                "SET pg_parquet.max_parallel_workers TO 4;
+                 COPY no_transaction_id_table TO '{file}';"
+            )],
+        );
+
+        // the copy wrote the rows of the table, rather than succeeding at nothing
+        let rows = psql_in_database(
+            database,
+            &port,
+            &[&format!(
+                "CREATE TABLE no_transaction_id_result (id bigint, payload text);
+                 COPY no_transaction_id_result FROM '{file}';
+                 SELECT count(*) FROM no_transaction_id_result;"
+            )],
+        );
+        // psql prints the tag of every command, so the count is the last line it printed
+        let counted = rows.trim().lines().last().expect("psql printed nothing");
+        assert_eq!(counted, INTERRUPTED_TABLE_ROWS.to_string());
     }
 
     #[pg_test]
