@@ -548,7 +548,8 @@ fn ensure_wkb_is_in_the_specification(wkb: &[u8]) {
          parquet geospatial specification, which the curved types and tin, polyhedral surface \
          and triangle are not among, so a reader of the specification refuses the whole column \
          one of them is written to. Write ST_CurveToLine of a curved geometry, ST_Multi of a \
-         tin or a polyhedral surface, which keeps every face as a multipolygon, or \
+         tin or a polyhedral surface on postgis 3.7 or later, which keeps every face as a \
+         multipolygon, or \
          ST_UnaryUnion of a triangle. A bytea column holding ST_AsBinary of the geometry is \
          the way to carry one as it is, and is written with no geospatial logical type on it."
     );
