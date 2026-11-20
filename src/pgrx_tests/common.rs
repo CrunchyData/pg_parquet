@@ -14,7 +14,7 @@ use arrow_schema::{Schema, SchemaRef};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::{encode_arrow_schema, ARROW_SCHEMA_META_KEY};
 use parquet::basic::LogicalType;
-use parquet::data_type::{Int96, Int96Type};
+use parquet::data_type::{FixedLenByteArray, FixedLenByteArrayType, Int96, Int96Type};
 use parquet::file::metadata::KeyValue;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
@@ -467,6 +467,43 @@ pub(crate) fn write_int96_timestamps_to_parquet(
     column
         .typed::<Int96Type>()
         .write_batch(timestamps, Some(def_levels), rep_levels)
+        .unwrap();
+
+    column.close().unwrap();
+    row_group.close().unwrap();
+    writer.close().unwrap();
+}
+
+// arrow-rs cannot write a parquet INTERVAL that carries months, so a file holding one is
+// written here with the low level writer, the way another writer such as DuckDB writes it.
+// The 12 bytes of each value are the months, the days and the milliseconds, little endian.
+pub(crate) fn write_parquet_intervals_to_parquet(
+    message_type: &str,
+    intervals: &[(i32, i32, i32)],
+    def_levels: &[i16],
+) {
+    let values = intervals
+        .iter()
+        .map(|(months, days, milliseconds)| {
+            let mut bytes = Vec::with_capacity(12);
+            bytes.extend_from_slice(&months.to_le_bytes());
+            bytes.extend_from_slice(&days.to_le_bytes());
+            bytes.extend_from_slice(&milliseconds.to_le_bytes());
+            FixedLenByteArray::from(bytes)
+        })
+        .collect::<Vec<_>>();
+
+    let schema = Arc::new(parse_message_type(message_type).unwrap());
+    let file = File::create(LOCAL_TEST_FILE_PATH).unwrap();
+
+    let mut writer =
+        SerializedFileWriter::new(file, schema, Arc::new(WriterProperties::default())).unwrap();
+    let mut row_group = writer.next_row_group().unwrap();
+    let mut column = row_group.next_column().unwrap().unwrap();
+
+    column
+        .typed::<FixedLenByteArrayType>()
+        .write_batch(&values, Some(def_levels), None)
         .unwrap();
 
     column.close().unwrap();
