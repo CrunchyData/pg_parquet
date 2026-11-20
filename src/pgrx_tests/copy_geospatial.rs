@@ -1563,23 +1563,18 @@ mod tests {
         // 3.7 on; before that it hands them back as they are
         let multi_converts_surfaces = *extension_version("postgis") >= *"3.7";
 
-        let mut conversions = vec![
-            "ST_CurveToLine('CIRCULARSTRING(0 0, 1 1, 2 0)')",
-            "ST_CurveToLine('COMPOUNDCURVE(CIRCULARSTRING(0 0, 1 1, 2 0), (2 0, 3 0))')",
-            "ST_CurveToLine('CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0))')",
-            "ST_CurveToLine('MULTICURVE((0 0, 1 1), CIRCULARSTRING(2 0, 3 1, 4 0))')",
-            "ST_CurveToLine('MULTISURFACE(CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0)))')",
-            "ST_UnaryUnion('TRIANGLE((0 0, 0 1, 1 1, 0 0))')",
+        let conversions = [
+            ("ST_CurveToLine('CIRCULARSTRING(0 0, 1 1, 2 0)')", true),
+            ("ST_CurveToLine('COMPOUNDCURVE(CIRCULARSTRING(0 0, 1 1, 2 0), (2 0, 3 0))')", true),
+            ("ST_CurveToLine('CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0))')", true),
+            ("ST_CurveToLine('MULTICURVE((0 0, 1 1), CIRCULARSTRING(2 0, 3 1, 4 0))')", true),
+            ("ST_CurveToLine('MULTISURFACE(CURVEPOLYGON(CIRCULARSTRING(0 0, 2 0, 2 2, 0 2, 0 0)))')", true),
+            ("ST_Multi('TIN(((0 0, 0 1, 1 1, 0 0)), ((0 0, 1 1, 1 0, 0 0)))')", multi_converts_surfaces),
+            ("ST_Multi('POLYHEDRALSURFACE(((0 0, 0 1, 1 1, 1 0, 0 0)))')", multi_converts_surfaces),
+            ("ST_UnaryUnion('TRIANGLE((0 0, 0 1, 1 1, 0 0))')", true),
         ];
 
-        if multi_converts_surfaces {
-            conversions.extend([
-                "ST_Multi('TIN(((0 0, 0 1, 1 1, 0 0)), ((0 0, 1 1, 1 0, 0 0)))')",
-                "ST_Multi('POLYHEDRALSURFACE(((0 0, 0 1, 1 1, 1 0, 0 0)))')",
-            ]);
-        }
-
-        for conversion in conversions {
+        for (conversion, _) in conversions.iter().filter(|(_, converts)| *converts) {
             let copy_to_query = format!(
                 "COPY (SELECT {conversion}::geometry as a)
                  TO '{LOCAL_TEST_FILE_PATH}' WITH (format parquet);"
@@ -1588,15 +1583,14 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{conversion} is named by the refusal but failed: {e}"));
         }
 
-        // ST_Multi of a tin keeps the faces it had, rather than dissolving them into one
-        if multi_converts_surfaces {
-            let faces = Spi::get_one::<i32>(
-                "SELECT ST_NumGeometries(
-                     ST_Multi('TIN(((0 0, 0 1, 1 1, 0 0)), ((0 0, 1 1, 1 0, 0 0)))'::geometry))",
-            )
-            .unwrap();
-            assert_eq!(faces, Some(2));
-        }
+        // ST_Multi of a tin keeps the faces it had, rather than dissolving them into one, and an
+        // older postgis that hands the tin back keeps them too
+        let faces = Spi::get_one::<i32>(
+            "SELECT ST_NumGeometries(
+                 ST_Multi('TIN(((0 0, 0 1, 1 1, 0 0)), ((0 0, 1 1, 1 0, 0 0)))'::geometry))",
+        )
+        .unwrap();
+        assert_eq!(faces, Some(2));
 
         // and the two conversions that are not a way out, which the refusal says so of
         for (conversion, type_name) in [
