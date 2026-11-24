@@ -1584,9 +1584,10 @@ mod tests {
         }
 
         // ST_Multi of a tin keeps the faces it had, rather than dissolving them into one, and an
-        // older postgis that hands the tin back keeps them too
-        let faces = Spi::get_one::<i32>(
-            "SELECT ST_NumGeometries(
+        // older postgis that hands the tin back keeps them too. They are counted with ST_Dump,
+        // as ST_NumGeometries counts a tin as one geometry from postgis 3.6 on
+        let faces = Spi::get_one::<i64>(
+            "SELECT count(*) FROM ST_Dump(
                  ST_Multi('TIN(((0 0, 0 1, 1 1, 0 0)), ((0 0, 1 1, 1 0, 0 0)))'::geometry))",
         )
         .unwrap();
