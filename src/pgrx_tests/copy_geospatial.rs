@@ -1583,14 +1583,21 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{conversion} is named by the refusal but failed: {e}"));
         }
 
-        // ST_Multi of a tin keeps the faces it had, rather than dissolving them into one, and an
-        // older postgis that hands the tin back keeps them too
+        // ST_Multi of a tin keeps the faces it had, rather than dissolving them into one. Which
+        // count says so depends on the postgis: up to 3.5 ST_Multi hands the tin back and
+        // ST_NumGeometries counts its faces, from 3.7 ST_Multi makes a multipolygon of the faces
+        // and ST_NumGeometries counts those, but on 3.6 ST_Multi still hands the tin back while
+        // ST_NumGeometries counts a tin as one geometry (postgis GT-252), so 1 is what the tin
+        // comes to there
+        let postgis_version = extension_version("postgis");
+        let counts_tin_as_one = *postgis_version >= *"3.6" && !multi_converts_surfaces;
+        let expected_faces = if counts_tin_as_one { 1 } else { 2 };
         let faces = Spi::get_one::<i32>(
             "SELECT ST_NumGeometries(
                  ST_Multi('TIN(((0 0, 0 1, 1 1, 0 0)), ((0 0, 1 1, 1 0, 0 0)))'::geometry))",
         )
         .unwrap();
-        assert_eq!(faces, Some(2));
+        assert_eq!(faces, Some(expected_faces));
 
         // and the two conversions that are not a way out, which the refusal says so of
         for (conversion, type_name) in [
